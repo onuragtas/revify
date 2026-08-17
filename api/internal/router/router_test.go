@@ -546,3 +546,99 @@ func TestNotesCannotBeDeletedAcrossTeams(t *testing.T) {
 		t.Fatalf("could not delete own note: %d", right.code)
 	}
 }
+
+/* ------------------------------ hardening ------------------------------ */
+
+func TestLoginIsThrottled(t *testing.T) {
+	h := newHarness(t)
+	h.signUp(t, "a@example.com", "Ada")
+
+	// The limiter counts every attempt, not just failures: counting only
+	// failures would let an attacker reset the window with one good login.
+	var blocked bool
+	for i := 0; i < 15; i++ {
+		res := h.call(t, "POST", "/api/auth/login", "", map[string]string{
+			"email": "a@example.com", "password": "guess-" + string(rune('a'+i)),
+		})
+		if res.code == http.StatusTooManyRequests {
+			blocked = true
+			break
+		}
+	}
+	if !blocked {
+		t.Fatal("unlimited password guessing is allowed")
+	}
+}
+
+func TestThrottleDoesNotLeakWhoExists(t *testing.T) {
+	h := newHarness(t)
+	h.signUp(t, "a@example.com", "Ada")
+
+	// Being throttled must not become a way to tell a real account from a
+	// made-up one — both hit the same limiter on the same key.
+	for i := 0; i < 12; i++ {
+		h.call(t, "POST", "/api/auth/login", "", map[string]string{"email": "a@example.com", "password": "x"})
+	}
+	known := h.call(t, "POST", "/api/auth/login", "", map[string]string{"email": "a@example.com", "password": "x"})
+	unknown := h.call(t, "POST", "/api/auth/login", "", map[string]string{"email": "ghost@example.com", "password": "x"})
+
+	if known.code != unknown.code {
+		t.Fatalf("throttled responses differ: %d vs %d", known.code, unknown.code)
+	}
+}
+
+func TestSessionCookieIsHardened(t *testing.T) {
+	h := newHarness(t)
+
+	req := httptest.NewRequest("POST", "/api/auth/register", strings.NewReader(
+		`{"email":"a@example.com","name":"Ada","password":"`+goodPassword+`"}`))
+	req.Header.Set("Content-Type", "application/json")
+	res, err := h.app.Test(req, -1)
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	defer func() { _ = res.Body.Close() }()
+
+	var session *http.Cookie
+	for _, c := range res.Cookies() {
+		if c.Name == "ar_session" {
+			session = c
+		}
+	}
+	if session == nil {
+		t.Fatal("no session cookie")
+	}
+	if !session.HttpOnly {
+		t.Error("session cookie is readable by page scripts")
+	}
+	if session.SameSite != http.SameSiteLaxMode {
+		t.Errorf("SameSite is %v, so another site could ride the cookie", session.SameSite)
+	}
+	// Secure follows the request: plain HTTP here, so it must be off —
+	// otherwise nobody could sign in during development.
+	if session.Secure {
+		t.Error("Secure set on a plain-HTTP request would drop the cookie on localhost")
+	}
+}
+
+func TestSessionCookieIsSecureBehindTLS(t *testing.T) {
+	h := newHarness(t)
+
+	req := httptest.NewRequest("POST", "/api/auth/register", strings.NewReader(
+		`{"email":"a@example.com","name":"Ada","password":"`+goodPassword+`"}`))
+	req.Header.Set("Content-Type", "application/json")
+	// What a TLS-terminating proxy sends — which is how this is deployed.
+	req.Header.Set("X-Forwarded-Proto", "https")
+
+	res, err := h.app.Test(req, -1)
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	defer func() { _ = res.Body.Close() }()
+
+	for _, c := range res.Cookies() {
+		if c.Name == "ar_session" && !c.Secure {
+			t.Fatal("session cookie may travel over plain HTTP behind a TLS proxy")
+		}
+	}
+}

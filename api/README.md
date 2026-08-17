@@ -83,3 +83,11 @@ concern around with it and the layering would be filing, not design.
   one that leaks hashes.
 - **bcrypt's 72-byte cap is enforced,** not ignored — silently truncating
   would make two different long passwords interchangeable.
+- **Login is throttled per IP**, counting every attempt rather than only
+  failures — counting failures alone would let one known-good login reset
+  the window. Keyed by IP, not by email: keying by email would let anyone
+  lock a colleague out by guessing at their account.
+- **The session cookie is `Secure` whenever the request arrived over TLS**,
+  including through a proxy that terminated it. Not unconditional, because
+  on `http://localhost` the browser would drop it and nobody could sign in
+  while developing.

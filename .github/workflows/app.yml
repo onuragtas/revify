@@ -5,17 +5,19 @@
 #   1. It needs no secrets. Pull requests from forks run the whole pipeline,
 #      because nothing here can reach a real Jira, GitLab or model — the
 #      build never creates config/config.yaml or .env with real values.
-#   2. Releases are built from tags only. A workflow that publishes on every
-#      push is a workflow that publishes a mistake.
+#   2. Every push to master produces installers you can download from the
+#      run. Only a `v*` tag publishes a Release — a workflow that released
+#      on every push is a workflow that releases a mistake.
 #
-# The API is not built here: it lives outside this repository and is built
-# and deployed by Jenkins.
+# The API's source lives in this repository too, but Jenkins builds and
+# deploys it (see the Jenkinsfile): one binary on one server is a different
+# shipping problem from installers people download.
 
 name: App
 
 on:
   push:
-    branches: [main]
+    branches: [master]
     tags: ['v*']
   pull_request:
   workflow_dispatch:
@@ -109,9 +111,10 @@ jobs:
 
   package:
     name: Package (${{ matrix.os }})
-    # Only for tags: packaging downloads hundreds of MB per platform, and an
-    # unreleased commit has nobody to install it.
-    if: startsWith(github.ref, 'refs/tags/v')
+    # Every push to the default branch, and every tag. Pull requests are
+    # excluded: packaging downloads hundreds of MB per platform, and a
+    # proposed change has nobody to install it yet.
+    if: github.event_name != 'pull_request'
     needs: check
     runs-on: ${{ matrix.os }}
     strategy:
@@ -148,9 +151,34 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: revify-${{ matrix.os }}
+          # The commit is in the name so a build from master can be told
+          # apart from the one before it without opening anything.
+          name: revify-${{ matrix.os }}-${{ github.sha }}
           path: |
             release/*.dmg
             release/*.AppImage
             release/*.exe
           if-no-files-found: warn
+          # Master builds are a convenience, not an archive; tagged releases
+          # are what gets kept, and those are attached below.
+          retention-days: ${{ startsWith(github.ref, 'refs/tags/v') && 90 || 7 }}
+
+  release:
+    name: Release
+    # A tag is the only thing that publishes. A workflow that released on
+    # every push is a workflow that releases a mistake.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true

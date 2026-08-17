@@ -24,7 +24,7 @@ pipeline {
     booleanParam(
       name: 'DEPLOY',
       defaultValue: false,
-      description: 'Deploy the built binary. Only takes effect on the default branch.'
+      description: 'Deploy the built binary. Only takes effect on the default branch (master).'
     )
   }
 
@@ -101,7 +101,7 @@ pipeline {
       when {
         allOf {
           expression { params.DEPLOY }
-          branch 'main'
+          branch 'master'
         }
       }
       steps {

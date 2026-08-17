@@ -51,9 +51,13 @@ func New(repo *repository.Repository, sessionTTL time.Duration) *fiber.App {
 	api := app.Group("/api")
 	api.Get("/health", func(c *fiber.Ctx) error { return c.JSON(fiber.Map{"ok": true}) })
 
+	// Credential guessing is throttled per IP. Registration too: it is the
+	// other endpoint that creates state from an unauthenticated request.
+	loginLimit := middleware.NewLoginLimiter(10, time.Minute).Handler()
+
 	auth := api.Group("/auth")
-	auth.Post("/register", authH.Register)
-	auth.Post("/login", authH.Login)
+	auth.Post("/register", loginLimit, authH.Register)
+	auth.Post("/login", loginLimit, authH.Login)
 	auth.Post("/logout", authH.Logout)
 	auth.Get("/me", authH.Me)
 

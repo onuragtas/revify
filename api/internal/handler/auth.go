@@ -62,14 +62,23 @@ func (h *Auth) Me(c *fiber.Ctx) error {
 
 func setSessionCookie(c *fiber.Ctx, session model.Session) {
 	// HttpOnly so page scripts cannot read it; SameSite=Lax so another site
-	// cannot ride it on a cross-site POST. Secure is left to whatever
-	// terminates TLS — this runs on localhost or behind a proxy.
+	// cannot ride it on a cross-site POST.
+	//
+	// Secure is set whenever the request arrived over TLS — including
+	// through a proxy that terminated it, which is how this is deployed. It
+	// cannot be unconditional: on http://localhost the browser would drop
+	// the cookie and nobody could sign in during development.
 	c.Cookie(&fiber.Cookie{
 		Name:     middleware.SessionCookie,
 		Value:    session.Token,
 		Path:     "/",
 		HTTPOnly: true,
+		Secure:   isTLS(c),
 		SameSite: "Lax",
 		Expires:  session.ExpiresAt,
 	})
+}
+
+func isTLS(c *fiber.Ctx) bool {
+	return c.Protocol() == "https" || c.Get("X-Forwarded-Proto") == "https"
 }
