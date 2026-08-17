@@ -158,3 +158,60 @@ describe('server notification events', () => {
     expect(server.pendingCount()).toBe(0);
   });
 });
+
+describe('update install', () => {
+  it('is refused while a review is running', async () => {
+    // A task that never finishes on its own, so the review is genuinely
+    // mid-flight when the install is attempted.
+    const wired = makeWired();
+    wired.task = {
+      run: (_e, _c, signal) =>
+        new Promise((_resolve, reject) => {
+          signal?.addEventListener('abort', () => reject(new Error('durduruldu')));
+        }),
+    };
+
+    const server = createServer(makeConfig(), wired);
+    let installed = false;
+    server.setUpdateState({ supported: true, status: 'ready' }, () => {
+      installed = true;
+    });
+
+    await request(server).get('/api/reviews');
+    await request(server).post('/api/reviews/BUY-1/start').send({ contextRepos: [] });
+    await vi.waitFor(() => expect(wired.reviewStore.get('BUY-1')?.status).toBe('running'));
+
+    const res = await request(server).post('/api/update/install').send();
+
+    // Restarting here kills the `claude` process and loses work that cannot
+    // be resumed. The update can wait; the review cannot.
+    expect(res.status).toBe(409);
+    expect(res.body.busy).toEqual(['BUY-1']);
+    expect(installed).toBe(false);
+
+    await request(server).post('/api/reviews/BUY-1/stop').send();
+  });
+
+  it('installs once nothing is in flight', async () => {
+    const server = createServer(makeConfig(), makeWired());
+    let installed = false;
+    server.setUpdateState({ supported: true, status: 'ready' }, () => {
+      installed = true;
+    });
+
+    const res = await request(server).post('/api/update/install').send();
+    expect(res.status).toBe(200);
+    // Deferred so the page is told before the process goes.
+    await vi.waitFor(() => expect(installed).toBe(true));
+  });
+
+  it('says so plainly when the build has no updater', async () => {
+    const server = createServer(makeConfig(), makeWired());
+
+    const state = await request(server).get('/api/update');
+    expect(state.body).toEqual({ supported: false });
+
+    const res = await request(server).post('/api/update/install').send();
+    expect(res.status).toBe(409);
+  });
+});

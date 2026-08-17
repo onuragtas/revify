@@ -1,4 +1,5 @@
 import { app, BrowserWindow, Menu, Notification, Tray, nativeImage, shell } from 'electron';
+import electronUpdater from 'electron-updater';
 import type { AddressInfo } from 'node:net';
 import { loadConfigOrExit } from '../config/loadConfig.js';
 import { buildPipeline } from '../core/registry.js';
@@ -148,6 +149,88 @@ function createWindow(): void {
   });
 }
 
+/**
+ * Update checking, against the GitHub releases this repository publishes.
+ *
+ * What works where is not uniform, and pretending otherwise would produce a
+ * button that silently fails:
+ *
+ * - **Linux (AppImage)** — downloads and installs. No signing required.
+ * - **macOS** — Squirrel refuses to apply an update to an unsigned app, and
+ *   our releases are unsigned on purpose (certificates are secrets that
+ *   fork pull requests must never see). So the app *notices* the new
+ *   version and offers the download page instead of a broken install.
+ *
+ * Nothing installs itself. A restart mid-review would kill the `claude`
+ * process and lose work that cannot be resumed, so the decision stays with
+ * whoever is using it — and the server refuses while a review is running.
+ */
+function setupUpdates(): void {
+  // A dev run has no packaged app to replace, and checking would only
+  // produce a confusing error.
+  if (!app.isPackaged) {
+    server.setUpdateState({ supported: false, reason: 'development build' });
+    return;
+  }
+
+  const { autoUpdater } = electronUpdater;
+  // Downloading is fine unattended; installing is not.
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = false;
+
+  const canInstall = process.platform !== 'darwin';
+  const current = app.getVersion();
+
+  const publish = (state: Record<string, unknown>) =>
+    server.setUpdateState({ supported: true, canInstall, current, ...state });
+
+  publish({ status: 'idle' });
+
+  autoUpdater.on('checking-for-update', () => publish({ status: 'checking' }));
+  autoUpdater.on('update-not-available', () => publish({ status: 'current' }));
+  autoUpdater.on('download-progress', (p) =>
+    publish({ status: 'downloading', percent: Math.round(p.percent) }),
+  );
+
+  autoUpdater.on('update-available', (info) => {
+    publish({ status: 'downloading', version: info.version, percent: 0 });
+    if (!canInstall) {
+      // Nothing will be installed here, so say so now rather than after a
+      // download that leads to a dead end.
+      publish({ status: 'manual', version: info.version, url: releasesUrl() });
+      notify('Yeni sürüm var', `Revify ${info.version} yayınlandı.`, () => void shell.openExternal(releasesUrl()));
+    }
+  });
+
+  autoUpdater.on('update-downloaded', (info) => {
+    publish({ status: 'ready', version: info.version });
+    notify('Güncelleme hazır', `Revify ${info.version} kurulmayı bekliyor.`, () => showWindow());
+  });
+
+  autoUpdater.on('error', (err) => {
+    // Update failures must not interrupt anyone: the app it is trying to
+    // replace is working.
+    console.error('[updater]', err);
+    publish({ status: 'error', error: err?.message ?? String(err) });
+  });
+
+  server.setUpdateState({ supported: true, canInstall, current, status: 'idle' }, () => {
+    if (canInstall) autoUpdater.quitAndInstall(false, true);
+    else void shell.openExternal(releasesUrl());
+  });
+
+  const check = () => {
+    autoUpdater.checkForUpdates().catch((err) => console.error('[updater] check failed:', err));
+  };
+  // Not at the very start: the first seconds belong to showing a window.
+  setTimeout(check, 15_000).unref?.();
+  setInterval(check, 6 * 60 * 60 * 1000).unref?.();
+}
+
+function releasesUrl(): string {
+  return 'https://github.com/onuragtas/revify/releases/latest';
+}
+
 // A second launch should raise the window that already exists, not start a
 // second server on a second port with the same data files underneath it.
 if (!app.requestSingleInstanceLock()) {
@@ -176,6 +259,7 @@ if (!app.requestSingleInstanceLock()) {
 
       createWindow();
       refreshBadge();
+      setupUpdates();
       // Cheap and local: the count also moves when you approve something in
       // the window, which emits nothing.
       setInterval(refreshBadge, 5000).unref();

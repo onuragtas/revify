@@ -218,6 +218,27 @@ random loopback port, so it never collides with `npm run ui`.
 The renderer is sandboxed with no Node access. It renders model output, and
 model output is not trusted.
 
+### Updates
+
+The app checks GitHub releases 15 seconds after start and every six hours.
+A new version downloads in the background and then waits — a banner offers
+**Kur ve yeniden başlat**.
+
+Nothing installs itself, and the server refuses to restart while a review is
+running or queued: a restart kills the `claude` process and loses work that
+cannot be resumed. The update can wait; the review cannot.
+
+| Platform | What happens |
+|---|---|
+| Linux (AppImage) | Downloads and installs on click |
+| macOS | Notices the new version and opens the download page |
+
+macOS is not a limitation of the updater but of the build: Squirrel refuses
+to apply an update to an unsigned app, and releases are unsigned because
+signing certificates are secrets that fork pull requests must never see.
+Signing (plus the `zip` target, already configured) is all that stands
+between the current state and one-click updates there.
+
 Packaging (optional, needs `npm i -D electron-builder`):
 
 ```bash

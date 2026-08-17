@@ -200,6 +200,13 @@ jobs:
           path: |
             release/*.dmg
             release/*.AppImage
+            release/*.zip
+            # electron-updater bunları okuyarak "daha yeni sürüm var mı"
+            # sorusuna cevap verir. Yüklenmezlerse güncelleme sessizce hiç
+            # bulunmaz — kurulum dosyaları yerinde olduğu için de sorun
+            # görünmez.
+            release/latest*.yml
+            release/*.blockmap
           # Producing nothing is a failure, not a warning: the release below
           # would otherwise publish an empty download.
           if-no-files-found: error

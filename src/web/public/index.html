@@ -160,6 +160,12 @@
     background: var(--amber-soft); color: var(--amber);
     padding: 0.4rem 0.8rem; font-size: 0.8rem; text-align: center;
   }
+  .updateBanner {
+    background: var(--accent-soft); color: var(--accent-text);
+    padding: 0.4rem 0.8rem; font-size: 0.82rem;
+    display: flex; align-items: center; justify-content: center; gap: 0.6rem;
+  }
+  .updateBanner .btn { padding: 0.2rem 0.6rem; font-size: 0.78rem; }
 
   .topbar {
     display: flex; align-items: center; gap: 1rem;
@@ -933,6 +939,11 @@
 
 <div class="app" hidden>
   <div id="offlineBanner" class="offlineBanner" hidden></div>
+  <div id="updateBanner" class="updateBanner" hidden>
+    <span id="updateText"></span>
+    <button id="updateBtn" class="btn" hidden></button>
+    <button id="updateDismiss" class="btn btn-ghost btn-icon" title="Şimdilik gizle">✕</button>
+  </div>
   <header class="topbar">
     <div class="brand">
       <span class="brand-mark">Rv</span>
@@ -3285,6 +3296,81 @@
     });
   }
 
+  /* ---------------------------- updates ---------------------------- */
+
+  // Dismissal is per version, not permanent: hiding today's banner should
+  // not hide the next release's.
+  let dismissedUpdate = localStorage.getItem('ar-dismissed-update') ?? '';
+
+  async function pollUpdate() {
+    let info;
+    try {
+      info = await (await fetch('/api/update')).json();
+    } catch {
+      return;
+    }
+
+    const banner = document.getElementById('updateBanner');
+    const textEl = document.getElementById('updateText');
+    const btn = document.getElementById('updateBtn');
+
+    // The browser build has no updater, and there is nothing useful to say
+    // about a version nobody can replace from here.
+    const worthShowing = info.supported &&
+      ['downloading', 'ready', 'manual'].includes(info.status) &&
+      info.version !== dismissedUpdate;
+    banner.hidden = !worthShowing;
+    if (!worthShowing) return;
+
+    if (info.status === 'downloading') {
+      textEl.textContent = 'Revify ' + (info.version ?? '') + ' indiriliyor… %' + (info.percent ?? 0);
+      btn.hidden = true;
+      return;
+    }
+    if (info.status === 'manual') {
+      // macOS: imzasız bir uygulamaya güncelleme uygulanamıyor, o yüzden
+      // kurulum yerine indirme sayfası öneriliyor.
+      textEl.textContent = 'Revify ' + info.version + ' yayınlandı.';
+      btn.hidden = false;
+      btn.textContent = 'İndirme sayfasını aç';
+      return;
+    }
+    textEl.textContent = 'Revify ' + info.version + ' kurulmaya hazır.';
+    btn.hidden = false;
+    btn.textContent = 'Kur ve yeniden başlat';
+  }
+
+  document.getElementById('updateBtn').addEventListener('click', async () => {
+    const btn = document.getElementById('updateBtn');
+    btn.disabled = true;
+    try {
+      const res = await fetch('/api/update/install', { method: 'POST' });
+      const data = await res.json();
+      if (data.error) {
+        // The most likely refusal is a running review: restarting would
+        // kill it and lose work that cannot be resumed.
+        alert(data.error);
+        return;
+      }
+      document.getElementById('updateText').textContent = 'Yeniden başlatılıyor…';
+    } catch (err) {
+      alert('Güncelleme başlatılamadı: ' + err);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  document.getElementById('updateDismiss').addEventListener('click', async () => {
+    try {
+      const info = await (await fetch('/api/update')).json();
+      if (info.version) {
+        dismissedUpdate = info.version;
+        localStorage.setItem('ar-dismissed-update', dismissedUpdate);
+      }
+    } catch { /* dismiss anyway */ }
+    document.getElementById('updateBanner').hidden = true;
+  });
+
   /* ---------------------------- backup ---------------------------- */
 
   const backupModal = document.getElementById('backupModal');
@@ -3496,6 +3582,8 @@
     void loadOutcomeConfig();
     void loadAutoPrepare();
     void loadTeamIdentity();
+    void pollUpdate();
+    setInterval(pollUpdate, 30000);
     loadReviews().then(() => {
       const fromUrl = decodeURIComponent(location.hash.slice(1));
       if (fromUrl) openIssue(fromUrl);

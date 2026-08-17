@@ -1012,5 +1012,59 @@ export function createServer(config: AppConfig, wired: Wired) {
     return wired.reviewStore.list().filter((r) => r.status === 'awaiting_approval').length;
   }
 
-  return Object.assign(app, { autoPrepare, shutdown, events, pendingCount });
+  /* ------------------------------ updates ------------------------------ */
+
+  /**
+   * What the desktop shell knows about updates, and how the page asks for
+   * one to be applied.
+   *
+   * The state lives in the Electron main process; this is only the window
+   * the page sees through. In the browser build nothing ever sets it, so
+   * `supported` stays false and the UI shows nothing — the same page has to
+   * work in both.
+   */
+  let updateState: Record<string, unknown> = { supported: false };
+  let installUpdate: (() => void) | null = null;
+
+  app.get('/api/update', (_req, res) => {
+    res.json(updateState);
+  });
+
+  app.post('/api/update/install', (_req, res) => {
+    if (!installUpdate) {
+      res.status(409).json({ error: 'Bu sürümde otomatik güncelleme yok.' });
+      return;
+    }
+
+    // Restarting mid-review kills the `claude` process and loses the work
+    // it has already done. The update can wait; the review cannot be
+    // resumed.
+    const busy = wired.reviewStore
+      .list()
+      .filter((r) => r.status === 'running' || r.status === 'queued')
+      .map((r) => r.issueKey);
+    if (busy.length) {
+      res.status(409).json({
+        error: `Önce çalışan review'lar bitmeli ya da durdurulmalı: ${busy.join(', ')}`,
+        busy,
+      });
+      return;
+    }
+
+    res.json({ ok: true });
+    // After the response, so the page is told before the process goes.
+    setTimeout(() => installUpdate?.(), 250);
+  });
+
+  return Object.assign(app, {
+    autoPrepare,
+    shutdown,
+    events,
+    pendingCount,
+    /** Called by the desktop shell as the updater reports progress. */
+    setUpdateState(state: Record<string, unknown>, install?: () => void) {
+      updateState = state;
+      if (install) installUpdate = install;
+    },
+  });
 }
