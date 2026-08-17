@@ -38,7 +38,7 @@ func newHarness(t *testing.T) harness {
 		t.Fatalf("open repository: %v", err)
 	}
 	t.Cleanup(func() { _ = repo.Close() })
-	return harness{app: router.New(repo, time.Hour), repo: repo}
+	return harness{app: router.New(repo, time.Hour, router.BuildInfo{}), repo: repo}
 }
 
 type response struct {

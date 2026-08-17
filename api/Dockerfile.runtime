@@ -1,0 +1,32 @@
+# Runtime image only — the binary is already built.
+#
+# Jenkins compiles it with CGO_ENABLED=0, so there is nothing to compile
+# here and no Go toolchain needed on the deploy host. Building in the image
+# would mean shipping a compiler to production to do work that already
+# happened.
+FROM alpine:3.20
+
+# wget comes with busybox and is what the healthcheck uses. A distroless
+# base would be smaller, but it has no shell — and the first thing anyone
+# wants during an incident is a shell.
+RUN apk add --no-cache ca-certificates tzdata \
+ && addgroup -S revify && adduser -S -G revify revify
+
+WORKDIR /app
+COPY bin/revify-api /app/revify-api
+
+# The database lives on a mounted volume, not in the image: an image is
+# replaced on every deploy, and the one thing here that cannot be rebuilt
+# from the repository is the data.
+RUN mkdir -p /data && chown -R revify:revify /app /data
+VOLUME ["/data"]
+
+USER revify
+ENV API_ADDR=":4322" \
+    API_DB="/data/api.db"
+EXPOSE 4322
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+  CMD wget -qO- http://127.0.0.1:4322/api/health | grep -q '"ok":true' || exit 1
+
+ENTRYPOINT ["/app/revify-api"]

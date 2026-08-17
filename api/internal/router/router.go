@@ -15,8 +15,15 @@ import (
 	"github.com/onuragtas/revify/internal/service"
 )
 
+// BuildInfo travels from the linker to /api/health, so "which build is
+// answering?" has an answer that does not depend on reading a log.
+type BuildInfo struct {
+	Number string
+	Commit string
+}
+
 // New wires the layers together and returns the Fiber app.
-func New(repo *repository.Repository, sessionTTL time.Duration) *fiber.App {
+func New(repo *repository.Repository, sessionTTL time.Duration, build BuildInfo) *fiber.App {
 	authSvc := service.NewAuth(repo, sessionTTL)
 	teamSvc := service.NewTeam(repo)
 	assignSvc := service.NewAssignment(repo, teamSvc)
@@ -49,7 +56,9 @@ func New(repo *repository.Repository, sessionTTL time.Duration) *fiber.App {
 	requireMember := middleware.RequireMember(teamSvc)
 
 	api := app.Group("/api")
-	api.Get("/health", func(c *fiber.Ctx) error { return c.JSON(fiber.Map{"ok": true}) })
+	api.Get("/health", func(c *fiber.Ctx) error {
+		return c.JSON(fiber.Map{"ok": true, "build": build.Number, "commit": build.Commit})
+	})
 
 	// Credential guessing is throttled per IP. Registration too: it is the
 	// other endpoint that creates state from an unauthenticated request.

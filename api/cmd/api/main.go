@@ -20,6 +20,13 @@ import (
 	"github.com/onuragtas/revify/internal/router"
 )
 
+// Injected at build time with -ldflags -X. Empty in a plain `go run`,
+// which is the honest answer there: that build has no build number.
+var (
+	buildNumber = ""
+	gitCommit   = ""
+)
+
 func main() {
 	cfg := config.Load()
 
@@ -38,10 +45,10 @@ func main() {
 	}
 	defer func() { _ = repo.Close() }()
 
-	app := router.New(repo, cfg.SessionTTL)
+	app := router.New(repo, cfg.SessionTTL, router.BuildInfo{Number: buildNumber, Commit: gitCommit})
 
 	go func() {
-		log.Printf("Revify API on %s (db: %s)", cfg.Addr, cfg.DBPath)
+		log.Printf("Revify API on %s (db: %s, build: %s)", cfg.Addr, cfg.DBPath, describeBuild())
 		if err := app.Listen(cfg.Addr); err != nil {
 			log.Fatalf("server failed: %v", err)
 		}
@@ -54,5 +61,19 @@ func main() {
 	log.Println("shutting down")
 	if err := app.Shutdown(); err != nil {
 		log.Printf("forced shutdown: %v", err)
+	}
+}
+
+// describeBuild is what gets logged and served on /api/health. Knowing which
+// build is answering is the first question of every "is the deploy live?"
+// and the last of every incident.
+func describeBuild() string {
+	switch {
+	case buildNumber != "" && gitCommit != "":
+		return "#" + buildNumber + " (" + gitCommit + ")"
+	case gitCommit != "":
+		return gitCommit
+	default:
+		return "dev"
 	}
 }

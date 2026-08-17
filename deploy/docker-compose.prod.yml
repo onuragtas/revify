@@ -1,0 +1,42 @@
+# Revify API — production compose.
+#
+# One service. It is a single static binary with a SQLite file beside it;
+# there is no database container to run and nothing to orchestrate.
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.runtime
+    image: revify-api:${BUILD_NUMBER:-local}
+    container_name: revify-api
+    restart: unless-stopped
+
+    # Published on loopback only. TLS is terminated by the reverse proxy in
+    # front; exposing this on 0.0.0.0 would put an HTTP service on the
+    # public internet next to the HTTPS one.
+    ports:
+      - "127.0.0.1:${API_PORT:-4322}:4322"
+
+    # A bind mount rather than a named volume: the deploy script backs this
+    # file up before every restart, and a path you can point `cp` at is
+    # worth more than a volume you have to go looking for.
+    volumes:
+      - ./data:/data
+
+    environment:
+      API_ADDR: ":4322"
+      API_DB: "/data/api.db"
+
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:4322/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

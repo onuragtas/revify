@@ -1,213 +1,202 @@
-// Builds and deploys the Revify API.
+// Revify — master deploy pipeline (API only).
 //
-// Only the API. The desktop app is built by GitHub Actions
-// (.github/workflows/app.yml) — two pipelines because they ship to
-// different places on different schedules: the API is one binary on one
-// server, the app is installers people download.
+// Akış: test → go build (static linux/amd64) → tarball → ssh transfer →
+// remote docker compose up --build.
 //
-// This repository is public, which shapes one rule: no secrets, no server
-// names, no credentials as literals. Everything environment-specific
-// arrives as a Jenkins credential. This file is world-readable and kept
-// forever in git history.
+// Masaüstü uygulaması burada derlenmez; onu GitHub Actions paketliyor
+// (.github/workflows/app.yml). İkisi farklı yerlere gidiyor: API tek
+// sunucuda tek binary, uygulama insanların indirdiği kurulum dosyaları.
+//
+// Önkoşullar:
+//   1. Jenkins → Manage Jenkins → Tools:
+//        - Go adı: 'go-1.26'   (api/go.mod en az 1.25 istiyor; bunu
+//          dayatan golang.org/x/crypto, bizim tercihimiz değil)
+//   2. Manage Jenkins → System → Publish over SSH:
+//        - Name: 'root-20.29'  (DEPLOY_HOST_CONFIG bunu referans alır)
+//   3. GitHub webhook: <jenkins>/github-webhook/ → push event.
+//
+// Not: ikili Jenkins'te derlenir, uzak sunucuda Go toolchain gerekmez.
+// Oradaki imaj Dockerfile.runtime ile yalnızca hazır ikiliyi kopyalar —
+// production'a derleyici göndermenin, zaten yapılmış bir işi tekrar
+// yaptırmaktan başka anlamı olmazdı.
+//
+// Bu repo public: hiçbir sır, sunucu adı veya yol bu dosyada literal olarak
+// bulunmaz — hepsi Jenkins yapılandırmasından gelir.
 
 pipeline {
-  agent any
+    agent any
 
-  options {
-    timeout(time: 15, unit: 'MINUTES')
-    timestamps()
-    disableConcurrentBuilds()
-    buildDiscarder(logRotator(numToKeepStr: '30'))
-  }
-
-  parameters {
-    booleanParam(
-      name: 'DEPLOY',
-      defaultValue: false,
-      description: 'Deploy the built binary. Only takes effect on the default branch (master).'
-    )
-  }
-
-  stages {
-    stage('Checkout') {
-      steps {
-        checkout scm
-        sh 'git --no-pager log -1 --pretty="%h %s"'
-      }
+    options {
+        timestamps()
+        timeout(time: 20, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '15'))
+        disableConcurrentBuilds()
+        ansiColor('xterm')
     }
 
-    stage('Secret scan') {
-      steps {
-        // Cheap, specific, and first: a leak must fail the build before any
-        // stage has the chance to publish an artifact containing it.
-        sh '''
-          set -eu
-          if git grep -nIE "glpat-[A-Za-z0-9_-]{20}|ATATT[A-Za-z0-9_-]{20}|sk-ant-[A-Za-z0-9_-]{20}|xoxb-[0-9]{10,}" -- . ; then
-            echo "A credential appears to be committed. Rotate it, then remove it from history."
-            exit 1
-          fi
-          for tracked in .env config/config.yaml; do
-            if git ls-files --error-unmatch "$tracked" >/dev/null 2>&1; then
-              echo "$tracked is tracked but must never be: it holds credentials or environment config."
-              exit 1
-            fi
-          done
-          echo "Clean."
-        '''
-      }
+    triggers {
+        githubPush()
     }
 
-    stage('Toolchain') {
-      steps {
-        // The agent is not assumed to have Go, and not assumed to have the
-        // right Go: `golang.org/x/crypto` requires 1.25, so a host with an
-        // older one fails in a way that reads like a code error rather than
-        // a missing tool. The version comes from go.mod so there is no
-        // second place for it to drift.
-        sh '''
-          set -eu
-          want="$(awk '/^go /{print $2; exit}' api/go.mod)"
-          case "$want" in *.*.*) ;; *) want="${want}.0" ;; esac
+    tools {
+        go 'go-1.26'
+    }
 
-          # Using what is already installed is the fastest path — when it is
-          # new enough.
-          if command -v go >/dev/null 2>&1; then
-            have="$(go env GOVERSION 2>/dev/null | sed 's/^go//')"
-            if [ -n "$have" ] && [ "$(printf '%s\n%s\n' "$want" "$have" | sort -V | head -n1)" = "$want" ]; then
-              echo "Using the agent's Go $have"
-              go env GOROOT > .goroot
-              exit 0
-            fi
-            echo "Agent has Go $have; $want is required"
-          fi
+    environment {
+        DEPLOY_HOST_CONFIG = 'root-20.29'
+        REMOTE_DEPLOY_DIR  = '/opt/revify'
+        REMOTE_INCOMING    = 'revify-incoming'
+        ARTIFACT_NAME      = "revify-api-${env.BUILD_NUMBER}.tar.gz"
+        CGO_ENABLED        = '0'
+        GOOS               = 'linux'
+        GOARCH             = 'amd64'
+    }
 
-          case "$(uname -m)" in
-            x86_64|amd64) arch=amd64 ;;
-            aarch64|arm64) arch=arm64 ;;
-            *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;;
-          esac
-          os="$(uname -s | tr '[:upper:]' '[:lower:]')"
-
-          # Cached outside the workspace on purpose: cleanWs empties the
-          # workspace after every run, and re-downloading 70MB each time is
-          # a cost with nothing to show for it.
-          cache="${GO_TOOLCHAIN_CACHE:-$HOME/.cache/revify-toolchain}"
-          goroot="$cache/go${want}"
-          if [ ! -x "$goroot/bin/go" ]; then
-            echo "Installing Go $want into $goroot"
-            mkdir -p "$cache"
-            curl -fsSL -o "$cache/go.tar.gz" "https://go.dev/dl/go${want}.${os}-${arch}.tar.gz"
-            rm -rf "$goroot" "$cache/go"
-            tar -C "$cache" -xzf "$cache/go.tar.gz"
-            mv "$cache/go" "$goroot"
-            rm -f "$cache/go.tar.gz"
-          fi
-          echo "$goroot" > .goroot
-        '''
-        script {
-          // Assigned to env so every later stage inherits it — a PATH set
-          // inside one `sh` step is gone by the next.
-          env.GOROOT = readFile('.goroot').trim()
-          env.PATH = "${env.GOROOT}/bin:${env.PATH}"
+    stages {
+        stage('Checkout') {
+            steps {
+                // Shallow clone: sadece son commit, history yok → hızlı.
+                checkout([
+                    $class: 'GitSCM',
+                    branches: scm.branches,
+                    userRemoteConfigs: scm.userRemoteConfigs,
+                    extensions: scm.extensions + [
+                        [$class: 'CloneOption', shallow: true, depth: 1, noTags: true],
+                        [$class: 'CleanBeforeCheckout']
+                    ]
+                ])
+                sh 'git --no-pager log -1 --pretty="%h %s"'
+            }
         }
-        sh 'go version && go env GOROOT'
-      }
-    }
 
-    stage('Vet') {
-      steps {
-        dir('api') {
-          sh 'go vet ./...'
-          sh 'test -z "$(gofmt -l .)" || { echo "gofmt would change:"; gofmt -l .; exit 1; }'
+        stage('Secret scan') {
+            steps {
+                // Ucuz, hedefli ve ilk: bir sızıntı, onu içeren bir artifact
+                // üretilmeden önce build'i düşürmeli. Repo public olduğu için
+                // burada yakalanmayan şey sonsuza kadar geçmişte kalır.
+                sh '''
+                    set -eu
+                    if git grep -nIE "glpat-[A-Za-z0-9_-]{20}|ATATT[A-Za-z0-9_-]{20}|sk-ant-[A-Za-z0-9_-]{20}|xoxb-[0-9]{10,}" -- . ; then
+                        echo "Bir kimlik bilgisi commit edilmiş görünüyor. Önce iptal et, sonra geçmişten temizle."
+                        exit 1
+                    fi
+                    for tracked in .env config/config.yaml; do
+                        if git ls-files --error-unmatch "$tracked" >/dev/null 2>&1; then
+                            echo "$tracked takip ediliyor; asla edilmemeli."
+                            exit 1
+                        fi
+                    done
+                    echo "Clean."
+                '''
+            }
         }
-      }
-    }
 
-    stage('Test') {
-      steps {
-        // -race because this is a server: the bugs worth catching here are
-        // the ones that only show up under concurrent requests.
-        dir('api') {
-          sh 'go test -race -cover ./...'
+        stage('Test') {
+            // -race cgo gerektirir ve yalnızca yerel mimaride çalışır.
+            // Derleme için gereken CGO_ENABLED=0 / GOOS=linux burada ezilir;
+            // testler agent'ın kendi platformunda koşar.
+            environment {
+                CGO_ENABLED = '1'
+                GOOS        = ''
+                GOARCH      = ''
+            }
+            steps {
+                dir('api') {
+                    // -race, çünkü bu bir sunucu: buradaki yakalanmaya değer
+                    // hatalar yalnızca eşzamanlı isteklerde ortaya çıkanlar.
+                    // Yetki sınırları (kim neyi çağırabilir) router seviyesinde
+                    // test ediliyor; izole bir servis testi, rota yanlış
+                    // korumanın altına monte edilmişken de geçerdi.
+                    sh 'go vet ./...'
+                    sh 'test -z "$(gofmt -l .)" || { echo "gofmt şunları değiştirirdi:"; gofmt -l .; exit 1; }'
+                    sh 'go test ./... -race -count=1 -cover'
+                }
+            }
         }
-      }
-    }
 
-    stage('Build') {
-      steps {
-        dir('api') {
-          // CGO_ENABLED=0 is the whole point of the pure-Go SQLite driver:
-          // one static binary, no libc to match on the target, and a build
-          // that cross-compiles from whatever this agent happens to be.
-          sh '''
-            set -eu
-            CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \\
-              go build -trimpath -ldflags="-s -w" -o build/revify-api-linux-amd64 ./cmd/api
-            file build/revify-api-linux-amd64 || true
-            ls -lh build/
-          '''
+        stage('Build') {
+            steps {
+                dir('api') {
+                    sh '''
+                        set -eu
+                        mkdir -p ../dist/bin
+                        LDFLAGS="-s -w -X main.buildNumber=${BUILD_NUMBER} -X main.gitCommit=$(git rev-parse --short HEAD)"
+                        go build -trimpath -ldflags "$LDFLAGS" -o ../dist/bin/revify-api ./cmd/api
+                        file ../dist/bin/revify-api || true
+                        ls -lh ../dist/bin/revify-api
+                    '''
+                }
+            }
         }
-        archiveArtifacts artifacts: 'api/build/revify-api-linux-amd64', fingerprint: true
-      }
-    }
 
-    stage('Deploy') {
-      // Only from the default branch, and only when asked. A pull request
-      // that could deploy is a pull request that can replace the service
-      // everyone is signed in to.
-      when {
-        allOf {
-          expression { params.DEPLOY }
-          branch 'master'
+        stage('Package artifacts') {
+            steps {
+                sh '''
+                    set -eu
+                    rm -rf artifacts && mkdir -p artifacts/bin artifacts/deploy
+
+                    cp dist/bin/revify-api artifacts/bin/
+                    chmod +x artifacts/bin/revify-api
+
+                    # Imaj tanımı, compose ve deploy betiği ikiliyle birlikte
+                    # gider: uzak sunucuda ayrı bir repo klonu gerekmesin.
+                    cp api/Dockerfile.runtime          artifacts/
+                    cp deploy/docker-compose.prod.yml  artifacts/docker-compose.yml
+                    cp deploy/remote-deploy.sh         artifacts/deploy/
+                    chmod +x artifacts/deploy/remote-deploy.sh
+
+                    cat > artifacts/BUILD_INFO <<EOF
+build_number=${BUILD_NUMBER}
+git_commit=$(git rev-parse HEAD)
+git_branch=$(git rev-parse --abbrev-ref HEAD)
+built_at=$(date -u +%FT%TZ)
+EOF
+
+                    tar -czf "${ARTIFACT_NAME}" -C artifacts .
+                    ls -lh "${ARTIFACT_NAME}"
+                '''
+            }
         }
-      }
-      steps {
-        withCredentials([
-          sshUserPrivateKey(credentialsId: 'revify-deploy-key', keyFileVariable: 'SSH_KEY', usernameVariable: 'SSH_USER'),
-          string(credentialsId: 'revify-deploy-host', variable: 'DEPLOY_HOST'),
-          string(credentialsId: 'revify-deploy-path', variable: 'DEPLOY_PATH'),
-          string(credentialsId: 'revify-health-url', variable: 'HEALTH_URL'),
-        ]) {
-          sh '''
-            set -eu
-            SSH="ssh -i $SSH_KEY -o StrictHostKeyChecking=accept-new"
 
-            # Upload beside the running binary, then move it into place.
-            # Copying onto a running executable is how you get a half-written
-            # binary serving requests.
-            scp -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new \\
-              api/build/revify-api-linux-amd64 "$SSH_USER@$DEPLOY_HOST:$DEPLOY_PATH/revify-api.new"
-
-            $SSH "$SSH_USER@$DEPLOY_HOST" bash -euo pipefail -c "'
-              chmod +x $DEPLOY_PATH/revify-api.new
-              mv $DEPLOY_PATH/revify-api.new $DEPLOY_PATH/revify-api
-              sudo systemctl restart revify-api
-            '"
-          '''
-
-          // The deploy is not finished until the service answers. A restart
-          // that silently failed looks exactly like one that worked.
-          sh '''
-            set -eu
-            for i in $(seq 1 20); do
-              if curl -fsS --max-time 5 "$HEALTH_URL" | grep -q '"ok":true'; then
-                echo "Health check passed."
-                exit 0
-              fi
-              sleep 3
-            done
-            echo "Service did not become healthy after the deploy."
-            exit 1
-          '''
+        stage('Deploy via SSH') {
+            // Yalnızca master. Deploy edebilen bir pull request, herkesin
+            // giriş yaptığı servisi değiştirebilen bir pull request demek.
+            when { branch 'master' }
+            steps {
+                sshPublisher(
+                    publishers: [
+                        sshPublisherDesc(
+                            configName: "${DEPLOY_HOST_CONFIG}",
+                            verbose: true,
+                            transfers: [
+                                sshTransfer(
+                                    sourceFiles: "${ARTIFACT_NAME}",
+                                    remoteDirectory: "${REMOTE_INCOMING}",
+                                    removePrefix: '',
+                                    execCommand: """
+                                        set -euo pipefail
+                                        INCOMING=\$(cd ~ && pwd)/${REMOTE_INCOMING}
+                                        cd \"\$INCOMING\"
+                                        echo '==> Extracting'
+                                        rm -rf staging && mkdir staging
+                                        tar -xzf ${ARTIFACT_NAME} -C staging
+                                        chmod +x staging/deploy/remote-deploy.sh
+                                        echo '==> Running deploy script'
+                                        DEPLOY_DIR=${REMOTE_DEPLOY_DIR} BUILD_NUMBER=${BUILD_NUMBER} bash staging/deploy/remote-deploy.sh
+                                    """,
+                                    execTimeout: 1200000
+                                )
+                            ]
+                        )
+                    ]
+                )
+            }
         }
-      }
     }
-  }
 
-  post {
-    always {
-      // Leaves nothing behind that a later job on the same agent could read.
-      cleanWs()
+    post {
+        success { echo "✅ Deploy başarılı: build #${env.BUILD_NUMBER} → ${env.REMOTE_DEPLOY_DIR}" }
+        failure { echo "❌ Deploy başarısız — log'a bak. Remote'da: docker compose -f ${env.REMOTE_DEPLOY_DIR}/docker-compose.yml ps && docker compose -f ${env.REMOTE_DEPLOY_DIR}/docker-compose.yml logs --tail=50" }
+        always  { sh 'rm -f revify-api-*.tar.gz || true' }
     }
-  }
 }
