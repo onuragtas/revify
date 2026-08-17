@@ -43,6 +43,11 @@ pipeline {
     }
 
     environment {
+        // Hangi dalın deploy edileceği. Karşılaştırma aşağıda `deployBranch()`
+        // ile yapılıyor; `when { branch }` kullanılmıyor çünkü o yalnızca
+        // Multibranch işlerinde çalışır ve düz bir Pipeline işinde sessizce
+        // hiçbir zaman tutmaz — build yeşil kalır, deploy hiç olmaz.
+        DEPLOY_BRANCH      = 'master'
         DEPLOY_HOST_CONFIG = 'root-20.29'
         REMOTE_DEPLOY_DIR  = '/opt/revify'
         REMOTE_INCOMING    = 'revify-incoming'
@@ -66,6 +71,14 @@ pipeline {
                     ]
                 ])
                 sh 'git --no-pager log -1 --pretty="%h %s"'
+
+                // Dal bir kez çözülür ve yazdırılır. Sessizce atlanan bir
+                // deploy, yeşil bir build'in içinde kaybolur — bu pipeline'ı
+                // bir kez öyle kaybettik.
+                script {
+                    env.RESOLVED_BRANCH = currentBranch()
+                    echo "Dal: '${env.RESOLVED_BRANCH}' (deploy dalı: '${env.DEPLOY_BRANCH}')"
+                }
             }
         }
 
@@ -159,10 +172,15 @@ EOF
         }
 
         stage('Deploy via SSH') {
-            // Yalnızca master. Deploy edebilen bir pull request, herkesin
-            // giriş yaptığı servisi değiştirebilen bir pull request demek.
-            when { branch 'master' }
+            // Yalnızca DEPLOY_BRANCH. Deploy edebilen bir pull request,
+            // herkesin giriş yaptığı servisi değiştirebilen bir pull request
+            // demek.
+            when { expression { env.RESOLVED_BRANCH == env.DEPLOY_BRANCH } }
             steps {
+                // `env`'e yazılır, script'e değil: tip belirtilerek tanımlanan
+                // bir Groovy değişkeni script'in yereli olur ve `post`
+                // closure'ından görünmez. env ise aşamalar arasında taşınır.
+                script { env.DEPLOY_RAN = 'true' }
                 sshPublisher(
                     publishers: [
                         sshPublisherDesc(
@@ -195,8 +213,48 @@ EOF
     }
 
     post {
-        success { echo "✅ Deploy başarılı: build #${env.BUILD_NUMBER} → ${env.REMOTE_DEPLOY_DIR}" }
-        failure { echo "❌ Deploy başarısız — log'a bak. Remote'da: docker compose -f ${env.REMOTE_DEPLOY_DIR}/docker-compose.yml ps && docker compose -f ${env.REMOTE_DEPLOY_DIR}/docker-compose.yml logs --tail=50" }
-        always  { sh 'rm -f revify-api-*.tar.gz || true' }
+        success {
+            // Yeşil bir build, deploy'un çalıştığı anlamına gelmez: koşul
+            // tutmazsa aşama sessizce atlanır. Olmayan bir şeyi başarı diye
+            // raporlamak, bu projede başka yerlerde de düzelttiğimiz hata.
+            script {
+                if (env.DEPLOY_RAN == 'true') {
+                    echo "✅ Deploy başarılı: build #${env.BUILD_NUMBER} → ${env.REMOTE_DEPLOY_DIR}"
+                } else {
+                    echo "✅ Build başarılı (#${env.BUILD_NUMBER}) — deploy atlandı: " +
+                         "dal '${env.RESOLVED_BRANCH}', beklenen '${env.DEPLOY_BRANCH}'."
+                }
+            }
+        }
+        failure {
+            echo "❌ Başarısız — log'a bak. Remote'da: " +
+                 "docker compose -f ${env.REMOTE_DEPLOY_DIR}/docker-compose.yml ps && " +
+                 "docker compose -f ${env.REMOTE_DEPLOY_DIR}/docker-compose.yml logs --tail=50"
+        }
+        always { sh 'rm -f revify-api-*.tar.gz || true' }
     }
+}
+
+// Jenkins dalı üç farklı yerde saklar ve hangisinin dolu olduğu iş tipine
+// bağlı: Multibranch'te BRANCH_NAME, düz Pipeline'da git plugin'in
+// GIT_BRANCH'i (çoğu zaman 'origin/master' biçiminde). İkisi de yoksa
+// checkout'un kendisine sorulur — tek doğru kaynak orada zaten var.
+String currentBranch() {
+    if (env.BRANCH_NAME) {
+        return env.BRANCH_NAME
+    }
+    if (env.GIT_BRANCH) {
+        return env.GIT_BRANCH.replaceFirst(/^origin\//, '')
+    }
+    // Jenkins commit'i detached HEAD olarak checkout eder, bu yüzden
+    // `rev-parse --abbrev-ref HEAD` çoğu zaman 'HEAD' döner ve hiçbir şey
+    // söylemez. O durumda commit'i içeren uzak dala bakılır.
+    String head = sh(script: 'git rev-parse --abbrev-ref HEAD', returnStdout: true).trim()
+    if (head != 'HEAD') {
+        return head
+    }
+    return sh(
+        script: "git branch -r --contains HEAD --format='%(refname:short)' | head -n1 | sed 's|^origin/||'",
+        returnStdout: true
+    ).trim()
 }
