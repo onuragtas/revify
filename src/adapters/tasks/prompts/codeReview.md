@@ -100,7 +100,24 @@ Report each finding in exactly this shape, and nothing more:
 <diff block: only the 1–5 lines that matter>
 
 **Etki:** <one or two sentences: what breaks, and the condition that triggers it>
+
+**Ne yapmalı:** <the change to make, concretely: which file, which function, what
+to do there>
 ```
+
+A finding without a fix hands the reader your homework. Name the actual change —
+"`OrderService.cancel` içinde `refund()` çağrısını transaction'ın içine al", not
+"transaction yönetimi gözden geçirilmeli". If the diff you quoted is a line that
+should read differently, say what it should read.
+
+When the right fix depends on something you cannot see, do not invent one. Give
+the options and say what decides between them: "kuyruk sırası garanti ediliyorsa
+X; edilmiyorsa Y — `queue.publish` çağıranın idempotent olup olmadığına bakılmalı."
+That is an answer. "Ekip karar vermeli" is not.
+
+Do not restate the problem here, and do not write it for a finding whose fix is
+already obvious from the quoted diff — one line saying the same thing twice makes
+the review longer and no more useful.
 
 For a requirement/flow finding with no single line, put the flow or the
 file that should have changed where `file:line` goes, and skip the diff

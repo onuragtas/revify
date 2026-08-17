@@ -160,6 +160,8 @@ describe('buildPrompt', () => {
 
     expect(prompt).toContain('### <severity> — <file:line>');
     expect(prompt).toContain('**Etki:**');
+    // A finding without a fix hands the reader the homework.
+    expect(prompt).toContain('**Ne yapmalı:**');
     expect(prompt).toContain('the condition that triggers it');
   });
 
