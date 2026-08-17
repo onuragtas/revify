@@ -1,5 +1,4 @@
 import { app, BrowserWindow, Menu, Notification, Tray, nativeImage, shell } from 'electron';
-import electronUpdater from 'electron-updater';
 import type { AddressInfo } from 'node:net';
 import { loadConfigOrExit } from '../config/loadConfig.js';
 import { buildPipeline } from '../core/registry.js';
@@ -165,7 +164,7 @@ function createWindow(): void {
  * process and lose work that cannot be resumed, so the decision stays with
  * whoever is using it — and the server refuses while a review is running.
  */
-function setupUpdates(): void {
+async function setupUpdates(): Promise<void> {
   // A dev run has no packaged app to replace, and checking would only
   // produce a confusing error.
   if (!app.isPackaged) {
@@ -173,7 +172,24 @@ function setupUpdates(): void {
     return;
   }
 
-  const { autoUpdater } = electronUpdater;
+  /*
+   * Loaded here rather than at the top of the file.
+   *
+   * A static import made the updater a condition of starting at all: it
+   * was packaged as a devDependency, electron-builder ships only
+   * `dependencies`, and the installed app died on its first line with
+   * ERR_MODULE_NOT_FOUND — before a window, with the reason in a console
+   * nobody sees. The dependency is where it belongs now; this makes sure
+   * that being wrong about it again costs the update check, not the app.
+   */
+  let autoUpdater: typeof import('electron-updater').autoUpdater;
+  try {
+    ({ autoUpdater } = (await import('electron-updater')).default);
+  } catch (err) {
+    console.error('[updater] unavailable:', err);
+    server.setUpdateState({ supported: false, reason: 'updater not available in this build' });
+    return;
+  }
   // Downloading is fine unattended; installing is not.
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = false;
@@ -264,7 +280,9 @@ if (!app.requestSingleInstanceLock()) {
 
       createWindow();
       refreshBadge();
-      setupUpdates();
+      // Not awaited: the window is already up, and an update check has no
+      // business delaying anything.
+      void setupUpdates();
       // Cheap and local: the count also moves when you approve something in
       // the window, which emits nothing.
       setInterval(refreshBadge, 5000).unref();

@@ -65,6 +65,12 @@ jobs:
       - run: npm test
       - run: npm run build
 
+      # electron-builder packages `dependencies` only. A runtime import that
+      # sits in devDependencies compiles, tests and releases cleanly, then
+      # kills the installed app on its first line — which is how
+      # electron-updater shipped broken.
+      - run: npm run check:deps
+
       # A compile that produces something unrunnable still passes tsc. The
       # UI is a single file the build copies; if that copy breaks, every run
       # mode serves a blank page.
