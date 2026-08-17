@@ -1443,8 +1443,25 @@
   }
 
   document.querySelectorAll('.tab').forEach((tab) => {
-    tab.addEventListener('click', () => showTab(tab.dataset.tab));
+    tab.addEventListener('click', () => {
+      showTab(tab.dataset.tab);
+      // Opening the notes is an ask for the team's current notes. The
+      // detail poll runs once a second and is throttled to a minute, which
+      // is right for a loop and wrong for a deliberate click: a colleague's
+      // note could sit unseen for the rest of that minute.
+      if (tab.dataset.tab === 'notes') void refreshNotes();
+    });
   });
+
+  /** Forces a sync with the team, then lets the next detail poll render it.
+   * The endpoint is the one place that always fetches rather than reading
+   * this machine's cache. */
+  async function refreshNotes() {
+    try {
+      await fetch('/api/notes');
+      if (currentIssue) pollDetail(currentIssue);
+    } catch { /* the cached list stays on screen, which is the truth we have */ }
+  }
 
   function setTabCount(name, count, alert) {
     const el = document.querySelector('[data-count="' + name + '"]');
@@ -2397,6 +2414,9 @@
   /** Show an issue's existing review without running anything. The
    * selection goes in the URL hash so a page refresh comes back to it. */
   function openIssue(issueKey, { force = false } = {}) {
+    // Fresh notes for a freshly opened issue, without waiting out the
+    // detail poll's throttle.
+    void refreshNotes();
     // Re-opening the issue already on screen would otherwise restart
     // polling and re-render, closing whatever the user just opened.
     // A new run passes force, since it genuinely needs to poll again.
