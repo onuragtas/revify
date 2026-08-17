@@ -920,7 +920,6 @@
     </div>
 
     <div id="gateError" class="card-hint" style="color:var(--red)"></div>
-    <p class="card-hint" id="gateServerLabel"></p>
   </div>
 </div>
 
@@ -1247,42 +1246,6 @@
     <div class="modal-foot">
       <button id="settingsCancel" class="btn">Kapat</button>
       <button id="settingsSave" class="btn btn-primary">Kaydet</button>
-    </div>
-  </div>
-</div>
-
-<div class="modal-backdrop" id="authModal">
-  <div class="modal" style="width:min(420px,100%)">
-    <div class="modal-head">
-      <h3 id="authTitle">Giriş</h3>
-      <button id="authClose" class="btn btn-ghost btn-icon" style="margin-left:auto" title="Kapat">✕</button>
-    </div>
-    <div class="modal-body">
-      <div class="seg" id="authTabs" style="width:100%;margin-bottom:0.9rem">
-        <button id="authTabLogin" class="on" style="flex:1">Giriş yap</button>
-        <button id="authTabRegister" style="flex:1">Kaydol</button>
-      </div>
-
-      <label class="field" id="authNameField" hidden>
-        <span>İsim</span>
-        <input id="authName" class="input" autocomplete="name" placeholder="Takımda böyle görüneceksin" />
-      </label>
-      <label class="field">
-        <span>E-posta</span>
-        <input id="authEmail" class="input" type="email" autocomplete="username" />
-      </label>
-      <label class="field">
-        <span>Parola</span>
-        <input id="authPassword" class="input" type="password" autocomplete="current-password" />
-      </label>
-      <p class="card-hint" id="authPasswordHint" hidden>En az 10, en fazla 72 karakter.</p>
-
-      <div id="authError" class="card-hint" style="color:var(--red)"></div>
-      <p class="card-hint" id="authServerHint"></p>
-    </div>
-    <div class="modal-foot">
-      <button id="authCancel" class="btn">Vazgeç</button>
-      <button id="authSubmit" class="btn btn-primary">Giriş yap</button>
     </div>
   </div>
 </div>
@@ -2644,7 +2607,6 @@
       settingsModal.classList.remove('open');
       teamModal.classList.remove('open');
       assignModal.classList.remove('open');
-      authModal.classList.remove('open');
     }
   });
 
@@ -3029,113 +2991,13 @@
     void loadAssigned();
   }
 
-  /* ------------------------ sign in / sign up ---------------------- */
-
-  const authModal = document.getElementById('authModal');
-  let authMode = 'login';
-
-  // Mirrors the server's rules exactly. Being told "too short" only after a
-  // round trip is a poor way to learn a rule the page already knows — and
-  // 72 is a real cap, not a style choice: bcrypt ignores everything past
-  // it, which would make two different long passwords interchangeable.
-  function authProblem(fields) {
-    if (authMode === 'register' && !fields.name) return 'İsim gerekli.';
-    if (!fields.email.includes('@')) return 'Geçerli bir e-posta gerekli.';
-    if (authMode === 'register') {
-      if (fields.password.length < 10) return 'Parola en az 10 karakter olmalı.';
-      if (fields.password.length > 72) return 'Parola en fazla 72 karakter olabilir.';
-    } else if (!fields.password) {
-      return 'Parola gerekli.';
-    }
-    return null;
-  }
-
-  function setAuthMode(mode) {
-    authMode = mode;
-    const registering = mode === 'register';
-    document.getElementById('authTabLogin').classList.toggle('on', !registering);
-    document.getElementById('authTabRegister').classList.toggle('on', registering);
-    document.getElementById('authTitle').textContent = registering ? 'Kaydol' : 'Giriş';
-    document.getElementById('authSubmit').textContent = registering ? 'Kaydol' : 'Giriş yap';
-    document.getElementById('authNameField').hidden = !registering;
-    document.getElementById('authPasswordHint').hidden = !registering;
-    document.getElementById('authPassword').setAttribute(
-      'autocomplete', registering ? 'new-password' : 'current-password');
-    document.getElementById('authError').textContent = '';
-  }
-
-  async function openAuthModal(mode) {
-    setAuthMode(mode ?? 'login');
-    document.getElementById('authError').textContent = '';
-    document.getElementById('authPassword').value = '';
-    document.getElementById('authServerHint').textContent =
-      'Sunucu: ' + (teamState.apiUrl || 'ayarlanmadı');
-    authModal.classList.add('open');
-    // Focus what still needs filling in rather than always the first field.
-    const first = mode === 'register' ? 'authName' : 'authEmail';
-    setTimeout(() => document.getElementById(first).focus(), 0);
-  }
-
-  document.getElementById('authTabLogin').addEventListener('click', () => setAuthMode('login'));
-  document.getElementById('authTabRegister').addEventListener('click', () => setAuthMode('register'));
-  for (const id of ['authClose', 'authCancel']) {
-    document.getElementById(id).addEventListener('click', () => authModal.classList.remove('open'));
-  }
-  authModal.addEventListener('click', (e) => {
-    if (e.target === authModal) authModal.classList.remove('open');
-  });
-
-  async function submitAuth() {
-    const errorEl = document.getElementById('authError');
-    const fields = {
-      name: document.getElementById('authName').value.trim(),
-      email: document.getElementById('authEmail').value.trim(),
-      password: document.getElementById('authPassword').value,
-    };
-
-    const problem = authProblem(fields);
-    if (problem) {
-      errorEl.textContent = problem;
-      return;
-    }
-
-    const submitEl = document.getElementById('authSubmit');
-    submitEl.disabled = true;
-    errorEl.textContent = '';
-    try {
-      const res = await fetch('/api/backend/' + (authMode === 'register' ? 'register' : 'login'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(fields),
-      });
-      const data = await res.json();
-      if (data.error) {
-        errorEl.textContent = data.error;
-        return;
-      }
-      authModal.classList.remove('open');
-      document.getElementById('authPassword').value = '';
-      await loadTeamIdentity();
-      openTeamModal();
-    } catch (err) {
-      errorEl.textContent = String(err);
-    } finally {
-      submitEl.disabled = false;
-    }
-  }
-
-  document.getElementById('authSubmit').addEventListener('click', submitAuth);
-  // Enter submits from any field: a login form that needs a mouse is an
-  // annoyance every single time.
-  for (const id of ['authName', 'authEmail', 'authPassword']) {
-    document.getElementById(id).addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') submitAuth();
-    });
-  }
-
   document.getElementById('teamChip').addEventListener('click', () => {
+    // Signing in happens at the gate, so being inside the app without a
+    // user means one thing: the backend was unreachable and a stored
+    // session let us in. A login form would not help — the server it would
+    // post to is the one that is down.
     if (teamState.user) openTeamModal();
-    else openAuthModal('login');
+    else alert('Sunucuya ulaşılamıyor. Takım özellikleri bağlantı geri gelince çalışır.');
   });
 
   /* --------------------------- assigning --------------------------- */
@@ -3150,7 +3012,7 @@
     if (!currentIssue) return;
     await loadTeamIdentity();
     if (!teamState.user) {
-      openTeamModal();
+      alert('Sunucuya ulaşılamıyor; şu an atama yapılamaz.');
       return;
     }
 
@@ -3227,7 +3089,6 @@
         return;
       }
       assignModal.classList.remove('open');
-      authModal.classList.remove('open');
       loadAssigned();
     } catch (err) {
       resultEl.textContent = String(err);
@@ -3311,10 +3172,8 @@
     }
 
     if (!teamState.user) {
-      // Signing in is its own screen — see openAuthModal. A team modal that
-      // also handled credentials was one form doing two jobs badly.
       teamModal.classList.remove('open');
-      openAuthModal('login');
+      alert('Sunucuya ulaşılamıyor. Takım özellikleri bağlantı geri gelince çalışır.');
       return;
     }
 
@@ -3606,14 +3465,11 @@
     document.getElementById('gateError').textContent = '';
   }
 
-  function showGate(_section, info) {
+  function showGate(_section, _info) {
+    // No server address on screen: it ships with the build, so it is not
+    // something the person signing in chose, can change, or needs to read.
     gateEl.hidden = false;
     appEl.hidden = true;
-    // The address ships with the build; showing it is the only reason it is
-    // on screen at all — so nobody has to guess which one they signed in to.
-    document.getElementById('gateServerLabel').textContent = info?.apiUrl
-      ? (info.production ? '' : 'Geliştirme sunucusu · ') + info.apiUrl
-      : '';
     setTimeout(() => document.getElementById('gateEmail').focus(), 0);
   }
 
