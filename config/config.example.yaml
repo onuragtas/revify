@@ -72,6 +72,22 @@ autoPrepare:
   enabled: false
   pollIntervalMs: 120000
 
+# What is waiting on you, and how often to say so.
+#
+# Three things pile up and arrive from three places: work a team-mate
+# assigned you (the team API), reviews finished here that need your
+# Approve/Reject, and issues sitting in the review column that nobody has
+# looked at yet. Each is announced once when it appears, then on a widening
+# schedule — an hour, four hours, then daily — because an alert every poll
+# teaches people to dismiss alerts.
+#
+# The interval below is how often to look. It also decides how soon a
+# colleague's assignment reaches you, since nothing can be pushed to an app
+# running on your own machine.
+reminders:
+  enabled: true
+  pollIntervalMs: 900000
+
 wiring:
   trigger: jiraStatusPoll
   contextCollectors:

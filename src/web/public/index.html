@@ -3279,9 +3279,14 @@
    * whoever handed the work out had no way of seeing it was still sitting
    * there — let alone of asking about it without leaving the app.
    */
+  /** The team whose assignments are on screen, so re-rendering after a
+   * nudge does not have to guess it back out of a list. */
+  let assignmentsTeamId = null;
+
   async function renderTeamAssignments(teamId) {
     const host = document.getElementById('teamAssignments');
     if (!host) return;
+    assignmentsTeamId = teamId;
 
     let items = [];
     try {
@@ -3297,40 +3302,97 @@
       return;
     }
 
-    host.innerHTML = '<h4>Açık atamalar</h4>' + open.map((a) =>
-      '<div class="memberRow">' +
-      '<span>' + escapeHtml(a.issueKey) + '</span>' +
-      '<span class="muted">' + escapeHtml(a.assigneeName || '—') + ' · ' +
-        escapeHtml(sinceText(a.assignedAt)) + ' önce</span>' +
-      '<span class="spacer"></span>' +
-      // Nudging yourself is refused by the server; not offering it is
-      // kinder than explaining it afterwards.
-      (a.assigneeId && a.assigneeId !== teamState.user.id
-        ? '<button class="btn small nudgeBtn" data-key="' + escapeHtml(a.issueKey) +
-          '" data-to="' + escapeHtml(a.assigneeId) + '">Hatırlat</button>'
-        : '<span class="role">sende</span>') +
-      '</div>').join('');
+    // Who has already asked, before anyone asks again. Fetched per issue
+    // rather than guessed: the button used to look identical whether you
+    // had nudged nobody or four times.
+    const history = {};
+    await Promise.all(open.map(async (a) => {
+      try {
+        const res = await fetch('/api/reminders/nudges/' + encodeURIComponent(a.issueKey));
+        history[a.issueKey] = (await res.json()).items ?? [];
+      } catch { history[a.issueKey] = []; }
+    }));
+
+    host.innerHTML = '<h4>Açık atamalar</h4>' + open.map((a) => {
+      const asks = history[a.issueKey] ?? [];
+      const last = asks[0];
+      const mine = a.assigneeId === teamState.user.id;
+      return '<div class="memberRow">' +
+        '<span>' + escapeHtml(a.issueKey) + '</span>' +
+        '<span class="muted">' + escapeHtml(a.assigneeName || '—') + ' · ' +
+          escapeHtml(sinceText(a.assignedAt)) + ' önce' +
+          // Silence is the thing worth showing: three asks and no movement
+          // means something a single "sent" confirmation never says.
+          (asks.length
+            ? ' · <b>' + asks.length + ' kez hatırlatıldı</b>, son ' + escapeHtml(sinceText(last.createdAt)) + ' önce'
+            : '') +
+        '</span>' +
+        '<span class="spacer"></span>' +
+        (mine
+          ? '<span class="role">sende</span>'
+          : '<button class="btn small nudgeBtn" data-key="' + escapeHtml(a.issueKey) +
+            '" data-to="' + escapeHtml(a.assigneeId) + '">Hatırlat</button>') +
+        '</div>';
+    }).join('');
 
     host.querySelectorAll('.nudgeBtn').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        btn.disabled = true;
-        const original = btn.textContent;
-        try {
-          const res = await fetch('/api/reminders/nudge', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ issueKey: btn.dataset.key, toUserId: btn.dataset.to }),
-          });
-          const data = await res.json();
-          // Saying "gönderildi" and leaving the button dead is how someone
-          // ends up nudging four times without knowing.
-          btn.textContent = data.error ? 'Gönderilemedi' : 'Gönderildi';
-        } catch {
-          btn.textContent = 'Gönderilemedi';
-        }
-        setTimeout(() => { btn.textContent = original; btn.disabled = false; }, 4000);
-      });
+      btn.addEventListener('click', () => openNudgeRow(btn));
     });
+  }
+
+  /**
+   * Turns the button into a message field.
+   *
+   * The button sent an empty nudge, which is the difference between "bugün
+   * lazım" and "sırası gelince" — the part that decides whether the other
+   * person reorders their day. A prompt() would have been simpler and does
+   * not exist in Electron, so the field goes inline.
+   */
+  function openNudgeRow(btn) {
+    const row = btn.parentElement;
+    const key = btn.dataset.key;
+    const to = btn.dataset.to;
+    btn.remove();
+
+    const input = document.createElement('input');
+    input.className = 'input';
+    input.placeholder = 'kısa not (isteğe bağlı)';
+    input.style.maxWidth = '14rem';
+    const send = document.createElement('button');
+    send.className = 'btn small primary';
+    send.textContent = 'Gönder';
+    row.append(input, send);
+    input.focus();
+
+    const submit = async () => {
+      send.disabled = true;
+      send.textContent = 'Gönderiliyor…';
+      try {
+        const res = await fetch('/api/reminders/nudge', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ issueKey: key, toUserId: to, message: input.value.trim() }),
+        });
+        const data = await res.json();
+        if (data.error) {
+          // The server refuses a second ask inside half an hour and says
+          // when the last one went out. Showing that beats a dead button.
+          input.remove();
+          send.remove();
+          const why = document.createElement('span');
+          why.className = 'card-hint';
+          why.textContent = data.error;
+          row.append(why);
+          return;
+        }
+        await renderTeamAssignments(assignmentsTeamId);
+      } catch (err) {
+        send.textContent = 'Gönderilemedi';
+        send.disabled = false;
+      }
+    };
+    send.addEventListener('click', submit);
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
   }
 
   document.getElementById('teamClose').addEventListener('click', () => teamModal.classList.remove('open'));
@@ -3482,7 +3544,7 @@
     // The browser build has no updater, and there is nothing useful to say
     // about a version nobody can replace from here.
     const worthShowing = info.supported &&
-      ['downloading', 'ready', 'manual'].includes(info.status) &&
+      ['downloading', 'ready', 'manual', 'installing'].includes(info.status) &&
       info.version !== dismissedUpdate;
     banner.hidden = !worthShowing;
     if (!worthShowing) return;
@@ -3492,10 +3554,17 @@
       btn.hidden = true;
       return;
     }
+    if (info.status === 'installing') {
+      textEl.textContent = 'Kuruluyor, uygulama birazdan yeniden başlayacak…';
+      btn.hidden = true;
+      return;
+    }
     if (info.status === 'manual') {
-      // macOS: imzasız bir uygulamaya güncelleme uygulanamıyor, o yüzden
-      // kurulum yerine indirme sayfası öneriliyor.
-      textEl.textContent = 'Revify ' + info.version + ' yayınlandı.';
+      // Only reached when the swap itself failed — the reason travels with
+      // it, because "open the download page" without one reads like the
+      // update was never possible.
+      textEl.textContent = 'Revify ' + (info.version ?? '') + ' kurulamadı' +
+        (info.error ? ' (' + info.error + ')' : '') + '.';
       btn.hidden = false;
       btn.textContent = 'İndirme sayfasını aç';
       return;

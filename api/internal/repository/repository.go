@@ -321,3 +321,12 @@ func (r *Repository) NudgesForIssue(teamID, issueKey string) ([]model.NudgeView,
 		Scan(&views).Error
 	return views, err
 }
+
+// LastNudge is the most recent ask for this issue and person, which is what
+// the cooldown is measured from.
+func (r *Repository) LastNudge(teamID, issueKey, toUserID string) (model.Nudge, error) {
+	var nudge model.Nudge
+	err := r.db.Where("team_id = ? AND issue_key = ? AND to_user_id = ?", teamID, issueKey, toUserID).
+		Order("created_at DESC").First(&nudge).Error
+	return nudge, err
+}

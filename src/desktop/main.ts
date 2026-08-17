@@ -1,6 +1,7 @@
 import { app, BrowserWindow, Menu, Notification, Tray, nativeImage, shell } from 'electron';
 import type { AddressInfo } from 'node:net';
 import { loadConfigOrExit } from '../config/loadConfig.js';
+import { currentBundlePath, replaceAppBundle } from './installUpdate.js';
 import { buildPipeline } from '../core/registry.js';
 import { createServer } from '../web/server.js';
 
@@ -210,7 +211,18 @@ async function setupUpdates(): Promise<void> {
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = false;
 
-  const canInstall = process.platform !== 'darwin';
+  /*
+   * macOS can install too now.
+   *
+   * It could not before, and the reason was real: Squirrel validates the
+   * new bundle against the running app's designated requirement, which for
+   * an ad-hoc signature is a hash of that exact binary — so no new build
+   * can ever satisfy it. The answer is not to ask Squirrel. electron-
+   * updater still finds and downloads the release and verifies its
+   * checksum; installUpdate.ts swaps the bundle itself.
+   */
+  const canInstall = true;
+  let downloadedArchive: string | null = null;
   const current = app.getVersion();
 
   const publish = (state: Record<string, unknown>) =>
@@ -226,15 +238,12 @@ async function setupUpdates(): Promise<void> {
 
   autoUpdater.on('update-available', (info) => {
     publish({ status: 'downloading', version: info.version, percent: 0 });
-    if (!canInstall) {
-      // Nothing will be installed here, so say so now rather than after a
-      // download that leads to a dead end.
-      publish({ status: 'manual', version: info.version, url: releasesUrl() });
-      notify('Yeni sürüm var', `Revify ${info.version} yayınlandı.`, () => void shell.openExternal(releasesUrl()));
-    }
   });
 
   autoUpdater.on('update-downloaded', (info) => {
+    // Kept for the install step: on macOS the swap is ours to perform, and
+    // this is the archive electron-updater has already checksummed.
+    downloadedArchive = (info as { downloadedFile?: string }).downloadedFile ?? null;
     publish({ status: 'ready', version: info.version });
     notify('Güncelleme hazır', `Revify ${info.version} kurulmayı bekliyor.`, () => showWindow());
   });
@@ -247,8 +256,42 @@ async function setupUpdates(): Promise<void> {
   });
 
   server.setUpdateState({ supported: true, canInstall, current, status: 'idle' }, () => {
-    if (canInstall) autoUpdater.quitAndInstall(false, true);
-    else void shell.openExternal(releasesUrl());
+    if (process.platform !== 'darwin') {
+      autoUpdater.quitAndInstall(false, true);
+      return;
+    }
+
+    // Nothing is installed without this having been asked for: the server
+    // refuses while a review is running, because a restart would kill the
+    // `claude` process and lose work that cannot be resumed.
+    void (async () => {
+      const bundle = currentBundlePath(app.getPath('exe'));
+      if (!downloadedArchive || !bundle) {
+        // No archive means the download never finished; no bundle means
+        // this is not an installed app. Either way the honest fallback is
+        // the page someone can download from.
+        publish({ status: 'manual', url: releasesUrl(), error: 'kurulacak dosya bulunamadı' });
+        void shell.openExternal(releasesUrl());
+        return;
+      }
+
+      publish({ status: 'installing' });
+      try {
+        await replaceAppBundle(downloadedArchive, bundle);
+        // relaunch() spawns the same path after this process exits, which
+        // is now the new bundle.
+        app.relaunch();
+        quitting = true;
+        app.exit(0);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error('[updater] install failed:', message);
+        publish({ status: 'manual', url: releasesUrl(), error: message });
+        notify('Güncelleme kurulamadı', `${message}\nİndirme sayfasından kurabilirsin.`, () =>
+          void shell.openExternal(releasesUrl()),
+        );
+      }
+    })();
   });
 
   const check = () => {

@@ -1418,17 +1418,13 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired) {
     res.json({ items: due, count: due.length });
   });
 
-  /** The same list, for a screen rather than a notification. */
-  app.get('/api/reminders', async (_req, res) => {
-    const items = await Promise.allSettled([
-      reminderSources.assignments(),
-      Promise.resolve(reminderSources.approvals()),
-      reminderSources.stale(),
-    ]);
-    res.json({
-      items: items.flatMap((r) => (r.status === 'fulfilled' ? r.value : [])),
-    });
-  });
+  /** Who has already asked about this issue, and when. Shown next to the
+   * button so a second click is a decision rather than a guess. */
+  app.get('/api/reminders/nudges/:issueKey', backendRoute(async (req) => {
+    const teamId = settings.get('teamId');
+    if (!teamId) return { items: [] };
+    return { items: await backend.nudgesForIssue(teamId, req.params.issueKey) };
+  }));
 
   /** Asks a team-mate to look at something. */
   app.post('/api/reminders/nudge', backendRoute(async (req) => {

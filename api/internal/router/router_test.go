@@ -769,20 +769,23 @@ func TestNudgeReachesTheAssignee(t *testing.T) {
 	}
 }
 
-func TestNudgingTwiceIsVisibleAsTwice(t *testing.T) {
+func TestSenderCanSeeWhatWasAlreadyAsked(t *testing.T) {
 	h := newHarness(t)
 	ada, bo, team := h.teamOfTwo(t)
 
-	for i := 0; i < 2; i++ {
-		h.call(t, "POST", "/api/teams/"+team+"/assignments/BUY-1/nudge", ada.cookie,
-			map[string]string{"toUserId": bo.id})
-	}
+	h.call(t, "POST", "/api/teams/"+team+"/assignments/BUY-1/nudge", ada.cookie,
+		map[string]string{"toUserId": bo.id, "message": "Bugün lazım"})
 
-	// Asking twice must look like asking twice — otherwise nobody notices
-	// they are nudging into silence.
+	// Every ask is its own row, with a name and a time on it. Without that
+	// the sender cannot tell whether they are nudging into silence — and a
+	// count is what stops the same question being asked a fourth time.
 	onIssue := items(t, h.call(t, "GET", "/api/teams/"+team+"/assignments/BUY-1/nudges", ada.cookie, nil))
-	if len(onIssue) != 2 {
-		t.Fatalf("two nudges collapsed into %d", len(onIssue))
+	if len(onIssue) != 1 {
+		t.Fatalf("history shows %d asks", len(onIssue))
+	}
+	got := onIssue[0].(map[string]any)
+	if got["fromName"] != "Ada" || got["message"] != "Bugün lazım" {
+		t.Fatalf("history is missing who asked or what they said: %v", got)
 	}
 }
 
@@ -817,5 +820,36 @@ func TestNudgePollIsBoundedBySince(t *testing.T) {
 	future := time.Now().UTC().Add(time.Hour).Format(time.RFC3339)
 	if n := len(items(t, h.call(t, "GET", "/api/nudges/mine?since="+url.QueryEscape(future), bo.cookie, nil))); n != 0 {
 		t.Fatalf("since was ignored: %d nudges returned", n)
+	}
+}
+
+func TestNudgingAgainImmediatelyIsRefusedWithAReason(t *testing.T) {
+	h := newHarness(t)
+	ada, bo, team := h.teamOfTwo(t)
+
+	if res := h.call(t, "POST", "/api/teams/"+team+"/assignments/BUY-1/nudge", ada.cookie,
+		map[string]string{"toUserId": bo.id}); res.code != http.StatusCreated {
+		t.Fatalf("first nudge: %d", res.code)
+	}
+
+	// Five in a row used to all succeed. The recipient was spared only by
+	// their poll interval folding them together — an accident, not a rule.
+	again := h.call(t, "POST", "/api/teams/"+team+"/assignments/BUY-1/nudge", ada.cookie,
+		map[string]string{"toUserId": bo.id})
+	if again.code != http.StatusConflict {
+		t.Fatalf("second nudge went through: %d", again.code)
+	}
+	if msg, _ := again.body["error"].(string); !strings.Contains(msg, "dakika") {
+		t.Fatalf("refusal does not say when the last one was sent: %q", msg)
+	}
+
+	// A different issue, and a different person, are different questions.
+	if res := h.call(t, "POST", "/api/teams/"+team+"/assignments/BUY-2/nudge", ada.cookie,
+		map[string]string{"toUserId": bo.id}); res.code != http.StatusCreated {
+		t.Fatalf("cooldown leaked across issues: %d", res.code)
+	}
+
+	if n := len(items(t, h.call(t, "GET", "/api/nudges/mine", bo.cookie, nil))); n != 2 {
+		t.Fatalf("assignee has %d nudges, expected 2", n)
 	}
 }

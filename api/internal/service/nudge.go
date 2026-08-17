@@ -1,6 +1,7 @@
 package service
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -22,6 +23,11 @@ type Nudge struct {
 	repo *repository.Repository
 	team *Team
 }
+
+/** How long before the same person can be asked about the same issue
+ * again. Long enough that a second click is a decision, short enough that
+ * a genuinely urgent thing is not gated for the afternoon. */
+const nudgeCooldown = 30 * time.Minute
 
 func NewNudge(repo *repository.Repository, team *Team) *Nudge {
 	return &Nudge{repo: repo, team: team}
@@ -48,6 +54,29 @@ func (n *Nudge) Send(in NudgeInput) (model.Nudge, error) {
 	}
 	if in.ToUserID == in.FromUserID {
 		return model.Nudge{}, fail(KindInvalid, "Kendine hatırlatma gönderemezsin.")
+	}
+
+	/*
+	 * One every half hour, per issue, per person.
+	 *
+	 * Nothing stopped five in a row before. The recipient was spared by
+	 * accident — their app polls every fifteen minutes and folds whatever
+	 * it finds into one line — but that is a side effect of the interval,
+	 * not a decision, and it would evaporate the moment polling got
+	 * faster. Meanwhile the sender got no signal at all that they were
+	 * repeating themselves.
+	 *
+	 * The refusal says when the last one went out, because "you already
+	 * asked, eight minutes ago" answers the question the second click was
+	 * really asking.
+	 */
+	if recent, err := n.repo.LastNudge(in.TeamID, in.IssueKey, in.ToUserID); err == nil {
+		if since := time.Since(recent.CreatedAt); since < nudgeCooldown {
+			return model.Nudge{}, fail(KindConflict, fmt.Sprintf(
+				"Bu iş için %d dakika önce hatırlatma gönderildi. %d dakika sonra tekrar gönderebilirsin.",
+				int(since.Minutes()), int((nudgeCooldown-since).Minutes())+1,
+			))
+		}
 	}
 
 	nudge := model.Nudge{
