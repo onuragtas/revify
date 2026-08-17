@@ -51,6 +51,8 @@ export interface ServerEvents {
   /** Something has been waiting long enough to say so again. Carries the
    * whole batch: one interruption for five waiting issues, not five. */
   'reminder:due': { items: DueReminder[]; title: string; body: string };
+  /** About to restart into a new version, ten seconds from now. */
+  'update:installing': { version: string };
 }
 
 export function createServer(initialConfig: AppConfig, initialWired: Wired) {
@@ -1509,6 +1511,7 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired) {
   function shutdown(): void {
     autoPrepare.stop();
     reminders.stop();
+    if (autoInstallTimer) clearInterval(autoInstallTimer);
     queue.stopAll();
   }
 
@@ -1533,6 +1536,7 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired) {
   let installUpdate: (() => void) | null = null;
 
   let checkForUpdate: (() => Promise<Record<string, unknown>>) | null = null;
+  let autoInstallTimer: NodeJS.Timeout | null = null;
 
   app.get('/api/update', (_req, res) => {
     res.json(updateState);
@@ -1558,19 +1562,54 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired) {
     }
   });
 
+  /** Reviews that a restart would destroy. The `claude` process dies with
+   * the app and its work cannot be resumed, so this is the one thing that
+   * outranks an update. */
+  function busyReviews(): string[] {
+    return wired.reviewStore
+      .list()
+      .filter((r) => r.status === 'running' || r.status === 'queued')
+      .map((r) => r.issueKey);
+  }
+
+  /**
+   * Installs by itself once it is safe to.
+   *
+   * The update downloads on its own and then used to wait for a click.
+   * Nobody clicks: the banner becomes furniture, and a version that fixes
+   * something sits there unapplied for weeks. So it installs — but only
+   * with nothing running, and after a pause long enough to say what is
+   * about to happen.
+   *
+   * The refusal is not a formality. Restarting mid-review kills the model
+   * process and loses work that cannot be resumed, which is worse than
+   * running an old version for another ten minutes.
+   */
+  function scheduleAutoInstall(): void {
+    if (!installUpdate || autoInstallTimer) return;
+
+    autoInstallTimer = setInterval(() => {
+      if (updateState.status !== 'ready' || !installUpdate) return;
+      const busy = busyReviews();
+      if (busy.length) return;
+
+      clearInterval(autoInstallTimer!);
+      autoInstallTimer = null;
+      emit('update:installing', { version: String(updateState.version ?? '') });
+      // A moment for the notification to land and for anyone at the
+      // keyboard to see why the window is about to disappear.
+      setTimeout(() => installUpdate?.(), 10_000);
+    }, 30_000);
+    autoInstallTimer.unref?.();
+  }
+
   app.post('/api/update/install', (_req, res) => {
     if (!installUpdate) {
       res.status(409).json({ error: 'Bu sürümde otomatik güncelleme yok.' });
       return;
     }
 
-    // Restarting mid-review kills the `claude` process and loses the work
-    // it has already done. The update can wait; the review cannot be
-    // resumed.
-    const busy = wired.reviewStore
-      .list()
-      .filter((r) => r.status === 'running' || r.status === 'queued')
-      .map((r) => r.issueKey);
+    const busy = busyReviews();
     if (busy.length) {
       res.status(409).json({
         error: `Önce çalışan review'lar bitmeli ya da durdurulmalı: ${busy.join(', ')}`,
@@ -1606,6 +1645,8 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired) {
     setUpdateState(state: Record<string, unknown>, install?: () => void) {
       updateState = state;
       if (install) installUpdate = install;
+      // Downloaded and nothing running: from here it applies itself.
+      if (state.status === 'ready') scheduleAutoInstall();
     },
   });
 }

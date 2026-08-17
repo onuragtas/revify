@@ -406,6 +406,16 @@ if (!app.requestSingleInstanceLock()) {
       );
     });
 
+    server.events.on('update:installing', ({ version }) => {
+      // Said before it happens, not after: a window that vanishes without
+      // explanation reads as a crash, and this one takes the app with it.
+      notify(
+        'Güncelleme kuruluyor',
+        `Revify ${version} kuruluyor, uygulama birazdan yeniden başlayacak.`,
+        () => showWindow(),
+      );
+    });
+
     server.events.on('reminder:due', ({ items, title, body }) => {
       refreshBadge();
       // Clicking opens the oldest of the batch: with one item that is the

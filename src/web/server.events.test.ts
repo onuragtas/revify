@@ -216,3 +216,35 @@ describe('update install', () => {
     expect(res.status).toBe(409);
   });
 });
+
+describe('automatic update install', () => {
+  it('installs itself once nothing is running, and waits while something is', async () => {
+    vi.useFakeTimers();
+    try {
+      const wired = makeWired();
+      const app = createServer(makeConfig(), wired);
+
+      let installed = false;
+      app.setUpdateState({ status: 'ready', version: '1.2.3' }, () => {
+        installed = true;
+      });
+
+      // A review is running: a restart here kills the model process and
+      // loses work that cannot be resumed.
+      wired.reviewStore.upsert('BUY-1', { status: 'running' });
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(installed).toBe(false);
+
+      // Once it finishes, the update applies without anyone clicking —
+      // which is the point: nobody clicks, and the banner becomes
+      // furniture.
+      wired.reviewStore.upsert('BUY-1', { status: 'posted' });
+      await vi.advanceTimersByTimeAsync(45_000);
+      expect(installed).toBe(true);
+
+      app.shutdown();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

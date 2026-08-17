@@ -3569,9 +3569,13 @@
       btn.textContent = 'İndirme sayfasını aç';
       return;
     }
-    textEl.textContent = 'Revify ' + info.version + ' kurulmaya hazır.';
+    // It installs itself once nothing is running; the button is for
+    // "now", not for "at all". Saying so stops the banner reading like a
+    // demand.
+    textEl.textContent = 'Revify ' + info.version + ' indirildi — ' +
+      'çalışan review kalmayınca kendiliğinden kurulacak.';
     btn.hidden = false;
-    btn.textContent = 'Kur ve yeniden başlat';
+    btn.textContent = 'Şimdi kur';
   }
 
   /** Asking should get an answer, including "you are up to date" — that
