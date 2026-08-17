@@ -12,6 +12,12 @@ services:
     container_name: revify-api
     restart: unless-stopped
 
+    # Runs as the owner of the mounted data directory. The image pins
+    # 10001, and the deploy script chowns to match — a container writing to
+    # a bind mount it does not own fails at the first write, which is the
+    # database, which is the whole service.
+    user: "${APP_UID:-10001}:${APP_GID:-10001}"
+
     # Published on loopback only. TLS is terminated by the reverse proxy in
     # front; exposing this on 0.0.0.0 would put an HTTP service on the
     # public internet next to the HTTPS one.

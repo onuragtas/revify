@@ -6,6 +6,10 @@
 set -euo pipefail
 
 DEPLOY_DIR="${DEPLOY_DIR:-/opt/revify}"
+# The uid the image runs as. Overridable so this script can be exercised
+# somewhere other than the deploy host, where chowning to 10001 needs root.
+APP_UID="${APP_UID:-10001}"
+APP_GID="${APP_GID:-$APP_UID}"
 API_PORT="${API_PORT:-4322}"
 HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:${API_PORT}/api/health}"
 
@@ -24,6 +28,20 @@ fi
 
 echo "==> Deploying to $DEPLOY_DIR"
 mkdir -p "$DEPLOY_DIR/data"
+
+# The container writes the database into this directory as APP_UID. Without
+# this it starts, fails to open the file, and restart-loops — which reads
+# like a broken build rather than a permissions problem.
+#
+# Linux bind mounts pass uid/gid through unchanged, so this is the fix that
+# matters on the deploy host. (On macOS, Docker Desktop remaps ownership on
+# shared paths and this cannot be reproduced locally — worth knowing before
+# anyone tries.)
+if [ "$(id -u)" = "0" ]; then
+  chown -R "$APP_UID:$APP_GID" "$DEPLOY_DIR/data"
+elif [ "$(id -u)" != "$APP_UID" ]; then
+  echo "Uyarı: $DEPLOY_DIR/data sahibi $APP_UID yapılamadı (root değilsin)." >&2
+fi
 
 # The database is the only thing here that cannot be rebuilt from the
 # repository, and it is about to have a new binary opened on it.
@@ -45,7 +63,7 @@ install -m 0644 "$here/docker-compose.yml" "$DEPLOY_DIR/docker-compose.yml"
 [ -f "$here/BUILD_INFO" ] && install -m 0644 "$here/BUILD_INFO" "$DEPLOY_DIR/BUILD_INFO"
 
 cd "$DEPLOY_DIR"
-export BUILD_NUMBER="${BUILD_NUMBER:-local}" API_PORT
+export BUILD_NUMBER="${BUILD_NUMBER:-local}" API_PORT APP_UID APP_GID
 
 echo "==> Building image and starting"
 $COMPOSE up -d --build --remove-orphans
