@@ -1,0 +1,68 @@
+{
+  "name": "revify",
+  "version": "0.1.0",
+  "description": "Generic AI-powered automation pipeline. Today's wiring: Jira status change -> AI code review -> web UI approval -> Jira comment.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "build": "tsc -p tsconfig.json && mkdir -p dist/adapters/tasks/prompts dist/web/public && cp src/adapters/tasks/prompts/codeReview.md dist/adapters/tasks/prompts/ && cp -r src/web/public/. dist/web/public/",
+    "dev": "tsx watch src/index.ts",
+    "ui": "tsx watch src/web/index.ts",
+    "start": "node dist/index.js",
+    "start:ui": "node dist/web/index.js",
+    "test": "vitest run",
+    "app": "npm run build && electron .",
+    "app:dev": "npm run build && electron . --enable-logging",
+    "app:pack": "npm run build && electron-builder --dir",
+    "app:dist": "npm run build && electron-builder"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.117.1",
+    "@slack/web-api": "^7.7.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "js-yaml": "^4.1.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^20.14.9",
+    "@types/supertest": "^7.2.1",
+    "electron": "^43.4.0",
+    "supertest": "^7.2.2",
+    "tsx": "^4.19.1",
+    "typescript": "^5.5.4",
+    "vitest": "^2.1.1"
+  },
+  "main": "dist/desktop/main.js",
+  "build": {
+    "appId": "dev.revify.app",
+    "productName": "Revify",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "package.json",
+      "!dist/**/*.map"
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": [
+        "dmg"
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Development"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    }
+  }
+}

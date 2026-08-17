@@ -1,0 +1,3720 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Revify</title>
+<style>
+  /* ---------------------------------------------------------------- *
+   * Design tokens. Light is the base; dark redefines only the values,
+   * so every rule below stays theme-agnostic. `data-theme` on <html>
+   * wins over the system preference in both directions, which is what
+   * makes the toggle work for someone whose OS says the opposite.
+   * ---------------------------------------------------------------- */
+  :root {
+    --bg: #f7f7fa;
+    --surface: #ffffff;
+    --surface-2: #f2f2f6;
+    --surface-3: #eaeaf0;
+    --border: #e2e2e9;
+    --border-strong: #cfcfda;
+    --text: #17171c;
+    --text-muted: #6a6a78;
+    --text-faint: #9a9aa8;
+    --accent: #4f46e5;
+    --accent-soft: #4f46e51a;
+    --accent-text: #4f46e5;
+    --green: #16a34a;   --green-soft: #16a34a1f;
+    --amber: #d97706;   --amber-soft: #d977061f;
+    --blue: #2563eb;    --blue-soft: #2563eb1f;
+    --red: #dc2626;     --red-soft: #dc26261f;
+    --violet: #7c3aed;  --violet-soft: #7c3aed1f;
+    --gray-soft: #8a8a9622;
+    --diff-add: #16a34a24;
+    --diff-del: #dc262620;
+    --shadow-sm: 0 1px 2px rgba(16, 16, 24, 0.06);
+    --shadow-md: 0 4px 16px rgba(16, 16, 24, 0.08);
+    --shadow-lg: 0 16px 48px rgba(16, 16, 24, 0.18);
+    --radius: 10px;
+    --radius-sm: 7px;
+    --radius-lg: 14px;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0b0b0f;
+      --surface: #14141a;
+      --surface-2: #1b1b23;
+      --surface-3: #23232d;
+      --border: #26262f;
+      --border-strong: #35353f;
+      --text: #e9e9ef;
+      --text-muted: #9494a2;
+      --text-faint: #6a6a78;
+      --accent: #818cf8;
+      --accent-soft: #818cf822;
+      --accent-text: #a5b4fc;
+      --green: #4ade80;   --green-soft: #4ade8020;
+      --amber: #fbbf24;   --amber-soft: #fbbf2420;
+      --blue: #60a5fa;    --blue-soft: #60a5fa20;
+      --red: #f87171;     --red-soft: #f8717120;
+      --violet: #a78bfa;  --violet-soft: #a78bfa20;
+      --gray-soft: #8a8a9622;
+      --diff-add: #4ade8018;
+      --diff-del: #f8717118;
+      --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+      --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.45);
+      --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.6);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --bg: #0b0b0f;
+    --surface: #14141a;
+    --surface-2: #1b1b23;
+    --surface-3: #23232d;
+    --border: #26262f;
+    --border-strong: #35353f;
+    --text: #e9e9ef;
+    --text-muted: #9494a2;
+    --text-faint: #6a6a78;
+    --accent: #818cf8;
+    --accent-soft: #818cf822;
+    --accent-text: #a5b4fc;
+    --green: #4ade80;   --green-soft: #4ade8020;
+    --amber: #fbbf24;   --amber-soft: #fbbf2420;
+    --blue: #60a5fa;    --blue-soft: #60a5fa20;
+    --red: #f87171;     --red-soft: #f8717120;
+    --violet: #a78bfa;  --violet-soft: #a78bfa20;
+    --gray-soft: #8a8a9622;
+    --diff-add: #4ade8018;
+    --diff-del: #f8717118;
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.45);
+    --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.6);
+  }
+
+  * { box-sizing: border-box; }
+
+  /* Long unbroken tokens — a file path, a URL, a Java package name — have
+     no space to break at, so they push their container wider than the
+     screen and the whole page scrolls sideways. These are the places such a
+     token actually arrives: model output, logs, Jira text, notes. */
+  #steps, #issueDesc, #reviewMd, .histMd, .noteText, .qa-label, .qa-finding,
+  .issue-summary, .decisionReason, table.decisions td, .mdP, .mdList li, .mdInline {
+    overflow-wrap: anywhere;
+  }
+
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 14px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1, h2, h3, h4 { margin: 0; font-weight: 600; letter-spacing: -0.011em; }
+
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb {
+    background: var(--border-strong); border-radius: 6px;
+    border: 2px solid transparent; background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover { background: var(--text-faint); background-clip: content-box; }
+  ::-webkit-scrollbar-track { background: transparent; }
+
+  /* ------------------------------- shell ------------------------------ */
+
+  .app { display: flex; flex-direction: column; height: 100vh; }
+  .app[hidden] { display: none; }
+
+  /* The gate covers everything until the app knows who you are. */
+  #gate {
+    position: fixed; inset: 0; z-index: 100;
+    display: flex; align-items: center; justify-content: center; padding: 1.5rem;
+    background: var(--bg);
+  }
+  #gate[hidden] { display: none; }
+  .gate-card {
+    width: min(400px, 100%);
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-lg); box-shadow: var(--shadow-md);
+    padding: 1.6rem;
+  }
+  .gate-brand { display: flex; align-items: center; gap: 0.7rem; margin-bottom: 1.3rem; }
+  .gate-brand h1 { font-size: 1.05rem; }
+  .offlineBanner {
+    background: var(--amber-soft); color: var(--amber);
+    padding: 0.4rem 0.8rem; font-size: 0.8rem; text-align: center;
+  }
+
+  .topbar {
+    display: flex; align-items: center; gap: 1rem;
+    padding: 0.7rem 1.1rem;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .brand { display: flex; align-items: center; gap: 0.65rem; min-width: 0; }
+  .brand-mark {
+    width: 30px; height: 30px; border-radius: 8px; flex-shrink: 0;
+    background: linear-gradient(135deg, var(--accent), var(--violet));
+    color: #fff; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.02em;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .brand h1 { font-size: 0.95rem; line-height: 1.2; }
+  .brand-sub {
+    margin: 0; font-size: 0.72rem; color: var(--text-faint);
+    font-family: var(--mono); letter-spacing: -0.02em;
+  }
+  .topbar-right { margin-left: auto; display: flex; align-items: center; gap: 0.5rem; }
+
+  /* ------------------------------ controls ---------------------------- */
+
+  .btn {
+    cursor: pointer; font: inherit; font-size: 0.83rem; font-weight: 500;
+    padding: 0.4rem 0.8rem; border-radius: var(--radius-sm);
+    border: 1px solid var(--border-strong);
+    background: var(--surface); color: var(--text);
+    display: inline-flex; align-items: center; gap: 0.4rem;
+    transition: background 0.12s, border-color 0.12s, opacity 0.12s;
+    white-space: nowrap;
+  }
+  .btn:hover:not(:disabled) { background: var(--surface-2); border-color: var(--text-faint); }
+  .btn:active:not(:disabled) { background: var(--surface-3); }
+  .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+  .btn-primary {
+    background: var(--accent); border-color: var(--accent); color: #fff;
+  }
+  .btn-primary:hover:not(:disabled) { filter: brightness(1.08); background: var(--accent); border-color: var(--accent); }
+  .btn-approve { border-color: var(--green); color: var(--green); background: var(--green-soft); }
+  .btn-approve:hover:not(:disabled) { background: var(--green); color: #fff; border-color: var(--green); }
+  .btn-reject { border-color: var(--red); color: var(--red); background: var(--red-soft); }
+  .btn-reject:hover:not(:disabled) { background: var(--red); color: #fff; border-color: var(--red); }
+  .btn-ghost { border-color: transparent; background: transparent; color: var(--text-muted); }
+  .btn-ghost:hover:not(:disabled) { background: var(--surface-2); border-color: transparent; color: var(--text); }
+  .btn-icon { padding: 0.4rem 0.55rem; font-size: 0.9rem; line-height: 1; }
+
+  .input, textarea, select {
+    font: inherit; font-size: 0.85rem;
+    padding: 0.42rem 0.65rem;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-strong);
+    background: var(--surface); color: var(--text);
+    width: 100%;
+    transition: border-color 0.12s, box-shadow 0.12s;
+  }
+  .input:focus, textarea:focus, select:focus {
+    outline: none; border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+  textarea { resize: vertical; min-height: 3rem; line-height: 1.5; }
+  ::placeholder { color: var(--text-faint); }
+
+  /* ------------------------------ badges ------------------------------ */
+
+  .badge {
+    display: inline-flex; align-items: center; gap: 0.35rem;
+    padding: 0.16rem 0.55rem; border-radius: 999px;
+    font-size: 0.72rem; font-weight: 500; white-space: nowrap;
+    background: var(--gray-soft); color: var(--text-muted);
+  }
+  .badge::before {
+    content: ''; width: 6px; height: 6px; border-radius: 50%;
+    background: currentColor; flex-shrink: 0;
+  }
+  .badge-queued { background: var(--violet-soft); color: var(--violet); }
+  .badge-running { background: var(--amber-soft); color: var(--amber); }
+  .badge-awaiting_approval { background: var(--blue-soft); color: var(--blue); }
+  .badge-approved, .badge-posted { background: var(--green-soft); color: var(--green); }
+  .badge-rejected, .badge-failed { background: var(--red-soft); color: var(--red); }
+  .badge-cancelled { background: var(--gray-soft); color: var(--text-muted); }
+  .badge-running::before { animation: pulse 1.4s ease-in-out infinite; }
+  .badge-queued::before { animation: pulse 2s ease-in-out infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+
+  .chip {
+    display: inline-flex; align-items: center; gap: 0.35rem;
+    font-size: 0.72rem; padding: 0.2rem 0.6rem; border-radius: 999px;
+    background: var(--surface-2); color: var(--text-muted);
+    border: 1px solid var(--border);
+  }
+  .chip-live { background: var(--red-soft); color: var(--red); border-color: transparent; font-weight: 600; }
+  .chip-dry { background: var(--gray-soft); color: var(--text-muted); border-color: transparent; }
+  .chip-auto { background: var(--violet-soft); color: var(--violet); border-color: transparent; }
+  .autoTag {
+    font-size: 0.64rem; padding: 0.02rem 0.35rem; border-radius: 999px;
+    background: var(--violet-soft); color: var(--violet); white-space: nowrap;
+  }
+
+  /* ------------------------------ layout ------------------------------ */
+
+  .layout { display: flex; flex: 1; min-height: 0; }
+  .layout[hidden], .decisionsView[hidden] { display: none; }
+
+  .viewTabs { display: flex; gap: 0.15rem; margin-left: 1.2rem; }
+  .viewTab {
+    cursor: pointer; font: inherit; font-size: 0.84rem; font-weight: 500;
+    padding: 0.35rem 0.75rem; border: 0; border-radius: var(--radius-sm);
+    background: transparent; color: var(--text-muted);
+    display: flex; align-items: center; gap: 0.4rem; white-space: nowrap;
+  }
+  .viewTab:hover { background: var(--surface-2); color: var(--text); }
+  .viewTab.on { background: var(--accent-soft); color: var(--accent-text); }
+
+  .decisionsView { flex: 1; overflow-y: auto; padding: 1.4rem 1.6rem 3rem; }
+  .decisions-head { display: flex; align-items: flex-start; gap: 1rem; margin-bottom: 1.2rem; }
+  .decisions-head h2 { font-size: 1.05rem; margin-bottom: 0.25rem; }
+  table.decisions { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  table.decisions th {
+    text-align: left; font-size: 0.72rem; text-transform: uppercase;
+    letter-spacing: 0.05em; color: var(--text-faint); font-weight: 600;
+    padding: 0.5rem 0.7rem; border-bottom: 1px solid var(--border);
+  }
+  table.decisions td {
+    padding: 0.6rem 0.7rem; border-bottom: 1px solid var(--border); vertical-align: top;
+  }
+  table.decisions tr:hover td { background: var(--surface-2); }
+  table.decisions tr.clickable { cursor: pointer; }
+  .waitFor { font-variant-numeric: tabular-nums; }
+  .jiraLink {
+    font-family: var(--mono); font-size: 0.8rem; font-weight: 600;
+    color: var(--accent-text); text-decoration: none; white-space: nowrap;
+  }
+  .jiraLink:hover { text-decoration: underline; }
+  .jiraLink::after { content: ' ↗'; font-size: 0.72rem; opacity: 0.6; }
+  .decisionReason {
+    margin-top: 0.35rem; font-size: 0.8rem; color: var(--text-muted);
+    padding-left: 0.6rem; border-left: 2px solid var(--border-strong);
+  }
+  .nowrap { white-space: nowrap; }
+
+  .sidebar {
+    width: 340px; flex-shrink: 0;
+    border-right: 1px solid var(--border);
+    background: var(--surface);
+    display: flex; flex-direction: column; min-height: 0;
+  }
+  .sidebar-head {
+    padding: 0.7rem 0.8rem; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 0.5rem; flex-shrink: 0;
+  }
+  .sidebar-count {
+    font-size: 0.72rem; color: var(--text-faint); font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .issue-list { overflow-y: auto; flex: 1; padding: 0.4rem; }
+
+  .issue-card {
+    padding: 0.6rem 0.7rem; border-radius: var(--radius);
+    cursor: pointer; border: 1px solid transparent;
+    transition: background 0.12s, border-color 0.12s;
+    margin-bottom: 0.15rem;
+  }
+  .issue-card:hover { background: var(--surface-2); }
+  .issue-card.selected {
+    background: var(--accent-soft); border-color: var(--accent);
+  }
+  .issue-card-top {
+    display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.2rem;
+  }
+  .issue-key {
+    font-family: var(--mono); font-size: 0.76rem; font-weight: 600;
+    color: var(--accent-text); letter-spacing: -0.02em;
+  }
+  .issue-card.selected .issue-key { color: var(--accent-text); }
+  .issue-card-top .badge { margin-left: auto; }
+  .issue-summary {
+    font-size: 0.83rem; line-height: 1.4; color: var(--text);
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .issue-meta {
+    display: flex; gap: 0.5rem; margin-top: 0.3rem;
+    font-size: 0.72rem; color: var(--text-faint);
+  }
+  .issue-meta span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .issue-meta .dot { flex-shrink: 0; }
+
+  /* ------------------------------ detail ------------------------------ */
+
+  .detail { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+
+  .detail-empty {
+    flex: 1; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 0.5rem;
+    color: var(--text-faint); text-align: center; padding: 2rem;
+  }
+  .detail-empty-mark { font-size: 2rem; opacity: 0.35; }
+
+  .detail-body { flex: 1; display: none; flex-direction: column; min-height: 0; }
+  .detail-body.open { display: flex; }
+
+  .detail-head {
+    padding: 0.85rem 1.2rem 0;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .detail-title-row { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+  .detail-title-row h2 {
+    font-size: 1.02rem; font-family: var(--mono); letter-spacing: -0.02em;
+  }
+  .issueLink { color: inherit; text-decoration: none; }
+  .issueLink:hover { color: var(--accent-text); text-decoration: underline; }
+  .issueLink[href]::after { content: ' ↗'; font-size: 0.7rem; opacity: 0.5; }
+  #detailSummary {
+    font-size: 0.85rem; color: var(--text-muted);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    flex: 1; min-width: 120px;
+  }
+  .detail-head-actions { display: flex; gap: 0.4rem; margin-left: auto; }
+  #backBtn { display: none; }
+  #connState { font-size: 0.72rem; color: var(--text-faint); }
+  #connState.error { color: var(--red); }
+
+  .meta-chips {
+    display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.6rem;
+  }
+  .meta-chip {
+    font-size: 0.72rem; padding: 0.15rem 0.55rem; border-radius: 999px;
+    background: var(--surface-2); border: 1px solid var(--border); color: var(--text);
+  }
+  .meta-chip b { font-weight: 500; color: var(--text-faint); margin-right: 0.35rem; }
+
+  /* tabs */
+  .tabs { display: flex; gap: 0.15rem; margin-top: 0.7rem; overflow-x: auto; }
+  .tab {
+    cursor: pointer; font: inherit; font-size: 0.82rem; font-weight: 500;
+    padding: 0.45rem 0.7rem; border: 0; background: transparent;
+    color: var(--text-muted); border-bottom: 2px solid transparent;
+    display: flex; align-items: center; gap: 0.4rem; white-space: nowrap;
+    transition: color 0.12s, border-color 0.12s;
+  }
+  .tab:hover { color: var(--text); }
+  .tab.active { color: var(--accent-text); border-bottom-color: var(--accent); }
+  .tab[hidden] { display: none; }
+  .tab-count {
+    font-size: 0.68rem; padding: 0.02rem 0.35rem; border-radius: 999px;
+    background: var(--surface-3); color: var(--text-muted);
+    font-variant-numeric: tabular-nums; min-width: 1.1rem; text-align: center;
+  }
+  .tab.active .tab-count { background: var(--accent-soft); color: var(--accent-text); }
+  .tab-count.alert { background: var(--amber-soft); color: var(--amber); }
+
+  .detail-scroll { flex: 1; overflow-y: auto; padding: 1.1rem 1.2rem 3rem; }
+  .panel { display: none; }
+  .panel.active { display: block; }
+
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-lg); padding: 1rem 1.1rem;
+    margin-bottom: 1rem; box-shadow: var(--shadow-sm);
+  }
+  .card > h3 {
+    font-size: 0.88rem; margin-bottom: 0.15rem;
+    display: flex; align-items: center; gap: 0.45rem;
+  }
+  .card-hint {
+    margin: 0 0 0.85rem; font-size: 0.8rem; color: var(--text-muted); line-height: 1.5;
+  }
+  .card-hint:last-child { margin-bottom: 0; }
+  .card-actions { display: flex; gap: 0.5rem; margin-top: 0.9rem; flex-wrap: wrap; }
+
+  .section-empty {
+    color: var(--text-faint); font-size: 0.85rem;
+    padding: 1.5rem; text-align: center;
+    border: 1px dashed var(--border-strong); border-radius: var(--radius-lg);
+  }
+
+  #errorBox {
+    display: none; background: var(--red-soft);
+    border: 1px solid var(--red); border-left-width: 3px;
+    color: var(--red); padding: 0.7rem 0.9rem;
+    border-radius: var(--radius); margin-bottom: 1rem;
+    font-size: 0.84rem; white-space: pre-wrap; font-family: var(--mono);
+  }
+
+  /* description */
+  .issue-desc-card summary {
+    cursor: pointer; font-size: 0.85rem; font-weight: 500;
+    list-style: none; display: flex; align-items: center; gap: 0.4rem;
+  }
+  .issue-desc-card summary::-webkit-details-marker { display: none; }
+  .issue-desc-card summary::before {
+    content: '▸'; color: var(--text-faint); transition: transform 0.15s;
+  }
+  .issue-desc-card[open] summary::before { transform: rotate(90deg); }
+  #issueDesc {
+    white-space: pre-wrap; margin-top: 0.7rem; padding-top: 0.7rem;
+    border-top: 1px solid var(--border);
+    font-size: 0.86rem; line-height: 1.6; color: var(--text-muted);
+    max-height: 320px; overflow-y: auto;
+  }
+
+  /* steps / log */
+  #steps {
+    background: var(--surface-2); border: 1px solid var(--border);
+    padding: 0.8rem 0.9rem; border-radius: var(--radius);
+    max-height: 460px; overflow-y: auto;
+    font-family: var(--mono); font-size: 0.78rem; line-height: 1.7;
+    white-space: pre-wrap; color: var(--text-muted);
+  }
+
+  /* ---------------------------- markdown ------------------------------ */
+
+  #reviewMd, .histMd { font-size: 0.88rem; }
+  .mdH {
+    margin: 1.25rem 0 0.4rem; font-size: 0.9rem; line-height: 1.35;
+    display: flex; align-items: baseline; gap: 0.5rem; flex-wrap: wrap;
+  }
+  .mdH:first-child { margin-top: 0; }
+  .mdP { margin: 0.45rem 0; line-height: 1.65; }
+  .mdList { margin: 0.45rem 0; padding-left: 1.15rem; }
+  .mdList li { margin: 0.22rem 0; line-height: 1.6; }
+  .mdCode {
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); padding: 0.65rem 0.8rem;
+    overflow-x: auto; margin: 0.6rem 0;
+    font-family: var(--mono); font-size: 0.76rem; line-height: 1.6;
+  }
+  .mdCode code { white-space: pre; }
+  /* Diff fences inside a review get the same colour language as the diff
+     viewer, so a quoted hunk reads the same way in both places. */
+  .mdCode.lang-diff .dAdd { color: var(--green); display: block; }
+  .mdCode.lang-diff .dDel { color: var(--red); display: block; }
+  .mdInline {
+    background: var(--surface-3); border-radius: 4px; padding: 0.08rem 0.32rem;
+    font-family: var(--mono); font-size: 0.85em;
+  }
+  .sev {
+    font-size: 0.68rem; font-weight: 700; letter-spacing: 0.04em;
+    text-transform: uppercase; padding: 0.12rem 0.45rem; border-radius: 5px;
+  }
+  .sev-blocking { background: var(--red-soft); color: var(--red); }
+  .sev-major { background: var(--amber-soft); color: var(--amber); }
+  .sev-minor { background: var(--blue-soft); color: var(--blue); }
+  .sev-loc { font-family: var(--mono); font-size: 0.82rem; color: var(--text-muted); }
+
+  /* decision */
+  .decision { border-color: var(--border-strong); }
+  #outcomeHint {
+    margin: 0 0 0.7rem; font-size: 0.8rem; line-height: 1.55;
+    color: var(--text-muted);
+  }
+  #outcomeHint.live { color: var(--text); }
+
+  /* ------------------------ questions & disputes ---------------------- */
+
+  .qa-item {
+    padding: 0.75rem 0.85rem; border-radius: var(--radius);
+    background: var(--surface-2); border: 1px solid var(--border);
+    margin-bottom: 0.6rem;
+  }
+  .qa-item:last-child { margin-bottom: 0; }
+  .qa-label {
+    font-size: 0.85rem; margin-bottom: 0.45rem; line-height: 1.5;
+    display: flex; gap: 0.45rem; align-items: flex-start;
+  }
+  .qa-mark {
+    flex-shrink: 0; width: 17px; height: 17px; border-radius: 5px;
+    font-size: 0.68rem; font-weight: 700; margin-top: 0.12rem;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--amber-soft); color: var(--amber);
+  }
+  .qa-item.done .qa-mark { background: var(--green-soft); color: var(--green); }
+  .qa-item.done { border-color: var(--green); }
+  .qa-finding { flex: 1; min-width: 0; }
+  .qa-finding .mdH { margin: 0; font-size: 0.85rem; }
+  .findingBody {
+    margin: 0.1rem 0 0.6rem 1.6rem; padding-left: 0.7rem;
+    border-left: 2px solid var(--border-strong);
+    font-size: 0.83rem; color: var(--text-muted);
+  }
+  .findingBody .mdP { margin: 0.3rem 0; }
+  .findingBody .mdCode { margin: 0.4rem 0; font-size: 0.73rem; }
+  .findingBody strong { color: var(--text); }
+  @media (max-width: 560px) {
+    .findingBody { margin-left: 0; }
+  }
+
+  #withdrawnList, #appliedNotesList {
+    margin: 0; padding-left: 1.15rem; font-size: 0.85rem; line-height: 1.65;
+    color: var(--text-muted);
+  }
+  #withdrawnList li, #appliedNotesList li { margin: 0.25rem 0; }
+
+  /* ------------------------------ notes ------------------------------- */
+
+  #notesList { list-style: none; margin: 0 0 0.85rem; padding: 0; }
+  #notesList li {
+    display: flex; align-items: center; gap: 0.6rem;
+    padding: 0.5rem 0.65rem; border-radius: var(--radius-sm);
+    background: var(--surface-2); border: 1px solid var(--border);
+    margin-bottom: 0.35rem; font-size: 0.85rem;
+  }
+  #notesList li#notesEmpty {
+    background: transparent; border-style: dashed; color: var(--text-faint);
+    justify-content: center;
+  }
+  .noteScope {
+    font-size: 0.68rem; padding: 0.12rem 0.45rem; border-radius: 999px;
+    background: var(--accent-soft); color: var(--accent-text);
+    font-family: var(--mono); white-space: nowrap; flex-shrink: 0;
+  }
+  .noteText { flex: 1; line-height: 1.45; }
+  .delNoteBtn {
+    cursor: pointer; font: inherit; font-size: 0.75rem;
+    border: 0; background: transparent; color: var(--text-faint);
+    padding: 0.2rem 0.4rem; border-radius: 5px; flex-shrink: 0;
+  }
+  .delNoteBtn:hover { background: var(--red-soft); color: var(--red); }
+  .note-add { display: flex; gap: 0.5rem; }
+  .note-add .input { flex: 1; }
+  .note-add select { width: auto; flex-shrink: 0; }
+
+  /* ------------------------------- diff ------------------------------- */
+
+  .diff-file {
+    border: 1px solid var(--border); border-radius: var(--radius);
+    margin-bottom: 0.6rem; overflow: hidden; background: var(--surface);
+  }
+  .diff-file summary {
+    cursor: pointer; padding: 0.55rem 0.8rem; list-style: none;
+    font-family: var(--mono); font-size: 0.79rem;
+    background: var(--surface-2); border-bottom: 1px solid transparent;
+    display: flex; align-items: center; gap: 0.5rem;
+  }
+  .diff-file summary::-webkit-details-marker { display: none; }
+  .diff-file summary::before { content: '▸'; color: var(--text-faint); transition: transform 0.15s; }
+  .diff-file[open] summary::before { transform: rotate(90deg); }
+  .diff-file[open] summary { border-bottom-color: var(--border); }
+  .diff-file summary:hover { background: var(--surface-3); }
+  .diffScroll { overflow-x: auto; }
+  table.diffTable {
+    width: 100%; border-collapse: collapse; table-layout: fixed;
+    font-family: var(--mono); font-size: 0.83rem; line-height: 1.7;
+  }
+  table.diffTable td {
+    padding: 0.05rem 0.6rem; vertical-align: top; border: 0;
+    white-space: pre-wrap; word-break: break-word;
+  }
+  /* `table-layout: fixed` takes its column widths from the first row, and
+     the first row of a diff is the hunk header — one cell with colspan=4,
+     which names no per-column width. The browser then splits the table into
+     four equal columns, so the line-number gutters eat a quarter of the
+     width each and the code gets half of what it should. A colgroup states
+     the widths outright, before any row is consulted. */
+  .diffTable col.cNo { width: 3.4rem; }
+  .diffTable col.cMark { width: 1.4rem; }
+  td.lineNo {
+    text-align: right; user-select: none;
+    color: var(--text-faint); background: var(--surface-2);
+    border-right: 1px solid var(--border);
+  }
+
+
+  /* Sticky: the controls that change how a diff reads are useless at the
+     top of a 900-line one. They stay put while you scroll through it. */
+  .diff-toolbar {
+    display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.7rem;
+    position: sticky; top: 0; z-index: 5;
+    background: var(--bg); padding: 0.5rem 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .diff-toolbar .repoHeading { margin: 0; }
+  .diff-toolbar .spacer { margin-left: auto; }
+  .seg {
+    display: inline-flex; border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm); overflow: hidden;
+  }
+  .seg button {
+    cursor: pointer; font: inherit; font-size: 0.78rem; font-weight: 500;
+    padding: 0.32rem 0.65rem; border: 0; background: var(--surface);
+    color: var(--text-muted); white-space: nowrap;
+  }
+  .seg button + button { border-left: 1px solid var(--border); }
+  .seg button:hover { background: var(--surface-2); color: var(--text); }
+  .seg button.on { background: var(--accent); color: #fff; }
+
+  /* An empty cell opposite an insertion is not content — striping it says
+     "nothing here" instead of leaving a void the eye reads as a gap. */
+  td.empty {
+    background: repeating-linear-gradient(
+      45deg, transparent, transparent 5px,
+      var(--surface-2) 5px, var(--surface-2) 10px
+    );
+    opacity: 0.55;
+  }
+
+  /* Unified: one column, so a long line uses the full width instead of
+     wrapping inside a half-width pane. */
+  td.mark {
+    text-align: center; user-select: none;
+    color: var(--text-faint); background: var(--surface-2);
+  }
+  tr.del td.mark, tr.del td.uni { background: var(--diff-del); }
+  tr.add td.mark, tr.add td.uni { background: var(--diff-add); }
+  tr.del td.mark { color: var(--red); }
+  tr.add td.mark { color: var(--green); }
+  td.newNo { border-left: 1px solid var(--border); }
+  tr.del td.oldSide { background: var(--diff-del); }
+  tr.add td.newSide { background: var(--diff-add); }
+  tr.hunk td {
+    background: var(--accent-soft); color: var(--accent-text);
+    font-size: 0.7rem; padding: 0.25rem 0.5rem;
+  }
+  td.empty { background: var(--surface-2); opacity: 0.5; }
+  .repoHeading {
+    margin: 1.1rem 0 0.5rem; font-size: 0.83rem;
+    display: flex; align-items: baseline; gap: 0.5rem; flex-wrap: wrap;
+  }
+  .repoHeading:first-child { margin-top: 0; }
+  .repoBranch { font-weight: 400; color: var(--text-faint); font-size: 0.75rem; font-family: var(--mono); }
+
+  /* ------------------------------ history ----------------------------- */
+
+  #historyList details {
+    border: 1px solid var(--border); border-radius: var(--radius);
+    margin-bottom: 0.6rem; overflow: hidden; background: var(--surface);
+  }
+  #historyList summary {
+    cursor: pointer; padding: 0.55rem 0.8rem; list-style: none;
+    font-size: 0.8rem; background: var(--surface-2);
+    display: flex; align-items: center; gap: 0.6rem;
+  }
+  #historyList summary::-webkit-details-marker { display: none; }
+  #historyList summary time { font-family: var(--mono); color: var(--text-muted); }
+  .histMd { padding: 0.85rem 1rem; border-top: 1px solid var(--border); }
+
+  /* ------------------------------ modal ------------------------------- */
+
+  .modal-backdrop {
+    position: fixed; inset: 0; background: rgba(10, 10, 16, 0.55);
+    backdrop-filter: blur(3px);
+    display: none; align-items: center; justify-content: center; z-index: 50;
+    padding: 1.5rem;
+  }
+  .modal-backdrop.open { display: flex; }
+  .modal {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-lg); box-shadow: var(--shadow-lg);
+    width: min(620px, 100%); max-height: min(760px, 90vh);
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  .modal-head {
+    padding: 0.95rem 1.1rem; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 0.6rem; flex-shrink: 0;
+  }
+  .modal-head h3 { font-size: 0.92rem; }
+  .modal-body { padding: 1.1rem; overflow-y: auto; flex: 1; }
+  .modal-foot {
+    padding: 0.8rem 1.1rem; border-top: 1px solid var(--border);
+    display: flex; gap: 0.5rem; justify-content: flex-end; flex-shrink: 0;
+    background: var(--surface-2);
+  }
+  .modal-body h4 {
+    font-size: 0.8rem; color: var(--text-muted); text-transform: uppercase;
+    letter-spacing: 0.05em; margin-bottom: 0.5rem;
+  }
+  .modal-body h4:not(:first-child) { margin-top: 1.3rem; }
+  .field { display: block; margin-bottom: 0.55rem; }
+  .field.checkbox { display: flex; align-items: center; gap: 0.5rem; }
+  .field.checkbox > span { margin: 0; color: var(--text); font-size: 0.85rem; }
+  .field.checkbox input { accent-color: var(--accent); }
+  .field > span {
+    display: block; font-size: 0.78rem; color: var(--text-muted); margin-bottom: 0.2rem;
+  }
+  .memberRow {
+    display: flex; align-items: center; gap: 0.6rem; padding: 0.45rem 0.6rem;
+    border: 1px solid var(--border); border-radius: var(--radius-sm);
+    margin-bottom: 0.35rem; font-size: 0.85rem;
+  }
+  .memberRow .role {
+    font-size: 0.68rem; padding: 0.05rem 0.4rem; border-radius: 999px;
+    background: var(--accent-soft); color: var(--accent-text);
+  }
+  .memberRow .spacer { margin-left: auto; }
+  .memberRow.pickable { cursor: pointer; }
+  .memberRow.pickable:hover { background: var(--surface-2); }
+  .memberRow.picked { border-color: var(--accent); background: var(--accent-soft); }
+  .repoRow {
+    font-family: var(--mono); font-size: 0.78rem; padding: 0.35rem 0.6rem;
+    background: var(--surface-2); border-radius: var(--radius-sm);
+    margin-bottom: 0.3rem; word-break: break-all;
+  }
+  #projectList {
+    max-height: 300px; overflow-y: auto; margin-top: 0.5rem;
+    border: 1px solid var(--border); border-radius: var(--radius); padding: 0.35rem;
+  }
+  #projectList label {
+    display: flex; align-items: center; gap: 0.55rem;
+    padding: 0.3rem 0.45rem; font-size: 0.8rem; border-radius: var(--radius-sm);
+    font-family: var(--mono); cursor: pointer;
+  }
+  #projectList label:hover { background: var(--surface-2); }
+  #projectList input { accent-color: var(--accent); cursor: pointer; }
+  #projectList span:first-of-type { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+  .clonedTag {
+    font-size: 0.66rem; padding: 0.05rem 0.4rem; border-radius: 999px;
+    background: var(--green-soft); color: var(--green); white-space: nowrap;
+    font-family: var(--sans);
+  }
+  .muted { color: var(--text-faint); font-size: 0.83rem; }
+
+  /* --------------------------- responsive ----------------------------- */
+
+  /* Touch and motion preferences are not screen widths — they are their
+     own axis, and a large tablet needs the bigger hit targets just as much
+     as a phone does. */
+  @media (hover: none) and (pointer: coarse) {
+    .btn, .tab, .viewTab, .seg button { min-height: 40px; }
+    .issue-card { padding: 0.75rem 0.7rem; }
+    .delNoteBtn { padding: 0.5rem 0.6rem; }
+    #projectList label { padding: 0.5rem 0.45rem; }
+    .diff-file summary, #historyList summary { padding: 0.7rem 0.8rem; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .badge::before { animation: none; }
+    * { transition: none !important; }
+  }
+
+  /* Notched phones: the topbar and the bottom of the scroll area would
+     otherwise sit under the system UI. */
+  @supports (padding: env(safe-area-inset-left)) {
+    .topbar { padding-left: max(1.1rem, env(safe-area-inset-left)); padding-right: max(1.1rem, env(safe-area-inset-right)); }
+    .detail-scroll, .decisionsView { padding-bottom: calc(3rem + env(safe-area-inset-bottom)); }
+  }
+
+  /* ---- laptop: the sidebar gives up width before the code does ---- */
+  @media (max-width: 1180px) {
+    .sidebar { width: 290px; }
+  }
+  @media (max-width: 1040px) {
+    .sidebar { width: 250px; }
+    .brand-sub { display: none; }
+    .detail-scroll { padding: 1rem 0.9rem 3rem; }
+    .detail-head { padding: 0.8rem 0.9rem 0; }
+    .decisionsView { padding: 1.1rem 0.9rem 3rem; }
+  }
+
+  /* ---- tablet: one pane at a time ----
+     Below this width a list *and* a detail cannot both be readable, so the
+     app stops trying: the list is the screen until you pick something, and
+     the detail is the screen after that. A back control returns you. */
+  @media (max-width: 820px) {
+    .app { height: 100dvh; }
+    .layout { flex-direction: column; }
+    .sidebar {
+      width: 100%; max-height: none; flex: 1;
+      border-right: 0; border-bottom: 1px solid var(--border);
+    }
+    .detail { display: none; }
+    .app.has-selection .sidebar { display: none; }
+    .app.has-selection .detail { display: flex; }
+    #backBtn { display: inline-flex; }
+
+    .topbar { padding: 0.6rem 0.8rem; gap: 0.5rem; flex-wrap: wrap; }
+    .brand h1 { font-size: 0.9rem; }
+    .viewTabs { margin-left: auto; order: 3; width: 100%; }
+    .viewTab { flex: 1; justify-content: center; }
+    .topbar-right { gap: 0.35rem; }
+
+    .detail-title-row { gap: 0.45rem; }
+    #detailSummary { order: 10; width: 100%; white-space: normal; flex-basis: 100%; }
+    .detail-head-actions { width: 100%; margin-left: 0; order: 20; }
+    .detail-head-actions .btn { flex: 1; justify-content: center; }
+
+    /* Side-by-side has nothing to give here: half of a phone-width column
+       is a few words per line. Unified is forced, not merely preferred. */
+    .seg { display: none; }
+    .decisions-head { flex-direction: column; align-items: stretch; }
+    #decisionsRefresh { margin-left: 0 !important; }
+    .note-add { flex-wrap: wrap; }
+    .note-add .input { flex: 1 1 100%; }
+    .note-add select, .note-add .btn { flex: 1; }
+
+    .modal-backdrop { padding: 0; align-items: stretch; }
+    .modal { width: 100%; max-height: 100dvh; border-radius: 0; border: 0; }
+
+    /* A six-column table cannot shrink; it becomes one card per row, each
+       cell labelled by the header it lost. */
+    table.decisions, table.decisions tbody, table.decisions tr, table.decisions td { display: block; width: 100%; }
+    table.decisions thead { display: none; }
+    table.decisions tr {
+      border: 1px solid var(--border); border-radius: var(--radius);
+      margin-bottom: 0.7rem; padding: 0.5rem 0.2rem; background: var(--surface);
+    }
+    table.decisions td { border: 0; padding: 0.3rem 0.7rem; }
+    table.decisions td::before {
+      content: attr(data-label); display: block;
+      font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.05em;
+      color: var(--text-faint); margin-bottom: 0.1rem;
+    }
+    table.decisions td:first-child::before { content: none; }
+  }
+
+  /* ---- phone ---- */
+  @media (max-width: 560px) {
+    body { font-size: 13px; }
+    .brand-mark { width: 26px; height: 26px; font-size: 0.65rem; }
+    #modeChip { display: none; }
+    .tabs { gap: 0; }
+    .tab { padding: 0.45rem 0.5rem; font-size: 0.78rem; }
+    .card { padding: 0.85rem 0.8rem; border-radius: var(--radius); }
+    .detail-scroll { padding: 0.8rem 0.7rem 3rem; }
+    .detail-head { padding: 0.7rem 0.7rem 0; }
+    .decisionsView { padding: 0.9rem 0.7rem 3rem; }
+    table.diffTable { font-size: 0.76rem; }
+    .diffTable col.cNo { width: 2.6rem; }
+    td.lineNo { padding: 0 0.3rem; }
+    .diff-file summary { font-size: 0.74rem; word-break: break-all; }
+    #steps { font-size: 0.73rem; }
+    .detail-title-row h2 { font-size: 0.95rem; }
+    /* 16px keeps iOS from zooming the viewport when a field is focused. */
+    .input, textarea, select { font-size: 16px; }
+  }
+
+  /* Short viewports (landscape phones): give the content the height back. */
+  @media (max-height: 520px) {
+    .topbar { padding-top: 0.4rem; padding-bottom: 0.4rem; }
+    .brand-sub { display: none; }
+    #steps { max-height: 200px; }
+    #issueDesc { max-height: 140px; }
+  }
+</style>
+</head>
+<body>
+<!-- Shown before anything else until the app knows who you are. -->
+<div id="gate">
+  <div class="gate-card">
+    <div class="gate-brand">
+      <span class="brand-mark">Rv</span>
+      <div>
+        <h1>Revify</h1>
+        <p class="brand-sub">jira → gitlab → ai review</p>
+      </div>
+    </div>
+
+    <div id="gateAuth">
+      <div class="seg" style="width:100%;margin-bottom:0.9rem">
+        <button id="gateTabLogin" class="on" style="flex:1">Giriş yap</button>
+        <button id="gateTabRegister" style="flex:1">Kaydol</button>
+      </div>
+      <label class="field" id="gateNameField" hidden><span>İsim</span>
+        <input id="gateName" class="input" autocomplete="name" /></label>
+      <label class="field"><span>E-posta</span>
+        <input id="gateEmail" class="input" type="email" autocomplete="username" /></label>
+      <label class="field"><span>Parola</span>
+        <input id="gatePassword" class="input" type="password" autocomplete="current-password" /></label>
+      <p class="card-hint" id="gatePasswordHint" hidden>En az 10, en fazla 72 karakter.</p>
+      <div class="card-actions">
+        <button id="gateSubmit" class="btn btn-primary" style="flex:1">Giriş yap</button>
+      </div>
+    </div>
+
+    <div id="gateError" class="card-hint" style="color:var(--red)"></div>
+    <p class="card-hint" id="gateServerLabel"></p>
+  </div>
+</div>
+
+<div class="app" hidden>
+  <div id="offlineBanner" class="offlineBanner" hidden></div>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">Rv</span>
+      <div>
+        <h1>Revify</h1>
+        <p class="brand-sub">jira → gitlab → ai review</p>
+      </div>
+    </div>
+    <nav class="viewTabs">
+      <button class="viewTab on" data-view="reviews">İncelemeler</button>
+      <button class="viewTab" data-view="pending">Onay bekleyenler<span class="tab-count" id="pendingCount" hidden></span></button>
+      <button class="viewTab" data-view="assigned" id="assignedTab" hidden>Bana atananlar<span class="tab-count" id="assignedCount" hidden></span></button>
+      <button class="viewTab" data-view="decisions">Kararlar<span class="tab-count" id="decisionCount" hidden></span></button>
+    </nav>
+    <div class="topbar-right">
+      <span id="autoChip" class="chip" hidden></span>
+      <span id="modeChip" class="chip"></span>
+      <button id="teamChip" class="btn btn-ghost" hidden></button>
+      <button id="settingsBtn" class="btn btn-ghost btn-icon" title="Ayarlar">⚙</button>
+      <button id="backupBtn" class="btn btn-ghost btn-icon" title="Yedek al / geri yükle">⤓</button>
+      <button id="themeBtn" class="btn btn-ghost btn-icon" title="Açık / koyu tema">◐</button>
+      <button id="refresh" class="btn">↻ Yenile</button>
+    </div>
+  </header>
+
+  <main class="layout" id="reviewsView">
+    <aside class="sidebar">
+      <div class="sidebar-head">
+        <input id="issueFilter" class="input" type="text" placeholder="Issue veya özet ara…" />
+        <span id="issueCount" class="sidebar-count"></span>
+      </div>
+      <div id="rows" class="issue-list"></div>
+      <div id="empty" class="detail-empty" style="display:none"></div>
+    </aside>
+
+    <section class="detail">
+      <div id="detailEmpty" class="detail-empty">
+        <div class="detail-empty-mark">⌘</div>
+        <div>Soldan bir issue seç.</div>
+        <div class="muted">Hiçbir şey kendiliğinden başlamaz — incelemeyi sen tetiklersin.</div>
+      </div>
+
+      <div id="detail" class="detail-body">
+        <div class="detail-head">
+          <div class="detail-title-row">
+            <button id="backBtn" class="btn btn-ghost btn-icon" title="Listeye dön">←</button>
+            <h2><a id="detailTitle" class="issueLink" target="_blank" rel="noopener"></a></h2>
+            <span id="detailBadge"></span>
+            <span id="detailSummary"></span>
+            <span id="reviewStamp" class="muted" style="font-size:0.75rem"></span>
+            <span id="connState"></span>
+            <div class="detail-head-actions">
+              <button id="reviewBtn" class="btn btn-primary">İncele</button>
+              <button id="assignBtn" class="btn" style="display:none" title="Bu işi bir takım arkadaşına devret">Ata…</button>
+              <button id="stopBtn" class="btn btn-reject" style="display:none">Durdur</button>
+              <button id="toggleContextBtn" class="btn">Bağlam…</button>
+              <button id="clearBtn" class="btn btn-ghost" title="Bu görevin review durumunu sıfırla">Temizle</button>
+            </div>
+          </div>
+
+          <div id="issueMeta" class="meta-chips"></div>
+
+          <nav class="tabs" id="tabs">
+            <button class="tab active" data-tab="review">Review<span class="tab-count" data-count="review" hidden></span></button>
+            <button class="tab" data-tab="steps">Adımlar</button>
+            <button class="tab" data-tab="diff">Değişiklik<span class="tab-count" data-count="diff" hidden></span></button>
+            <button class="tab" data-tab="verify">Doğrulama<span class="tab-count" data-count="verify" hidden></span></button>
+            <button class="tab" data-tab="notes">Notlar<span class="tab-count" data-count="notes" hidden></span></button>
+            <button class="tab" data-tab="history">Geçmiş<span class="tab-count" data-count="history" hidden></span></button>
+          </nav>
+        </div>
+
+        <div class="detail-scroll">
+          <div id="errorBox"></div>
+
+          <!-- ---------------------------- Review --------------------------- -->
+          <div class="panel active" data-panel="review">
+            <details class="card issue-desc-card" id="descCard">
+              <summary>Jira açıklaması</summary>
+              <div id="issueDesc"></div>
+            </details>
+
+            <div id="reviewBlock" class="card" style="display:none">
+              <h3>AI Review</h3>
+              <div id="reviewMd"></div>
+            </div>
+
+            <div id="decisionBlock" class="card decision" style="display:none">
+              <h3>Karar</h3>
+              <p id="outcomeHint"></p>
+              <textarea id="rejectReason" placeholder="Red gerekçesi (opsiyonel — yazarsan review'in üstünde Jira yorumuna eklenir)"></textarea>
+              <div class="card-actions">
+                <button id="approveBtn" class="btn btn-approve">Onayla</button>
+                <button id="rejectBtn" class="btn btn-reject">Reddet</button>
+              </div>
+            </div>
+
+            <div id="outcomeBlock" class="card" style="display:none">
+              <h3 id="outcomeTitle"></h3>
+              <p id="outcomeSummary" class="card-hint"></p>
+              <div id="outcomeReason"></div>
+            </div>
+
+            <div id="reviewEmpty" class="section-empty">
+              Bu görev için henüz review yok. Yukarıdan <b>İncele</b> ile başlat.
+            </div>
+          </div>
+
+          <!-- ---------------------------- Steps ---------------------------- -->
+          <div class="panel" data-panel="steps">
+            <div class="card">
+              <h3>Çalışma adımları</h3>
+              <p class="card-hint">Review sürecinin canlı kaydı — hangi repo klonlandı, hangi diff alındı, model ne zaman çağrıldı.</p>
+              <div id="steps"></div>
+            </div>
+          </div>
+
+          <!-- ----------------------------- Diff ---------------------------- -->
+          <div class="panel" data-panel="diff">
+            <div id="diffBlock" style="display:none">
+              <div class="diff-toolbar">
+                <h3 id="diffTitle" class="repoHeading"></h3>
+                <span class="spacer"></span>
+                <span class="seg">
+                  <button id="splitBtn" title="Eski ve yeni yan yana">Yan yana</button>
+                  <button id="unifiedBtn" title="Tek sütun — uzun satırlar sarmadan sığar">Tek sütun</button>
+                </span>
+              </div>
+              <div id="diffFiles"></div>
+            </div>
+            <div id="diffEmpty" class="section-empty">Gösterilecek değişiklik yok.</div>
+          </div>
+
+          <!-- ---------------------------- Verify --------------------------- -->
+          <div class="panel" data-panel="verify">
+            <div class="card">
+              <h3>Review'i düzelt</h3>
+              <p class="card-hint">
+                Review'in tamamı için serbest talimat — "şu bulguyu çıkar", "QA notlarını
+                genişlet", "X'teki çağıranı atlamışsın". Kod hakkında bir iddia yazarsan
+                <b>önce kontrol eder</b>, kod seni doğrulamazsa bulgusunu gerekçesiyle korur.
+                Sildiğin an geçerliliği biter; silmezsen sonraki tüm incelemelerde uygulanır.
+              </p>
+              <textarea id="revisionText" rows="4"
+                placeholder="ör. 2. bulgu geçersiz, o alan controller'da zaten valide ediliyor — kontrol et. Ayrıca QA notlarına ödeme ekranını da ekle."></textarea>
+              <div class="card-actions">
+                <button id="saveRevisionBtn" class="btn">Kaydet</button>
+                <button id="revisionRerunBtn" class="btn btn-primary">Kaydet ve yeniden incele</button>
+                <button id="clearRevisionBtn" class="btn btn-ghost">Talimatı sil</button>
+              </div>
+            </div>
+
+            <div id="clarifyBlock" class="card" style="display:none">
+              <h3>Doğrulanamayanlar</h3>
+              <p class="card-hint">
+                Review'in kendi başına doğrulayamadığı noktalar. Cevapladığında bir sonraki
+                incelemede kesin bilgi olarak kullanılır — soru tekrar sorulmaz.
+              </p>
+              <div id="clarifyList"></div>
+              <div class="card-actions">
+                <button id="saveClarifyBtn" class="btn">Cevapları kaydet</button>
+                <button id="saveAndRerunBtn" class="btn btn-primary">Kaydet ve yeniden incele</button>
+              </div>
+            </div>
+
+            <div id="challengeBlock" class="card" style="display:none">
+              <h3>Bulgulara itiraz</h3>
+              <p class="card-hint">
+                Bir bulgunun yanlış olduğunu düşünüyorsan nedenini yaz. Bir sonraki inceleme
+                bunu <b>doğru kabul etmez</b> — ilgili kodu tekrar okuyup ya bulguyu geri çeker
+                ya da kanıtıyla savunur.
+              </p>
+              <div id="challengeList"></div>
+              <div class="card-actions">
+                <button id="saveChallengeBtn" class="btn">İtirazları kaydet</button>
+                <button id="challengeRerunBtn" class="btn btn-primary">Kaydet ve tekrar doğrulat</button>
+              </div>
+            </div>
+
+            <div id="withdrawnBlock" class="card" style="display:none">
+              <h3>Geri çekilen bulgular</h3>
+              <p class="card-hint">İtirazın üzerine kodu kontrol edip vazgeçtikleri. Jira'ya gitmez.</p>
+              <ul id="withdrawnList"></ul>
+            </div>
+
+          </div>
+
+          <!-- ---------------------------- Notes ---------------------------- -->
+          <div class="panel" data-panel="notes">
+            <div id="appliedNotesBlock" class="card" style="display:none">
+              <h3>Uygulanan notlar</h3>
+              <p class="card-hint">
+                Review'in hangi notları uygulayıp neyi yazmadığı. Yalnızca bizim için —
+                Jira yorumuna dahil edilmez.
+              </p>
+              <ul id="appliedNotesList"></ul>
+            </div>
+
+            <div id="notesBlock" class="card">
+              <h3>Review notları</h3>
+              <p class="card-hint">
+                "Bunu bu projede dikkate alma" gibi kalıcı kurallar. Sonraki review'lerde
+                uygulanır ve review sonunda hangi notların uygulandığı açıkça yazılır.
+              </p>
+              <ul id="notesList"></ul>
+              <div class="note-add">
+                <input id="noteText" class="input" type="text" placeholder="ör. Bu projede test eksikliğini bulgu olarak yazma" />
+                <select id="noteScope"></select>
+                <button id="addNoteBtn" class="btn">Ekle</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- --------------------------- History --------------------------- -->
+          <div class="panel" data-panel="history">
+            <div id="historyBlock" style="display:none">
+              <div id="historyList"></div>
+            </div>
+            <div id="historyEmpty" class="section-empty">Bu görev için önceki inceleme yok.</div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <section class="decisionsView" id="pendingView" hidden>
+    <div class="decisions-head">
+      <div>
+        <h2>Onay bekleyenler</h2>
+        <p class="card-hint" style="margin:0">
+          İncelemesi bitmiş, kararını bekleyen işler — en uzun bekleyen en üstte.
+          Satıra tıklayınca review'ı açar.
+        </p>
+      </div>
+      <button id="pendingRefresh" class="btn" style="margin-left:auto">↻ Yenile</button>
+    </div>
+    <div id="pendingBody"></div>
+  </section>
+
+  <section class="decisionsView" id="assignedView" hidden>
+    <div class="decisions-head">
+      <div>
+        <h2>Bana atananlar</h2>
+        <p class="card-hint" style="margin:0">
+          Takım arkadaşlarının sana devrettiği işler. Review <b>senin makinende</b>
+          çalışır — burada yalnızca kimin neyi kime verdiği tutulur.
+        </p>
+      </div>
+      <button id="assignedRefresh" class="btn" style="margin-left:auto">↻ Yenile</button>
+    </div>
+    <div id="assignedBody"></div>
+  </section>
+
+  <section class="decisionsView" id="decisionsView">
+    <div class="decisions-head">
+      <div>
+        <h2>Kararlar</h2>
+        <p class="card-hint" style="margin:0">
+          Onayladığın ve reddettiğin işler, <b>Jira'daki güncel durumlarıyla</b> birlikte —
+          karar verildiği andaki hâliyle değil. Akıbetini buradan takip edebilirsin.
+        </p>
+      </div>
+      <button id="decisionsRefresh" class="btn" style="margin-left:auto">↻ Yenile</button>
+    </div>
+    <div id="decisionsBody"></div>
+  </section>
+</div>
+
+<div class="modal-backdrop" id="settingsModal">
+  <div class="modal">
+    <div class="modal-head">
+      <h3>Ayarlar</h3>
+      <button id="settingsClose" class="btn btn-ghost btn-icon" style="margin-left:auto" title="Kapat">✕</button>
+    </div>
+    <div class="modal-body">
+      <p class="card-hint" id="settingsPathHint"></p>
+
+      <h4>Jira</h4>
+      <label class="field"><span>Adres</span><input id="setJiraBaseUrl" class="input" placeholder="https://sirket.atlassian.net" /></label>
+      <label class="field"><span>E-posta</span><input id="setJiraEmail" class="input" placeholder="siz@sirket.com" /></label>
+      <label class="field"><span>API token</span><input id="setJiraApiToken" class="input" type="password" placeholder="değiştirmek için yaz" /></label>
+
+      <h4>GitLab</h4>
+      <label class="field"><span>Adres</span><input id="setGitlabBaseUrl" class="input" placeholder="https://gitlab.sirket.com" /></label>
+      <label class="field"><span>Token</span><input id="setGitlabToken" class="input" type="password" placeholder="değiştirmek için yaz" /></label>
+
+      <h4>Model</h4>
+      <label class="field"><span>Model</span><input id="setAnthropicModel" class="input" placeholder="claude-opus-5" /></label>
+      <label class="field"><span>API anahtarı</span><input id="setAnthropicApiKey" class="input" type="password" placeholder="opsiyonel — boşsa claude CLI oturumu kullanılır" /></label>
+
+      <h4>Bu makine</h4>
+      <p class="card-hint">
+        Kişisel ve operasyonel ayarlar. <b>Jira'ya yaz</b> bilerek takım geneli değil —
+        güvenlik kilidi, ve başkasının açabildiği bir kilit kilit değildir.
+      </p>
+      <label class="field checkbox"><input id="setApplyChanges" type="checkbox" />
+        <span>Jira'ya gerçekten yaz (kapalıysa yalnızca loglanır)</span></label>
+      <label class="field checkbox"><input id="setAutoPrepareEnabled" type="checkbox" />
+        <span>Yeni gelen işleri ben istemeden incele</span></label>
+      <label class="field checkbox"><input id="setUseRepoCheckout" type="checkbox" />
+        <span>Repoyu klonla (model çevre kodu okuyabilsin)</span></label>
+      <label class="field"><span>Otomatik hazırlık aralığı (sn)</span><input id="setAutoPreparePollMs" class="input" type="number" min="10" /></label>
+      <label class="field"><span>Repo cache dizini</span><input id="setRepoCacheDir" class="input" placeholder="~/.revify/repos" /></label>
+
+      <h4>Takım politikası</h4>
+      <p class="card-hint" id="teamPolicyHint">
+        Aynı Jira'ya yazdığınız için bunlar herkeste aynı olmalı; sunucuda tutulur.
+      </p>
+      <label class="field"><span>JQL</span><input id="setTeamJql" class="input" placeholder='project = "PROJ" AND status = "Code Review"' /></label>
+      <label class="field"><span>Onaylanınca durum</span><input id="setTeamApproveStatus" class="input" placeholder="Ready for Stage" /></label>
+      <label class="field"><span>Reddedilince durum</span><input id="setTeamRejectStatus" class="input" placeholder="In Development" /></label>
+      <label class="field"><span>Review dili</span><input id="setTeamLanguage" class="input" placeholder="Turkish" /></label>
+      <div id="teamPolicyState" class="card-hint"></div>
+
+      <h4>Sunucu</h4>
+      <p class="card-hint" id="settingsBackendHint"></p>
+      <div id="settingsResult" class="card-hint"></div>
+    </div>
+    <div class="modal-foot">
+      <button id="settingsCancel" class="btn">Kapat</button>
+      <button id="settingsSave" class="btn btn-primary">Kaydet</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="authModal">
+  <div class="modal" style="width:min(420px,100%)">
+    <div class="modal-head">
+      <h3 id="authTitle">Giriş</h3>
+      <button id="authClose" class="btn btn-ghost btn-icon" style="margin-left:auto" title="Kapat">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="seg" id="authTabs" style="width:100%;margin-bottom:0.9rem">
+        <button id="authTabLogin" class="on" style="flex:1">Giriş yap</button>
+        <button id="authTabRegister" style="flex:1">Kaydol</button>
+      </div>
+
+      <label class="field" id="authNameField" hidden>
+        <span>İsim</span>
+        <input id="authName" class="input" autocomplete="name" placeholder="Takımda böyle görüneceksin" />
+      </label>
+      <label class="field">
+        <span>E-posta</span>
+        <input id="authEmail" class="input" type="email" autocomplete="username" />
+      </label>
+      <label class="field">
+        <span>Parola</span>
+        <input id="authPassword" class="input" type="password" autocomplete="current-password" />
+      </label>
+      <p class="card-hint" id="authPasswordHint" hidden>En az 10, en fazla 72 karakter.</p>
+
+      <div id="authError" class="card-hint" style="color:var(--red)"></div>
+      <p class="card-hint" id="authServerHint"></p>
+    </div>
+    <div class="modal-foot">
+      <button id="authCancel" class="btn">Vazgeç</button>
+      <button id="authSubmit" class="btn btn-primary">Giriş yap</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="assignModal">
+  <div class="modal">
+    <div class="modal-head">
+      <h3>Ata</h3>
+      <button id="assignClose" class="btn btn-ghost btn-icon" style="margin-left:auto" title="Kapat">✕</button>
+    </div>
+    <div class="modal-body">
+      <p class="card-hint" id="assignSubject"></p>
+      <h4>Kime</h4>
+      <div id="assignPeople"></div>
+      <h4>Not</h4>
+      <textarea id="assignNote" rows="3" placeholder="Neye dikkat etmeli? (opsiyonel)"></textarea>
+      <div id="assignResult" class="card-hint"></div>
+    </div>
+    <div class="modal-foot">
+      <button id="assignCancel" class="btn">Vazgeç</button>
+      <button id="assignConfirm" class="btn btn-primary" disabled>Ata</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="teamModal">
+  <div class="modal">
+    <div class="modal-head">
+      <h3>Takım</h3>
+      <button id="teamClose" class="btn btn-ghost btn-icon" style="margin-left:auto" title="Kapat">✕</button>
+    </div>
+    <div class="modal-body" id="teamBody"></div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="backupModal">
+  <div class="modal">
+    <div class="modal-head">
+      <h3>Yedek</h3>
+      <button id="backupClose" class="btn btn-ghost btn-icon" style="margin-left:auto" title="Kapat">✕</button>
+    </div>
+    <div class="modal-body">
+      <h4>Dışa aktar</h4>
+      <p class="card-hint">
+        Review'lar, geçmiş, cevaplar, itirazlar, notlar ve kuyruk durumu tek dosyada.
+        <b>Kimlik bilgileri (.env) dahil değildir.</b> Dosya iç Jira metinlerini ve
+        diff'leri birebir taşır — issue'ların kendisi gibi saklayın.
+      </p>
+      <button id="exportBtn" class="btn">⤓ Yedeği indir</button>
+
+      <h4>İçe aktar</h4>
+      <p class="card-hint">
+        Buradaki tüm veriyi <b>siler ve dosyadakiyle değiştirir</b>. Öncesinde mevcut
+        veri <code class="mdInline">.before-import-…</code> uzantısıyla yedeklenir.
+        Çalışan review varsa reddedilir. <code class="mdInline">config.yaml</code>
+        yazılmaz — Jira'ya yazma anahtarını dosya seçiciyle değiştirmek doğru olmaz.
+      </p>
+      <input id="importFile" class="input" type="file" accept="application/json,.json" />
+      <div id="importResult" class="card-hint" style="margin-top:0.6rem"></div>
+    </div>
+    <div class="modal-foot">
+      <button id="backupCancel" class="btn">Kapat</button>
+      <button id="importBtn" class="btn btn-reject">Seçilen dosyayı yükle</button>
+    </div>
+  </div>
+</div>
+
+<!-- Context picker. A modal rather than an inline block: it lists every repo
+     the token can read, which is far too tall to expand in place. -->
+<div class="modal-backdrop" id="prepareBlock">
+  <div class="modal">
+    <div class="modal-head">
+      <h3>Bağlam projeleri</h3>
+      <button id="cancelPrepareBtn" class="btn btn-ghost btn-icon" style="margin-left:auto" title="Kapat">✕</button>
+    </div>
+    <div class="modal-body">
+      <h4>Değişiklik yapılan repolar</h4>
+      <div id="prepareChanged"></div>
+
+      <h4>Klonlanacak projeler</h4>
+      <p class="card-hint">
+        Seçtiklerin klonlanır. Bir kez klonlanan proje diskte kalır ve sonraki
+        tüm review'lerde ana branch'inden okunabilir — tekrar seçmen gerekmez.
+      </p>
+      <input id="projectFilter" class="input" type="text" placeholder="Proje ara…" />
+      <div id="projectList"></div>
+    </div>
+    <div class="modal-foot">
+      <button id="cancelPrepareBtn2" class="btn">Vazgeç</button>
+      <button id="runReviewBtn" class="btn btn-primary">Review'i başlat</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  let currentIssue = null;
+  let currentProjectPath = null;
+  let pollTimer = null;
+  let allItems = [];
+  let lastWaitingCount = -1;
+
+  /**
+   * Last-rendered signature per section. Re-rendering identical HTML would
+   * collapse any <details> the user opened and wipe their text selection,
+   * so each section only touches the DOM when its data actually changed.
+   */
+  const rendered = {};
+
+  function changed(key, value) {
+    const sig = JSON.stringify(value ?? null);
+    if (rendered[key] === sig) return false;
+    rendered[key] = sig;
+    return true;
+  }
+
+  /** Called when switching issues — the next render must not be skipped
+   * just because the new issue happens to have the same data. */
+  function resetRenderCache() {
+    for (const k of Object.keys(rendered)) delete rendered[k];
+  }
+
+  const emptyEl = document.getElementById('empty');
+  const rowsEl = document.getElementById('rows');
+  const detailEl = document.getElementById('detail');
+  const detailEmptyEl = document.getElementById('detailEmpty');
+  const detailTitleEl = document.getElementById('detailTitle');
+  const detailBadgeEl = document.getElementById('detailBadge');
+  const detailSummaryEl = document.getElementById('detailSummary');
+  const connStateEl = document.getElementById('connState');
+  const errorBoxEl = document.getElementById('errorBox');
+  const stepsEl = document.getElementById('steps');
+  const reviewBlockEl = document.getElementById('reviewBlock');
+  const reviewMdEl = document.getElementById('reviewMd');
+  const prepareEl = document.getElementById('prepareBlock');
+
+  /* ------------------------------- theme ------------------------------- */
+
+  // Stored rather than system-only: the tool is often open next to an
+  // editor whose theme the OS setting doesn't match.
+  (function initTheme() {
+    const saved = localStorage.getItem('ar-theme');
+    if (saved) document.documentElement.dataset.theme = saved;
+  })();
+
+  document.getElementById('themeBtn').addEventListener('click', () => {
+    const root = document.documentElement;
+    const isDark = root.dataset.theme
+      ? root.dataset.theme === 'dark'
+      : matchMedia('(prefers-color-scheme: dark)').matches;
+    root.dataset.theme = isDark ? 'light' : 'dark';
+    localStorage.setItem('ar-theme', root.dataset.theme);
+  });
+
+  /* -------------------------------- tabs ------------------------------- */
+
+  let activeTab = 'review';
+  // Once the reader picks a tab, stop moving it under them — auto-selection
+  // is only there to open the useful tab when an issue is first opened.
+  let tabPinned = false;
+
+  function showTab(name, { pin = true } = {}) {
+    activeTab = name;
+    if (pin) tabPinned = true;
+    document.querySelectorAll('.tab').forEach((t) => {
+      t.classList.toggle('active', t.dataset.tab === name);
+    });
+    document.querySelectorAll('.panel').forEach((p) => {
+      p.classList.toggle('active', p.dataset.panel === name);
+    });
+  }
+
+  document.querySelectorAll('.tab').forEach((tab) => {
+    tab.addEventListener('click', () => showTab(tab.dataset.tab));
+  });
+
+  function setTabCount(name, count, alert) {
+    const el = document.querySelector('[data-count="' + name + '"]');
+    if (!el) return;
+    el.hidden = !count;
+    el.textContent = count || '';
+    el.classList.toggle('alert', !!alert);
+  }
+
+  /* ------------------------------ helpers ------------------------------ */
+
+  // Reviews run one at a time, so a queued task can sit for a while. The
+  // position turns that wait into something the reader can plan around
+  // instead of a status that looks stalled.
+  const STATUS_TR = {
+    idle: 'bekliyor',
+    cancelled: 'durduruldu',
+    queued: 'kuyrukta',
+    running: 'çalışıyor',
+    awaiting_approval: 'onay bekliyor',
+    approved: 'onaylandı',
+    rejected: 'reddedildi',
+    posted: "Jira'ya yazıldı",
+    failed: 'hata',
+  };
+
+  function badgeHtml(status, queuePosition) {
+    const label = STATUS_TR[status] || status;
+    const text = status === 'queued' && queuePosition
+      ? label + ' · ' + queuePosition + '. sırada'
+      : label;
+    return '<span class="badge badge-' + status + '">' + text + '</span>';
+  }
+
+  // Re-running is always allowed — including on a record stuck in
+  // "running" because the server was restarted mid-review.
+  function startButtonLabel(status) {
+    if (status === 'idle') return 'İncele';
+    if (status === 'running') return 'Yeniden başlat';
+    if (status === 'queued') return 'Sıraya alındı';
+    if (status === 'cancelled') return 'Yeniden başlat';
+    return 'Yeniden incele';
+  }
+
+  function formatDate(iso) {
+    if (!iso) return '—';
+    return String(iso).replace('T', ' ').slice(0, 16);
+  }
+
+  function escapeHtml(s) {
+    return String(s ?? '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  }
+
+  function show(el, visible, display) {
+    el.style.display = visible ? (display || 'block') : 'none';
+  }
+
+  /**
+   * Renders the markdown subset the review prompt actually produces:
+   * headings, fenced code, bold, inline code, and bullets.
+   *
+   * Everything is HTML-escaped *before* any markdown transform runs, so no
+   * markup from the model's output can reach the DOM as live HTML — the
+   * text is LLM-generated and must not be trusted to be safe.
+   */
+  function renderMarkdown(md) {
+    // Pull fenced blocks out first so their contents aren't treated as
+    // markdown (a diff body is full of `-`, `+`, `*` and `#`).
+    const blocks = [];
+    let text = String(md ?? '').replace(/```(\w*)\n?([\s\S]*?)```/g, (_m, lang, code) => {
+      const body = escapeHtml(code.replace(/\n$/, ''));
+      blocks.push(
+        '<pre class="mdCode' + (lang ? ' lang-' + escapeHtml(lang) : '') + '"><code>' +
+          (lang === 'diff' ? colourDiffLines(body) : body) +
+          '</code></pre>',
+      );
+      return '%%BLOCK' + (blocks.length - 1) + '%%';
+    });
+
+    text = escapeHtml(text);
+
+    // Block-level: headings and bullets, line by line.
+    const lines = text.split('\n');
+    const out = [];
+    let inList = false;
+    const closeList = () => {
+      if (inList) {
+        out.push('</ul>');
+        inList = false;
+      }
+    };
+
+    for (const line of lines) {
+      const heading = line.match(/^(#{1,6})\s+(.*)$/);
+      const bullet = line.match(/^\s*[-*]\s+(.*)$/);
+
+      // A fenced block stands on its own — wrapping <pre> in <p> is invalid
+      // HTML and the browser's auto-close breaks the surrounding layout.
+      if (/^%%BLOCK\d+%%$/.test(line.trim())) {
+        closeList();
+        out.push(line.trim());
+      } else if (heading) {
+        closeList();
+        const level = Math.min(heading[1].length + 2, 6); // ### -> h5-ish scale
+        out.push('<h' + level + ' class="mdH">' + headingBody(heading[2]) + '</h' + level + '>');
+      } else if (bullet) {
+        if (!inList) {
+          out.push('<ul class="mdList">');
+          inList = true;
+        }
+        out.push('<li>' + inline(bullet[1]) + '</li>');
+      } else if (line.trim() === '') {
+        closeList();
+        out.push('');
+      } else {
+        closeList();
+        out.push('<p class="mdP">' + inline(line) + '</p>');
+      }
+    }
+    closeList();
+
+    let html = out.join('\n');
+    // Put the code blocks back.
+    html = html.replace(/%%BLOCK(\d+)%%/g, (_m, i) => blocks[Number(i)]);
+    return html;
+
+    function inline(s) {
+      return s
+        .replace(/`([^`]+)`/g, '<code class="mdInline">$1</code>')
+        .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    }
+
+    /** Findings are `### <severity> — <file:line>`. Pulling the severity out
+     * as a coloured pill is what makes a review scannable: you see how bad
+     * it is before reading a word. Anything else stays an ordinary heading. */
+    function headingBody(s) {
+      const m = s.match(/^(blocking|major|minor)\b\s*[—–-]?\s*(.*)$/i);
+      if (!m) return inline(s);
+      const sev = m[1].toLowerCase();
+      return '<span class="sev sev-' + sev + '">' + sev + '</span>' +
+        (m[2] ? '<span class="sev-loc">' + inline(m[2]) + '</span>' : '');
+    }
+  }
+
+  /** `+`/`-` lines in a quoted diff, coloured like the diff viewer. Input is
+   * already escaped by the caller. */
+  function colourDiffLines(escaped) {
+    return escaped
+      .split('\n')
+      .map((l) => {
+        if (l.startsWith('+')) return '<span class="dAdd">' + l + '</span>';
+        if (l.startsWith('-')) return '<span class="dDel">' + l + '</span>';
+        return l;
+      })
+      .join('\n');
+  }
+
+  /* ------------------------------- list -------------------------------- */
+
+  async function loadReviews() {
+    let data;
+    try {
+      const res = await fetch('/api/reviews');
+      data = await res.json();
+    } catch (err) {
+      showListMessage('Sunucuya ulaşılamadı: ' + err);
+      return;
+    }
+    if (data.error) {
+      showListMessage('Hata: ' + data.error);
+      // A first run has nothing to list and nothing to explain it. Opening
+      // the one screen that fixes it beats an error the reader cannot act on.
+      if (data.setupRequired && !settingsModal.classList.contains('open')) {
+        settingsModal.classList.add('open');
+        void loadSettings();
+      }
+      return;
+    }
+    allItems = data.items;
+    renderIssueList();
+  }
+
+  function showListMessage(text) {
+    allItems = [];
+    rowsEl.innerHTML = '';
+    emptyEl.innerHTML = '<div>' + escapeHtml(text) + '</div>';
+    show(emptyEl, true, 'flex');
+    document.getElementById('issueCount').textContent = '';
+  }
+
+  function renderIssueList() {
+    const needle = document.getElementById('issueFilter').value.trim().toLowerCase();
+    const shown = needle
+      ? allItems.filter(
+          (i) =>
+            i.issueKey.toLowerCase().includes(needle) ||
+            String(i.summary ?? '').toLowerCase().includes(needle),
+        )
+      : allItems;
+
+    document.getElementById('issueCount').textContent =
+      shown.length === allItems.length ? allItems.length : shown.length + '/' + allItems.length;
+
+    if (shown.length === 0) {
+      rowsEl.innerHTML = '';
+      emptyEl.innerHTML = allItems.length
+        ? '<div>Aramaya uyan issue yok.</div>'
+        : '<div>Eşleşen issue yok.</div><div class="muted">JQL\'i kontrol et (config/config.yaml) ya da yenile.</div>';
+      show(emptyEl, true, 'flex');
+      return;
+    }
+    show(emptyEl, false);
+
+    rowsEl.innerHTML = shown
+      .map(
+        (item) =>
+          '<div class="issue-card' + (item.issueKey === currentIssue ? ' selected' : '') + '" ' +
+          'data-key="' + escapeHtml(item.issueKey) + '">' +
+          '<div class="issue-card-top">' +
+          '<span class="issue-key">' + escapeHtml(item.issueKey) + '</span>' +
+          (item.trigger === 'auto' ? '<span class="autoTag">oto</span>' : '') +
+          badgeHtml(item.reviewStatus, item.queuePosition) +
+          '</div>' +
+          '<div class="issue-summary">' + escapeHtml(item.summary) + '</div>' +
+          '<div class="issue-meta">' +
+          '<span>' + escapeHtml(item.assignee ?? 'atanmamış') + '</span>' +
+          '<span class="dot">·</span>' +
+          '<span>' + escapeHtml(item.jiraStatus) + '</span>' +
+          '<span class="dot">·</span>' +
+          '<span>' + escapeHtml(formatDate(item.updated)) + '</span>' +
+          '</div>' +
+          '</div>',
+      )
+      .join('');
+
+    rowsEl.querySelectorAll('.issue-card').forEach((card) => {
+      card.addEventListener('click', () => openIssue(card.dataset.key));
+    });
+  }
+
+  document.getElementById('issueFilter').addEventListener('input', renderIssueList);
+
+  /**
+   * Keeps the list honest without hammering Jira.
+   *
+   * Two clocks, because the two halves of a row change at different rates:
+   * the review's state is local and moves in seconds, while the set of
+   * issues in review is a Jira query that moves in minutes. Polling the
+   * fast half locally means a badge is never stale, and Jira still gets
+   * asked once a minute rather than thirty times.
+   *
+   * Both stop while the tab is hidden — a backgrounded page has nobody
+   * reading it, and the poll would still cost a Jira call.
+   */
+  async function refreshStates() {
+    if (document.hidden || !allItems.length) return;
+    try {
+      const { items } = await (await fetch('/api/review-states')).json();
+      const byKey = new Map(items.map((i) => [i.issueKey, i]));
+
+      let dirty = false;
+      for (const item of allItems) {
+        const state = byKey.get(item.issueKey);
+        // An issue with no record has never been reviewed — 'idle', not stale.
+        const status = state?.reviewStatus ?? 'idle';
+        const position = state?.queuePosition ?? null;
+        if (item.reviewStatus !== status || item.queuePosition !== position) {
+          item.reviewStatus = status;
+          item.queuePosition = position;
+          dirty = true;
+        }
+      }
+      if (dirty) renderIssueList();
+
+      // The badge is the point of the tab: it says how much is on you.
+      // Computed from the poll that already happened rather than a second
+      // request for the same facts.
+      const waiting = items.filter((i) => i.reviewStatus === 'awaiting_approval').length;
+      const countEl = document.getElementById('pendingCount');
+      countEl.hidden = !waiting;
+      countEl.textContent = waiting || '';
+      countEl.classList.toggle('alert', waiting > 0);
+      if (waiting !== lastWaitingCount && !document.getElementById('pendingView').hidden) loadPending();
+      lastWaitingCount = waiting;
+    } catch {
+      // The detail panel already surfaces connection trouble; a failed
+      // background refresh should not put an error on screen by itself.
+    }
+  }
+
+  setInterval(refreshStates, 2000);
+  setInterval(() => {
+    if (!document.hidden) loadAutoPrepare();
+  }, 60000);
+  setInterval(() => {
+    if (!document.hidden) loadReviews();
+  }, 60000);
+  // Coming back to the tab should show the truth immediately, not in a minute.
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) loadReviews();
+  });
+
+  /* ------------------------------ polling ------------------------------ */
+
+  function stopPolling() {
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = null;
+  }
+
+  /** Once a review reaches one of these, nothing changes until you act, so
+   * there is nothing to poll for — and polling would keep rebuilding the
+   * DOM under your cursor. */
+  const SETTLED = ['awaiting_approval', 'approved', 'rejected', 'posted', 'failed', 'cancelled'];
+
+  async function pollDetail(issueKey) {
+    try {
+      const res = await fetch('/api/reviews/' + encodeURIComponent(issueKey) + '/detail');
+      const detail = await res.json();
+      connStateEl.textContent = '';
+      connStateEl.classList.remove('error');
+      renderDetail(detail);
+      if (SETTLED.includes(detail.status)) stopPolling();
+    } catch (err) {
+      connStateEl.textContent = 'bağlantı hatası, yeniden deneniyor…';
+      connStateEl.classList.add('error');
+    }
+  }
+
+  /* ------------------------------- notes ------------------------------- */
+
+  function renderNotes(notes, projectPath) {
+    currentProjectPath = projectPath ?? null;
+    if (!changed('notes', { notes, projectPath })) return;
+
+    // Scope options depend on whether we know this issue's repo yet.
+    const scopeEl = document.getElementById('noteScope');
+    const previous = scopeEl.value;
+    scopeEl.innerHTML =
+      (currentProjectPath
+        ? '<option value="repo">Sadece ' + escapeHtml(currentProjectPath) + '</option>'
+        : '') + '<option value="global">Tüm projeler</option>';
+    if (previous) scopeEl.value = previous;
+
+    const listEl = document.getElementById('notesList');
+    setTabCount('notes', (notes ?? []).length);
+    if (!notes || notes.length === 0) {
+      listEl.innerHTML = '<li id="notesEmpty">Henüz not yok.</li>';
+      return;
+    }
+    listEl.innerHTML = notes
+      .map(
+        (n) =>
+          '<li>' +
+          '<span class="noteScope">' +
+          (n.scope === 'global' ? 'tüm projeler' : escapeHtml(n.projectPath)) +
+          '</span>' +
+          '<span class="noteText">' + escapeHtml(n.text) + '</span>' +
+          '<button class="delNoteBtn" data-id="' + escapeHtml(n.id) + '">sil</button>' +
+          '</li>',
+      )
+      .join('');
+    listEl.querySelectorAll('.delNoteBtn').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        await fetch('/api/notes/' + encodeURIComponent(btn.dataset.id), { method: 'DELETE' });
+        if (currentIssue) pollDetail(currentIssue);
+      });
+    });
+  }
+
+  /* -------------------------------- diff ------------------------------- */
+
+  /**
+   * Turns a unified diff into side-by-side rows.
+   *
+   * Removals and additions arrive as separate runs in a unified diff, so a
+   * run of N removals followed by M additions is paired index-by-index —
+   * that's what makes a modified line show old on the left and new on the
+   * right. Whichever run is longer gets blank cells opposite its leftovers.
+   */
+  function parseUnifiedDiff(diffText) {
+    const rows = [];
+    let oldNo = 0;
+    let newNo = 0;
+    let pendingDel = [];
+    let pendingAdd = [];
+
+    function flushPending() {
+      const pairs = Math.max(pendingDel.length, pendingAdd.length);
+      for (let i = 0; i < pairs; i++) {
+        const del = pendingDel[i];
+        const add = pendingAdd[i];
+        rows.push({
+          type: del && add ? 'mod' : del ? 'del' : 'add',
+          oldNo: del ? del.no : null,
+          oldText: del ? del.text : null,
+          newNo: add ? add.no : null,
+          newText: add ? add.text : null,
+        });
+      }
+      pendingDel = [];
+      pendingAdd = [];
+    }
+
+    for (const line of diffText.split('\n')) {
+      if (line.startsWith('@@')) {
+        flushPending();
+        // @@ -oldStart,oldCount +newStart,newCount @@
+        const m = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+        if (m) {
+          oldNo = parseInt(m[1], 10);
+          newNo = parseInt(m[2], 10);
+        }
+        rows.push({ type: 'hunk', text: line });
+        continue;
+      }
+      // Skip file headers; the file path is already the <summary>.
+      if (line.startsWith('--- ') || line.startsWith('+++ ') || line.startsWith('diff --git')) continue;
+
+      if (line.startsWith('-')) {
+        pendingDel.push({ no: oldNo++, text: line.slice(1) });
+      } else if (line.startsWith('+')) {
+        pendingAdd.push({ no: newNo++, text: line.slice(1) });
+      } else if (line.startsWith('\\')) {
+        // "\ No newline at end of file" — metadata, not content.
+        continue;
+      } else {
+        flushPending();
+        const text = line.startsWith(' ') ? line.slice(1) : line;
+        rows.push({ type: 'ctx', oldNo: oldNo++, oldText: text, newNo: newNo++, newText: text });
+      }
+    }
+    flushPending();
+    return rows;
+  }
+
+  function renderDiffTable(rows) {
+    const body = rows
+      .map((r) => {
+        if (r.type === 'hunk') {
+          return '<tr class="hunk"><td colspan="4">' + escapeHtml(r.text) + '</td></tr>';
+        }
+        const cls = r.type === 'mod' ? 'del add' : r.type;
+        const oldCell =
+          r.oldText === null
+            ? '<td class="lineNo empty"></td><td class="side oldSide empty"></td>'
+            : '<td class="lineNo">' + r.oldNo + '</td><td class="side oldSide">' + escapeHtml(r.oldText) + '</td>';
+        const newCell =
+          r.newText === null
+            ? '<td class="lineNo newNo empty"></td><td class="side newSide empty"></td>'
+            : '<td class="lineNo newNo">' + r.newNo + '</td><td class="side newSide">' + escapeHtml(r.newText) + '</td>';
+        return '<tr class="' + cls + '">' + oldCell + newCell + '</tr>';
+      })
+      .join('');
+    return (
+      '<div class="diffScroll"><table class="diffTable">' +
+      '<colgroup><col class="cNo" /><col /><col class="cNo" /><col /></colgroup>' +
+      body +
+      '</table></div>'
+    );
+  }
+
+  /**
+   * The same rows in one column.
+   *
+   * Side-by-side halves the width before a line is even drawn, so a long
+   * one wraps — and a block that exists on only one side leaves the other
+   * pane blank for its whole height. Unified has neither problem, which
+   * makes it the better read for insert-heavy diffs and narrow windows.
+   */
+  function renderUnifiedTable(rows) {
+    const line = (cls, mark, oldNo, newNo, text) =>
+      '<tr class="' + cls + '">' +
+      '<td class="lineNo">' + (oldNo ?? '') + '</td>' +
+      '<td class="lineNo newNo">' + (newNo ?? '') + '</td>' +
+      '<td class="mark">' + mark + '</td>' +
+      '<td class="side uni">' + escapeHtml(text) + '</td>' +
+      '</tr>';
+
+    const body = rows
+      .map((r) => {
+        if (r.type === 'hunk') return '<tr class="hunk"><td colspan="4">' + escapeHtml(r.text) + '</td></tr>';
+        // A modification is one row in split view but two changes in truth;
+        // unified shows both so you can read what actually replaced what.
+        if (r.type === 'mod') {
+          return line('del', '−', r.oldNo, null, r.oldText) + line('add', '+', null, r.newNo, r.newText);
+        }
+        if (r.type === 'del') return line('del', '−', r.oldNo, null, r.oldText);
+        if (r.type === 'add') return line('add', '+', null, r.newNo, r.newText);
+        return line('ctx', '', r.oldNo, r.newNo, r.oldText);
+      })
+      .join('');
+    return (
+      '<div class="diffScroll"><table class="diffTable unified">' +
+      '<colgroup><col class="cNo" /><col class="cNo" /><col class="cMark" /><col /></colgroup>' +
+      body +
+      '</table></div>'
+    );
+  }
+
+  // Persisted like wide mode: how you prefer to read a diff doesn't change
+  // from one issue to the next.
+  let diffMode = localStorage.getItem('ar-diff-mode') === 'unified' ? 'unified' : 'split';
+  let lastRepoChanges = null;
+
+  /** Half of a phone-width column is a few words per line, so side-by-side
+   * is not a preference that can be honoured there. The stored choice is
+   * left alone — it comes back the moment there is room for it. */
+  const narrowScreen = matchMedia('(max-width: 820px)');
+  function effectiveDiffMode() {
+    return narrowScreen.matches ? 'unified' : diffMode;
+  }
+  narrowScreen.addEventListener('change', () => {
+    if (lastRepoChanges) renderDiff(lastRepoChanges);
+  });
+
+  function setDiffMode(mode) {
+    diffMode = mode;
+    localStorage.setItem('ar-diff-mode', mode);
+    document.getElementById('splitBtn').classList.toggle('on', mode === 'split');
+    document.getElementById('unifiedBtn').classList.toggle('on', mode === 'unified');
+    if (lastRepoChanges) renderDiff(lastRepoChanges);
+  }
+
+  function renderDiff(repoChanges) {
+    lastRepoChanges = repoChanges;
+    // The mode belongs in the signature — without it, switching views would
+    // be a no-op against an unchanged diff.
+    if (!changed('diff', { repoChanges, mode: effectiveDiffMode() })) return;
+    const blockEl = document.getElementById('diffBlock');
+    const filesEl = document.getElementById('diffFiles');
+
+    const changes = (repoChanges ?? []).filter((c) => c.files && c.files.length);
+    if (changes.length === 0) {
+      show(blockEl, false);
+      show(document.getElementById('diffEmpty'), true);
+      filesEl.innerHTML = '';
+      setTabCount('diff', 0);
+      return;
+    }
+    show(blockEl, true);
+    show(document.getElementById('diffEmpty'), false);
+
+    const fileCount = changes.reduce((n, c) => n + c.files.length, 0);
+    setTabCount('diff', fileCount);
+    document.getElementById('diffTitle').innerHTML =
+      changes.length > 1
+        ? escapeHtml(changes.length + ' repo, ' + fileCount + ' dosya')
+        : escapeHtml(fileCount + ' dosya') +
+          ' <span class="repoBranch">' +
+          escapeHtml(changes[0].baseBranch + ' → ' + changes[0].branchName) +
+          '</span>';
+
+    // Open by default only for a small change — a 40-file diff shouldn't
+    // dump everything on screen at once.
+    const openByDefault = fileCount <= 3;
+    filesEl.innerHTML = changes
+      .map(
+        (c) =>
+          (changes.length > 1
+            ? '<h4 class="repoHeading">' + escapeHtml(c.projectPath) +
+              ' <span class="repoBranch">' + escapeHtml(c.baseBranch) + ' → ' + escapeHtml(c.branchName) + '</span></h4>'
+            : '') +
+          c.files
+            .map(
+              (f) =>
+                '<details class="diff-file"' + (openByDefault ? ' open' : '') + '>' +
+                '<summary>' + escapeHtml(f.path) + '</summary>' +
+                (effectiveDiffMode() === 'unified'
+                  ? renderUnifiedTable(parseUnifiedDiff(f.diff))
+                  : renderDiffTable(parseUnifiedDiff(f.diff))) +
+                '</details>',
+            )
+            .join(''),
+      )
+      .join('');
+  }
+
+  /* -------------------------- verify: questions ------------------------ */
+
+  function renderClarifications(openQuestions, clarifications) {
+    const blockEl = document.getElementById('clarifyBlock');
+    const listEl = document.getElementById('clarifyList');
+
+    const questions = [...(openQuestions ?? [])];
+    const answers = new Map((clarifications ?? []).map((c) => [c.question, c.answer]));
+    // Previously answered questions stay visible even if the latest review
+    // no longer asks them — otherwise an answer silently disappears.
+    for (const c of clarifications ?? []) {
+      if (!questions.includes(c.question)) questions.push(c.question);
+    }
+
+    if (!changed('clarify', { questions, answers: [...answers] })) return;
+
+    // Unanswered questions are what needs attention, so that — not the
+    // total — is what the tab advertises.
+    const unanswered = questions.filter((q) => !answers.get(q)).length;
+    verifyCounts.questions = unanswered;
+
+    if (questions.length === 0) {
+      show(blockEl, false);
+      listEl.innerHTML = '';
+      return;
+    }
+    show(blockEl, true);
+    listEl.innerHTML = questions
+      .map((q) => {
+        const a = answers.get(q) ?? '';
+        return (
+          '<div class="qa-item' + (a ? ' done' : '') + '">' +
+          '<div class="qa-label"><span class="qa-mark">?</span><span>' + escapeHtml(q) + '</span></div>' +
+          '<textarea data-q="' + escapeHtml(q) + '" placeholder="Cevabın…">' + escapeHtml(a) + '</textarea>' +
+          '</div>'
+        );
+      })
+      .join('');
+  }
+
+  function renderAppliedNotes(appliedNotes) {
+    if (!changed('appliedNotes', appliedNotes)) return;
+    const blockEl = document.getElementById('appliedNotesBlock');
+    const listEl = document.getElementById('appliedNotesList');
+
+    if (!appliedNotes || appliedNotes.length === 0) {
+      show(blockEl, false);
+      listEl.innerHTML = '';
+      return;
+    }
+    show(blockEl, true);
+    listEl.innerHTML = appliedNotes.map((n) => '<li>' + escapeHtml(n) + '</li>').join('');
+  }
+
+  /* -------------------------- verify: disputes ------------------------- */
+
+  /**
+   * Splits a review into its findings — heading plus everything under it.
+   *
+   * The heading stays the identifier a challenge is stored against, so it
+   * must be extracted exactly. Fences are tracked while scanning because a
+   * finding quotes a diff, and a `###` inside one is code, not a heading.
+   */
+  function parseFindings(markdown) {
+    const lines = String(markdown || '').split('\n');
+    const findings = [];
+    let current = null;
+    let inFence = false;
+
+    for (const line of lines) {
+      if (/^\s*```/.test(line)) inFence = !inFence;
+
+      const heading = !inFence && line.match(/^###[ \t]+(.+?)\s*$/);
+      if (heading) {
+        if (current) findings.push(current);
+        current = { heading: heading[1].trim(), body: [] };
+        continue;
+      }
+      // The verdict and the QA section close the last finding: they belong
+      // to the review as a whole, and swallowing them would put the verdict
+      // inside whichever finding happened to be written last.
+      if (!inFence && /^\s*(?:##[^#]|\*\*"?QA|Verdict:)/i.test(line)) {
+        if (current) {
+          findings.push(current);
+          current = null;
+        }
+        continue;
+      }
+
+      if (current) current.body.push(line);
+    }
+    if (current) findings.push(current);
+
+    return findings
+      .filter((f) => f.heading)
+      .map((f) => ({ heading: f.heading, body: f.body.join('\n').replace(/\n{3,}/g, '\n\n').trim() }));
+  }
+
+  function renderChallenges(reviewMarkdown, challenges) {
+    const blockEl = document.getElementById('challengeBlock');
+    const listEl = document.getElementById('challengeList');
+
+    const findings = parseFindings(reviewMarkdown);
+    const objections = new Map((challenges ?? []).map((c) => [c.finding, c.objection]));
+    // A disputed finding stays listed even once the review drops it —
+    // otherwise the objection vanishes along with the thing it settled.
+    // Its body is gone with the review, so only the heading remains.
+    for (const c of challenges ?? []) {
+      if (!findings.some((f) => f.heading === c.finding)) findings.push({ heading: c.finding, body: '' });
+    }
+
+    if (!changed('challenges', { findings, objections: [...objections] })) return;
+
+    verifyCounts.disputes = [...objections.values()].filter(Boolean).length;
+
+    if (findings.length === 0) {
+      show(blockEl, false);
+      listEl.innerHTML = '';
+      return;
+    }
+    show(blockEl, true);
+    // The finding is shown in full — heading, what is wrong, the quoted
+    // lines and the impact. Judging an objection from a `file:line` heading
+    // alone would mean going back to the review for every one of them.
+    listEl.innerHTML = findings
+      .map((f) => {
+        const o = objections.get(f.heading) ?? '';
+        return (
+          '<div class="qa-item' + (o ? ' done' : '') + '">' +
+          '<div class="qa-label"><span class="qa-mark">!</span>' +
+          '<span class="qa-finding">' + renderMarkdown('### ' + f.heading) + '</span></div>' +
+          (f.body ? '<div class="findingBody">' + renderMarkdown(f.body) + '</div>' : '') +
+          '<textarea data-finding="' + escapeHtml(f.heading) + '" ' +
+          'placeholder="Bu bulgu neden yanlış? (boş bırakırsan itiraz yok sayılır)">' +
+          escapeHtml(o) + '</textarea>' +
+          '</div>'
+        );
+      })
+      .join('');
+  }
+
+  function renderWithdrawn(withdrawn) {
+    if (!changed('withdrawn', withdrawn)) return;
+    const blockEl = document.getElementById('withdrawnBlock');
+    const listEl = document.getElementById('withdrawnList');
+
+    if (!withdrawn || withdrawn.length === 0) {
+      show(blockEl, false);
+      listEl.innerHTML = '';
+      return;
+    }
+    show(blockEl, true);
+    listEl.innerHTML = withdrawn.map((w) => '<li>' + escapeHtml(w) + '</li>').join('');
+  }
+
+  function renderRevision(text) {
+    // Never overwrite what is being typed — the detail panel re-polls every
+    // second, and a mid-sentence reset would make the box unusable.
+    const el = document.getElementById('revisionText');
+    if (document.activeElement === el) return;
+    if (!changed('revision', text ?? '')) return;
+    el.value = text ?? '';
+  }
+
+  async function saveRevision() {
+    if (!currentIssue) return;
+    await fetch('/api/reviews/' + encodeURIComponent(currentIssue) + '/revision', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: document.getElementById('revisionText').value }),
+    });
+  }
+
+  async function saveChallenges() {
+    if (!currentIssue) return;
+    const challenges = [...document.querySelectorAll('#challengeList textarea')].map((t) => ({
+      finding: t.dataset.finding,
+      objection: t.value,
+    }));
+    await fetch('/api/reviews/' + encodeURIComponent(currentIssue) + '/challenges', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ challenges: challenges }),
+    });
+  }
+
+  function collectClarificationAnswers() {
+    return [...document.querySelectorAll('#clarifyList textarea')].map((t) => ({
+      question: t.dataset.q,
+      answer: t.value,
+    }));
+  }
+
+  async function saveClarifications() {
+    if (!currentIssue) return;
+    await fetch('/api/reviews/' + encodeURIComponent(currentIssue) + '/clarifications', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ answers: collectClarificationAnswers() }),
+    });
+  }
+
+  /* ------------------------------ history ------------------------------ */
+
+  function renderHistory(history) {
+    if (!changed('history', history)) return;
+    const blockEl = document.getElementById('historyBlock');
+    const listEl = document.getElementById('historyList');
+
+    setTabCount('history', (history ?? []).length);
+    if (!history || history.length === 0) {
+      show(blockEl, false);
+      show(document.getElementById('historyEmpty'), true);
+      listEl.innerHTML = '';
+      return;
+    }
+    show(blockEl, true);
+    show(document.getElementById('historyEmpty'), false);
+
+    // Newest first; the most recent previous run is open by default since
+    // that's the one you're usually comparing against.
+    listEl.innerHTML = history
+      .map((h, i) => {
+        const when = h.archivedAt.replace('T', ' ').slice(0, 19);
+        return (
+          '<details' + (i === 0 ? ' open' : '') + '>' +
+          '<summary><time>' + escapeHtml(when) + '</time>' + badgeHtml(h.outcome) + '</summary>' +
+          '<div class="histMd">' + renderMarkdown(h.markdown) + '</div>' +
+          '</details>'
+        );
+      })
+      .join('');
+  }
+
+  /* ------------------------------ detail ------------------------------- */
+
+  // Filled in by the verify renderers, read once per detail render — the
+  // tab badge is the sum of two independently-rendered sections.
+  const verifyCounts = { questions: 0, disputes: 0 };
+
+  function renderDetail(detail) {
+    // The position is part of the signature: while a task waits its status
+    // stays "queued" but its place in line moves, and that movement is the
+    // only sign the queue is alive.
+    if (changed('status', detail.status + ':' + (detail.queuePosition || ''))) {
+      detailBadgeEl.innerHTML = badgeHtml(detail.status, detail.queuePosition);
+      const reviewBtn = document.getElementById('reviewBtn');
+      reviewBtn.textContent = startButtonLabel(detail.status);
+      // Already in line — re-requesting would only reset its step log.
+      reviewBtn.disabled = detail.status === 'queued';
+      // Stop is only meaningful while there is work in flight; showing it
+      // otherwise would offer to cancel something that already finished.
+      const inFlight = detail.status === 'running' || detail.status === 'queued';
+      show(document.getElementById('stopBtn'), inFlight, 'inline-flex');
+      // Only offered when there is a team to hand it to.
+      show(document.getElementById('assignBtn'), teamState.configured, 'inline-flex');
+
+      // Open the tab that matters right now: the log while it works, the
+      // review once there is one. Only until the reader picks for themselves.
+      if (!tabPinned) {
+        const auto = detail.status === 'running' || detail.status === 'queued'
+          ? 'steps'
+          : detail.review ? 'review' : activeTab;
+        showTab(auto, { pin: false });
+      }
+    }
+
+    renderNotes(detail.notes, detail.projectPath);
+    renderClarifications(detail.openQuestions, detail.clarifications);
+    renderChallenges(detail.review ? detail.review.markdown : '', detail.challenges);
+    renderWithdrawn(detail.withdrawn);
+    renderRevision(detail.revisionRequest);
+    renderAppliedNotes(detail.appliedNotes);
+    renderDiff(detail.repoChanges);
+    renderHistory(detail.history);
+
+    const openCount =
+      verifyCounts.questions + verifyCounts.disputes + (detail.revisionRequest ? 1 : 0);
+    setTabCount('verify', openCount, verifyCounts.questions > 0);
+
+    if (changed('steps', detail.steps)) {
+      stepsEl.textContent = detail.steps
+        .map((s) => '[' + (s.ts.split('T')[1]?.slice(0, 8) ?? '') + '] ' + s.message)
+        .join('\n') || '(henüz adım yok)';
+      stepsEl.scrollTop = stepsEl.scrollHeight;
+    }
+
+    if (changed('error', detail.error)) {
+      show(errorBoxEl, !!detail.error);
+      if (detail.error) errorBoxEl.textContent = detail.error;
+    }
+
+    if (changed('review', detail.review)) {
+      show(reviewBlockEl, !!detail.review);
+      show(document.getElementById('reviewEmpty'), !detail.review);
+      if (detail.review) reviewMdEl.innerHTML = renderMarkdown(detail.review.markdown);
+    }
+
+    if (changed('stamp', [detail.reviewedAt, detail.reviewSeq, detail.trigger])) {
+      const stampEl = document.getElementById('reviewStamp');
+      stampEl.textContent = detail.reviewedAt
+        ? (detail.trigger === 'auto' ? 'otomatik hazırlandı · ' : 'incelendi · ') +
+          formatDate(detail.reviewedAt) +
+          (detail.reviewSeq ? ' · #' + detail.reviewSeq : '')
+        : '';
+    }
+
+    if (changed('outcome', [detail.status, !!detail.review, detail.rejectionReason])) {
+      renderOutcome(detail);
+    }
+  }
+
+  const DECIDED = { approved: 'approve', posted: 'approve', rejected: 'reject' };
+
+  /**
+   * A decision is final here: it has already been written to Jira. Leaving
+   * Approve/Reject on screen afterwards says nothing happened and invites a
+   * second, contradictory write — so once it is decided the buttons give
+   * way to a plain statement of what was done.
+   */
+  function renderOutcome(detail) {
+    const kind = DECIDED[detail.status];
+    const decisionEl = document.getElementById('decisionBlock');
+    const outcomeEl = document.getElementById('outcomeBlock');
+
+    show(decisionEl, !!detail.review && !kind);
+    show(outcomeEl, !!kind);
+    if (!kind) return;
+
+    const approved = kind === 'approve';
+    const status = outcomeConfig
+      ? approved ? outcomeConfig.approveStatus : outcomeConfig.rejectStatus
+      : null;
+
+    document.getElementById('outcomeTitle').innerHTML =
+      badgeHtml(detail.status) + ' <span>' + (approved ? 'Onaylandı' : 'Reddedildi') + '</span>';
+
+    document.getElementById('outcomeSummary').textContent = !outcomeConfig
+      ? ''
+      : outcomeConfig.applyChanges
+        ? 'Jira\'ya review yorumu yazıldı, durum "' + status + '" yapıldı ve issue review öncesindeki geliştiriciye atandı.'
+        : 'DRY RUN — Jira\'ya hiçbir şey yazılmadı, yapılacaklar yalnızca loglandı.';
+
+    document.getElementById('outcomeReason').innerHTML = detail.rejectionReason
+      ? '<div class="qa-item"><div class="qa-label"><span class="qa-mark">!</span>' +
+        '<span>' + escapeHtml(detail.rejectionReason) + '</span></div></div>'
+      : '';
+  }
+
+  /** Show an issue's existing review without running anything. The
+   * selection goes in the URL hash so a page refresh comes back to it. */
+  function openIssue(issueKey, { force = false } = {}) {
+    // Re-opening the issue already on screen would otherwise restart
+    // polling and re-render, closing whatever the user just opened.
+    // A new run passes force, since it genuinely needs to poll again.
+    if (issueKey === currentIssue && !force) return;
+
+    currentIssue = issueKey;
+    stopPolling();
+    resetRenderCache();
+    tabPinned = false;
+
+    if (location.hash.slice(1) !== issueKey) {
+      history.replaceState(null, '', '#' + encodeURIComponent(issueKey));
+    }
+
+    detailEl.classList.add('open');
+    document.querySelector('.app').classList.add('has-selection');
+    show(detailEmptyEl, false);
+    detailTitleEl.textContent = issueKey;
+    // Only a link once the base URL is known; without href the arrow marker
+    // stays off and it reads as plain text rather than a dead link.
+    if (outcomeConfig?.jiraBaseUrl) {
+      detailTitleEl.href = outcomeConfig.jiraBaseUrl + '/browse/' + encodeURIComponent(issueKey);
+      detailTitleEl.title = "Jira'da aç";
+    } else {
+      detailTitleEl.removeAttribute('href');
+    }
+    detailBadgeEl.innerHTML = '';
+    detailSummaryEl.textContent = (allItems.find((i) => i.issueKey === issueKey) || {}).summary || '';
+    connStateEl.textContent = '';
+    connStateEl.classList.remove('error');
+    show(errorBoxEl, false);
+    show(reviewBlockEl, false);
+    show(document.getElementById('stopBtn'), false);
+    show(document.getElementById('outcomeBlock'), false);
+    show(document.getElementById('decisionBlock'), false);
+    prepareEl.classList.remove('open');
+    document.getElementById('issueMeta').innerHTML = '';
+    document.getElementById('issueDesc').textContent = 'Jira detayları yükleniyor…';
+    void loadIssueMeta(issueKey);
+
+    pollDetail(issueKey);
+    pollTimer = setInterval(() => pollDetail(issueKey), 1000);
+
+    // Highlight the card without a full list reload.
+    rowsEl.querySelectorAll('.issue-card').forEach((card) => {
+      card.classList.toggle('selected', card.dataset.key === issueKey);
+    });
+  }
+
+  let allProjects = [];
+
+  /** Jira's own view of the task — the context a reviewer wants before
+   * deciding whether to run anything. Read-only; nothing is started here. */
+  async function loadIssueMeta(issueKey) {
+    const metaEl = document.getElementById('issueMeta');
+    const descEl = document.getElementById('issueDesc');
+
+    let data;
+    try {
+      const res = await fetch('/api/reviews/' + encodeURIComponent(issueKey) + '/prepare');
+      data = await res.json();
+    } catch (err) {
+      descEl.textContent = 'Jira detayları yüklenemedi: ' + err;
+      return;
+    }
+    if (issueKey !== currentIssue) return; // user moved on while we loaded
+    if (data.error) {
+      descEl.textContent = 'Hata: ' + data.error;
+      return;
+    }
+
+    if (data.summary) detailSummaryEl.textContent = data.summary;
+
+    const chips = [
+      ['Tip', data.issueType],
+      ['Durum', data.status],
+      ['Atanan', data.assignee],
+      ['Bildiren', data.reporter],
+      ['Sprint', data.sprint],
+      ['Öncelik', data.priority],
+      ['Güncellendi', formatDate(data.updated)],
+    ].filter(([, v]) => v);
+    metaEl.innerHTML = chips
+      .map(([k, v]) => '<span class="meta-chip"><b>' + k + '</b>' + escapeHtml(v) + '</span>')
+      .join('');
+    descEl.textContent = data.description || '(açıklama yok)';
+
+    document.getElementById('prepareChanged').innerHTML = data.changedRepos.length
+      ? data.changedRepos
+          .map((r) => '<div class="repoRow">' + escapeHtml(r.branch) + ' — ' + escapeHtml(r.repositoryUrl) + '</div>')
+          .join('')
+      : '<div class="muted">Jira geliştirme panelinde bağlı branch bulunamadı.</div>';
+  }
+
+  async function loadProjects() {
+    const listEl = document.getElementById('projectList');
+    listEl.innerHTML = '<div class="muted" style="padding:0.5rem">projeler yükleniyor…</div>';
+    try {
+      const res = await fetch('/api/projects');
+      const data = await res.json();
+      if (data.error) {
+        listEl.innerHTML = '<div class="muted" style="padding:0.5rem">Hata: ' + escapeHtml(data.error) + '</div>';
+        return;
+      }
+      // Already-cloned first: they cost nothing and are the usual picks.
+      allProjects = data.items.sort((a, b) =>
+        a.cloned === b.cloned ? a.projectPath.localeCompare(b.projectPath) : a.cloned ? -1 : 1,
+      );
+      renderProjectList('');
+    } catch (err) {
+      listEl.innerHTML = '<div class="muted" style="padding:0.5rem">Yüklenemedi: ' + escapeHtml(String(err)) + '</div>';
+    }
+  }
+
+  function renderProjectList(filter) {
+    const listEl = document.getElementById('projectList');
+    const needle = filter.trim().toLowerCase();
+    const shown = needle
+      ? allProjects.filter((p) => p.projectPath.toLowerCase().includes(needle))
+      : allProjects;
+
+    if (!shown.length) {
+      listEl.innerHTML = '<div class="muted" style="padding:0.5rem">eşleşen proje yok</div>';
+      return;
+    }
+    listEl.innerHTML = shown
+      .map(
+        (p) =>
+          '<label><input type="checkbox" value="' + escapeHtml(p.projectPath) + '"' +
+          (p.cloned ? ' checked' : '') + ' />' +
+          '<span>' + escapeHtml(p.projectPath) + '</span>' +
+          (p.cloned ? '<span class="clonedTag">klonlu</span>' : '') +
+          '</label>',
+      )
+      .join('');
+  }
+
+  async function startReview(issueKey) {
+    const contextRepos = [...document.querySelectorAll('#projectList input:checked')].map((i) => i.value);
+
+    prepareEl.classList.remove('open');
+    openIssue(issueKey, { force: true });
+    showTab('steps', { pin: false });
+    stepsEl.textContent = 'başlatılıyor…';
+
+    try {
+      await fetch('/api/reviews/' + encodeURIComponent(issueKey) + '/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contextRepos }),
+      });
+    } catch (err) {
+      stepsEl.textContent = 'Başlatılamadı: ' + err;
+    }
+  }
+
+  /* ----------------------------- handlers ------------------------------ */
+
+  document.getElementById('addNoteBtn').addEventListener('click', async () => {
+    const textEl = document.getElementById('noteText');
+    const scope = document.getElementById('noteScope').value;
+    const text = textEl.value.trim();
+    if (!text) return;
+
+    const res = await fetch('/api/notes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scope, projectPath: currentProjectPath, text }),
+    });
+    const data = await res.json();
+    if (data.error) {
+      alert('Not eklenemedi: ' + data.error);
+      return;
+    }
+    textEl.value = '';
+    if (currentIssue) pollDetail(currentIssue);
+  });
+
+  document.getElementById('saveClarifyBtn').addEventListener('click', async () => {
+    await saveClarifications();
+    if (currentIssue) pollDetail(currentIssue);
+  });
+
+  document.getElementById('saveAndRerunBtn').addEventListener('click', async () => {
+    if (!currentIssue) return;
+    await saveAllFeedback();
+    startReview(currentIssue);
+  });
+
+  document.getElementById('saveChallengeBtn').addEventListener('click', async () => {
+    await saveChallenges();
+    if (currentIssue) pollDetail(currentIssue);
+  });
+
+  document.getElementById('challengeRerunBtn').addEventListener('click', async () => {
+    if (!currentIssue) return;
+    // Answers go along too: a re-run reads both, and saving only half of
+    // what's on screen would silently drop the other half.
+    await saveAllFeedback();
+    startReview(currentIssue);
+  });
+
+  /** All three feedback channels go together on any re-run: the reviewer
+   * sees one screen, so saving only the section whose button they pressed
+   * would silently drop whatever else they had typed. */
+  async function saveAllFeedback() {
+    await saveChallenges();
+    await saveClarifications();
+    await saveRevision();
+  }
+
+  document.getElementById('saveRevisionBtn').addEventListener('click', async () => {
+    await saveRevision();
+    if (currentIssue) pollDetail(currentIssue);
+  });
+
+  document.getElementById('revisionRerunBtn').addEventListener('click', async () => {
+    if (!currentIssue) return;
+    await saveAllFeedback();
+    startReview(currentIssue);
+  });
+
+  document.getElementById('clearRevisionBtn').addEventListener('click', async () => {
+    document.getElementById('revisionText').value = '';
+    await saveRevision();
+    if (currentIssue) pollDetail(currentIssue);
+  });
+
+  document.getElementById('projectFilter').addEventListener('input', (e) => renderProjectList(e.target.value));
+
+  document.getElementById('reviewBtn').addEventListener('click', () => {
+    if (currentIssue) startReview(currentIssue);
+  });
+
+  // Context selection is opt-in: most runs reuse whatever is already
+  // cloned, so the picker stays out of the way until asked for.
+  document.getElementById('toggleContextBtn').addEventListener('click', async () => {
+    prepareEl.classList.add('open');
+    if (allProjects.length === 0) await loadProjects();
+  });
+
+  document.getElementById('runReviewBtn').addEventListener('click', () => {
+    if (currentIssue) startReview(currentIssue);
+  });
+
+  for (const id of ['cancelPrepareBtn', 'cancelPrepareBtn2']) {
+    document.getElementById(id).addEventListener('click', () => prepareEl.classList.remove('open'));
+  }
+  prepareEl.addEventListener('click', (e) => {
+    if (e.target === prepareEl) prepareEl.classList.remove('open');
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      prepareEl.classList.remove('open');
+      backupModal.classList.remove('open');
+      settingsModal.classList.remove('open');
+      teamModal.classList.remove('open');
+      assignModal.classList.remove('open');
+      authModal.classList.remove('open');
+    }
+  });
+
+  document.getElementById('clearBtn').addEventListener('click', async () => {
+    if (!currentIssue) return;
+    if (!confirm(currentIssue + ' için review, geçmiş ve cevaplar silinsin mi? (klonlanan repolar korunur)')) return;
+    await fetch('/api/reviews/' + encodeURIComponent(currentIssue), { method: 'DELETE' });
+    resetRenderCache();
+    pollDetail(currentIssue);
+    loadReviews();
+  });
+
+  document.getElementById('splitBtn').addEventListener('click', () => setDiffMode('split'));
+  document.getElementById('unifiedBtn').addEventListener('click', () => setDiffMode('unified'));
+  setDiffMode(diffMode);
+
+  /* ----------------------------- decisions ---------------------------- */
+
+  const DECISION_LABEL = { approved: 'Onaylandı', posted: 'Onaylandı', rejected: 'Reddedildi' };
+
+  async function loadDecisions() {
+    const bodyEl = document.getElementById('decisionsBody');
+    bodyEl.innerHTML = '<div class="section-empty">yükleniyor…</div>';
+
+    let data;
+    try {
+      data = await (await fetch('/api/decisions')).json();
+    } catch (err) {
+      bodyEl.innerHTML = '<div class="section-empty">Yüklenemedi: ' + escapeHtml(String(err)) + '</div>';
+      return;
+    }
+
+    const countEl = document.getElementById('decisionCount');
+    countEl.hidden = !data.items.length;
+    countEl.textContent = data.items.length || '';
+
+    if (!data.items.length) {
+      bodyEl.innerHTML = '<div class="section-empty">Henüz karar verilmiş bir iş yok.</div>';
+      return;
+    }
+
+    bodyEl.innerHTML =
+      '<table class="decisions"><thead><tr>' +
+      '<th>Issue</th><th>Özet</th><th>Kararım</th><th>Karar zamanı</th>' +
+      '<th>Jira durumu</th><th>Atanan</th>' +
+      '</tr></thead><tbody>' +
+      data.items
+        .map((d) => {
+          // The decision and the ticket's current state are different facts;
+          // seeing them side by side is the whole point of this view.
+          const jiraStatus = d.jiraStatus
+            ? escapeHtml(d.jiraStatus)
+            : '<span class="muted">okunamadı</span>';
+          return (
+            '<tr>' +
+            '<td class="nowrap"><a class="jiraLink" target="_blank" rel="noopener" href="' +
+            escapeHtml(data.jiraBaseUrl) + '/browse/' + encodeURIComponent(d.issueKey) + '">' +
+            escapeHtml(d.issueKey) + '</a></td>' +
+            '<td data-label="Özet">' + escapeHtml(d.summary ?? '—') +
+            (d.rejectionReason
+              ? '<div class="decisionReason">' + escapeHtml(d.rejectionReason) + '</div>'
+              : '') +
+            '</td>' +
+            '<td class="nowrap" data-label="Kararım">' + badgeHtml(d.decision) + '</td>' +
+            '<td class="nowrap muted" data-label="Karar zamanı">' + escapeHtml(formatDate(d.decidedAt)) + '</td>' +
+            '<td class="nowrap" data-label="Jira durumu">' + jiraStatus + '</td>' +
+            '<td class="nowrap muted" data-label="Atanan">' + escapeHtml(d.assignee ?? '—') + '</td>' +
+            '</tr>'
+          );
+        })
+        .join('') +
+      '</tbody></table>';
+  }
+
+  /** How long something has been waiting, in the coarsest unit that still
+   * says something — "3 gün" is the number that makes you act, not 79h. */
+  function sinceText(iso) {
+    const ms = Date.now() - Date.parse(iso);
+    if (!isFinite(ms) || ms < 0) return '—';
+    const min = Math.floor(ms / 60000);
+    if (min < 60) return min + ' dk';
+    const hours = Math.floor(min / 60);
+    if (hours < 48) return hours + ' saat';
+    return Math.floor(hours / 24) + ' gün';
+  }
+
+  async function loadPending() {
+    const bodyEl = document.getElementById('pendingBody');
+    let data;
+    try {
+      data = await (await fetch('/api/pending')).json();
+    } catch (err) {
+      bodyEl.innerHTML = '<div class="section-empty">Yüklenemedi: ' + escapeHtml(String(err)) + '</div>';
+      return;
+    }
+
+    if (!data.items.length) {
+      bodyEl.innerHTML = '<div class="section-empty">Onay bekleyen iş yok.</div>';
+      return;
+    }
+
+    bodyEl.innerHTML =
+      '<table class="decisions"><thead><tr>' +
+      '<th>Issue</th><th>Özet</th><th>İncelendi</th><th>Bekliyor</th><th>Açık soru</th>' +
+      '</tr></thead><tbody>' +
+      data.items
+        .map(
+          (p) =>
+            '<tr class="clickable" data-key="' + escapeHtml(p.issueKey) + '">' +
+            '<td class="nowrap"><span class="issue-key">' + escapeHtml(p.issueKey) + '</span>' +
+            (p.trigger === 'auto' ? ' <span class="autoTag">oto</span>' : '') + '</td>' +
+            '<td data-label="Özet">' + escapeHtml(p.summary ?? '—') + '</td>' +
+            '<td class="nowrap muted" data-label="İncelendi">' + escapeHtml(formatDate(p.reviewedAt)) +
+            (p.reviewSeq ? ' · #' + p.reviewSeq : '') + '</td>' +
+            '<td class="nowrap waitFor" data-label="Bekliyor">' + escapeHtml(sinceText(p.reviewedAt)) + '</td>' +
+            '<td class="nowrap" data-label="Açık soru">' +
+            (p.openQuestions ? '<span class="autoTag">' + p.openQuestions + '</span>' : '—') + '</td>' +
+            '</tr>',
+        )
+        .join('') +
+      '</tbody></table>';
+
+    bodyEl.querySelectorAll('tr.clickable').forEach((tr) => {
+      tr.addEventListener('click', () => {
+        showView('reviews');
+        openIssue(tr.dataset.key, { force: true });
+      });
+    });
+  }
+
+  function showView(name) {
+    document.querySelectorAll('.viewTab').forEach((t) => t.classList.toggle('on', t.dataset.view === name));
+    document.getElementById('reviewsView').hidden = name !== 'reviews';
+    document.getElementById('pendingView').hidden = name !== 'pending';
+    document.getElementById('assignedView').hidden = name !== 'assigned';
+    document.getElementById('decisionsView').hidden = name !== 'decisions';
+    if (name === 'decisions') loadDecisions();
+    if (name === 'pending') loadPending();
+    if (name === 'assigned') loadAssigned();
+  }
+
+  document.querySelectorAll('.viewTab').forEach((tab) => {
+    tab.addEventListener('click', () => showView(tab.dataset.view));
+  });
+  document.getElementById('decisionsRefresh').addEventListener('click', loadDecisions);
+  document.getElementById('assignedRefresh').addEventListener('click', loadAssigned);
+  document.getElementById('pendingRefresh').addEventListener('click', loadPending);
+  showView('reviews');
+
+  // Narrow layouts show one pane at a time; this is how you get back to the
+  // list. It only deselects the view — the review itself is untouched.
+  document.getElementById('backBtn').addEventListener('click', () => {
+    document.querySelector('.app').classList.remove('has-selection');
+  });
+
+  document.getElementById('stopBtn').addEventListener('click', async () => {
+    if (!currentIssue) return;
+    const res = await fetch('/api/reviews/' + encodeURIComponent(currentIssue) + '/stop', { method: 'POST' });
+    const data = await res.json();
+    if (data.error) {
+      alert(data.error);
+      return;
+    }
+    // The abort unwinds asynchronously; poll rather than guess the new state.
+    pollDetail(currentIssue);
+    refreshStates();
+  });
+
+  async function loadAutoPrepare() {
+    let info;
+    try {
+      info = await (await fetch('/api/auto-prepare')).json();
+    } catch {
+      return;
+    }
+    const chip = document.getElementById('autoChip');
+    chip.hidden = !info.enabled;
+    if (!info.enabled) return;
+    chip.className = 'chip chip-auto';
+    chip.textContent = 'OTO HAZIRLIK';
+    // The dates go in the tooltip rather than the bar: they matter when you
+    // are asking "why did this run?", not while you are reading a review.
+    chip.title =
+      'Yeni gelen işler siz istemeden incelenir (onay yine sizde).' +
+      (info.since ? '\nİzleme başlangıcı: ' + formatDate(info.since) : '') +
+      (info.lastReviewAt ? '\nSon review: ' + formatDate(info.lastReviewAt) : '');
+  }
+
+  /* --------------------------- settings ---------------------------- */
+
+  const SETTING_FIELDS = [
+    ['setJiraBaseUrl', 'jiraBaseUrl'], ['setJiraEmail', 'jiraEmail'], ['setJiraApiToken', 'jiraApiToken'],
+    ['setGitlabBaseUrl', 'gitlabBaseUrl'], ['setGitlabToken', 'gitlabToken'],
+    ['setAnthropicModel', 'anthropicModel'], ['setAnthropicApiKey', 'anthropicApiKey'],
+    ['setRepoCacheDir', 'repoCacheDir'],
+  ];
+  const BOOL_FIELDS = [
+    ['setApplyChanges', 'applyChanges'],
+    ['setAutoPrepareEnabled', 'autoPrepareEnabled'],
+    ['setUseRepoCheckout', 'useRepoCheckout'],
+  ];
+  // Team policy lives on the server; these inputs mirror it and are only
+  // editable by an owner.
+  const TEAM_FIELDS = [
+    ['setTeamJql', 'jql'], ['setTeamApproveStatus', 'approveStatus'],
+    ['setTeamRejectStatus', 'rejectStatus'], ['setTeamLanguage', 'language'],
+  ];
+  let teamPolicyRole = null;
+  // Secrets come back as booleans, never values — so the form shows whether
+  // one is set and only sends a new one when you actually type it.
+  const SECRET_FIELDS = ['jiraApiToken', 'gitlabToken', 'anthropicApiKey'];
+
+  const settingsModal = document.getElementById('settingsModal');
+
+  async function loadSettings() {
+    let data;
+    try {
+      data = await (await fetch('/api/settings')).json();
+    } catch (err) {
+      document.getElementById('settingsResult').textContent = 'Ayarlar okunamadı: ' + err;
+      return;
+    }
+    const pathHint = document.getElementById('settingsPathHint');
+    pathHint.textContent =
+      'Bu makinede saklanır: ' + data.settingsPath + ' — parola ve token\'lar şifrelenir, dosya 0600.';
+    if (data.setup && !data.setup.configured) {
+      pathHint.innerHTML =
+        '<b style="color:var(--amber)">Eksik: ' + escapeHtml(data.setup.missing.join(', ')) +
+        '</b><br>' + escapeHtml(pathHint.textContent) +
+        '<br>Kaydettikten sonra uygulamayı yeniden başlat.';
+    }
+
+    for (const [id, key] of SETTING_FIELDS) {
+      const el = document.getElementById(id);
+      if (SECRET_FIELDS.includes(key)) {
+        el.value = '';
+        el.placeholder = data.settings[key] ? '•••••••• (kayıtlı — değiştirmek için yaz)' : 'ayarlanmamış';
+      } else {
+        el.value = data.settings[key] ?? '';
+      }
+    }
+    for (const [id, key] of BOOL_FIELDS) {
+      document.getElementById(id).checked = Boolean(data.settings[key]);
+    }
+    document.getElementById('setAutoPreparePollMs').value =
+      data.settings.autoPreparePollMs ? Math.round(data.settings.autoPreparePollMs / 1000) : '';
+
+    document.getElementById('settingsBackendHint').innerHTML =
+      'Bu sürüm <b>' + escapeHtml(teamState.apiUrl || '—') + '</b> sunucusuna bağlanır. ' +
+      'Adres uygulamayla birlikte gelir; ayar değildir.';
+
+    await loadTeamPolicy();
+  }
+
+  /** Mirrors the team's policy into the form. Read-only for members: a JQL
+   * or a status name changed by mistake reshapes everyone's queue. */
+  async function loadTeamPolicy() {
+    const stateEl = document.getElementById('teamPolicyState');
+    const disable = (why) => {
+      TEAM_FIELDS.forEach(([id]) => { document.getElementById(id).disabled = true; });
+      stateEl.textContent = why;
+    };
+
+    await loadTeamIdentity();
+    if (!teamState.user) return disable('Politikayı görmek için giriş yapmalısın.');
+
+    let teams = [];
+    try {
+      teams = (await (await fetch('/api/backend/teams')).json()).items ?? [];
+    } catch (err) {
+      return disable('Sunucuya ulaşılamadı: ' + err);
+    }
+    if (!teams.length) return disable('Henüz bir takımın yok.');
+
+    let data;
+    try {
+      data = await (await fetch('/api/backend/teams/' + encodeURIComponent(teams[0].id) + '/settings')).json();
+    } catch (err) {
+      return disable('Politika okunamadı: ' + err);
+    }
+    if (data.error) return disable(data.error);
+
+    teamPolicyRole = data.role;
+    for (const [id, key] of TEAM_FIELDS) {
+      const el = document.getElementById(id);
+      el.value = data.settings[key] ?? '';
+      el.disabled = data.role !== 'owner';
+    }
+    stateEl.textContent = data.role === 'owner'
+      ? teams[0].name + ' — sahibi sensin, değiştirebilirsin.'
+      : teams[0].name + ' — takım sahibi belirler, sen yalnızca görürsün.';
+  }
+
+  document.getElementById('settingsBtn').addEventListener('click', async () => {
+    document.getElementById('settingsResult').textContent = '';
+    settingsModal.classList.add('open');
+    await loadSettings();
+  });
+  for (const id of ['settingsClose', 'settingsCancel']) {
+    document.getElementById(id).addEventListener('click', () => settingsModal.classList.remove('open'));
+  }
+  settingsModal.addEventListener('click', (e) => {
+    if (e.target === settingsModal) settingsModal.classList.remove('open');
+  });
+
+  document.getElementById('settingsSave').addEventListener('click', async () => {
+    const resultEl = document.getElementById('settingsResult');
+    const patch = {};
+    for (const [id, key] of SETTING_FIELDS) {
+      const value = document.getElementById(id).value;
+      // An untouched secret field is left out entirely; sending its empty
+      // value would clear a credential the user never meant to touch.
+      if (SECRET_FIELDS.includes(key) && value === '') continue;
+      patch[key] = value;
+    }
+    for (const [id, key] of BOOL_FIELDS) {
+      patch[key] = document.getElementById(id).checked;
+    }
+    const pollSeconds = Number(document.getElementById('setAutoPreparePollMs').value);
+    if (Number.isFinite(pollSeconds) && pollSeconds > 0) patch.autoPreparePollMs = pollSeconds * 1000;
+
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      });
+      const data = await res.json();
+      if (data.error) {
+        resultEl.textContent = 'Kaydedilemedi: ' + data.error;
+        return;
+      }
+      // The team half is a separate call: it goes to the server, and only
+      // an owner may make it.
+      if (teamPolicyRole === 'owner') {
+        const teams = (await (await fetch('/api/backend/teams')).json()).items ?? [];
+        if (teams.length) {
+          const policy = {};
+          TEAM_FIELDS.forEach(([id, key]) => { policy[key] = document.getElementById(id).value.trim(); });
+          const teamRes = await fetch('/api/backend/teams/' + encodeURIComponent(teams[0].id) + '/settings', {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(policy),
+          });
+          const teamData = await teamRes.json();
+          if (teamData.error) {
+            resultEl.textContent = 'Takım politikası kaydedilemedi: ' + teamData.error;
+            return;
+          }
+        }
+      }
+
+      resultEl.textContent = data.restartRequired
+        ? 'Kaydedildi. Ayarlar açılışta okunduğu için uygulamayı yeniden başlatman gerekiyor.'
+        : 'Kaydedildi.';
+      await loadSettings();
+      await loadTeamIdentity();
+    } catch (err) {
+      resultEl.textContent = 'Kaydedilemedi: ' + err;
+    }
+  });
+
+  /* ----------------------------- team ------------------------------ */
+
+  let teamState = { configured: false, user: null, teams: [], members: [] };
+  const teamModal = document.getElementById('teamModal');
+
+  async function loadTeamIdentity() {
+    try {
+      const data = await (await fetch('/api/backend/me')).json();
+      teamState.configured = data.configured;
+      teamState.user = data.user;
+      teamState.apiUrl = data.apiUrl ?? teamState.apiUrl;
+    } catch {
+      teamState = { ...teamState, configured: false, user: null };
+    }
+
+    const chip = document.getElementById('teamChip');
+    chip.hidden = !teamState.configured;
+    if (!teamState.configured) return;
+    chip.textContent = teamState.user ? teamState.user.name : 'Giriş yap';
+    chip.className = 'btn btn-ghost';
+    chip.title = teamState.user ? 'Takım' : 'Sunucuya giriş yap';
+    void loadAssigned();
+  }
+
+  /* ------------------------ sign in / sign up ---------------------- */
+
+  const authModal = document.getElementById('authModal');
+  let authMode = 'login';
+
+  // Mirrors the server's rules exactly. Being told "too short" only after a
+  // round trip is a poor way to learn a rule the page already knows — and
+  // 72 is a real cap, not a style choice: bcrypt ignores everything past
+  // it, which would make two different long passwords interchangeable.
+  function authProblem(fields) {
+    if (authMode === 'register' && !fields.name) return 'İsim gerekli.';
+    if (!fields.email.includes('@')) return 'Geçerli bir e-posta gerekli.';
+    if (authMode === 'register') {
+      if (fields.password.length < 10) return 'Parola en az 10 karakter olmalı.';
+      if (fields.password.length > 72) return 'Parola en fazla 72 karakter olabilir.';
+    } else if (!fields.password) {
+      return 'Parola gerekli.';
+    }
+    return null;
+  }
+
+  function setAuthMode(mode) {
+    authMode = mode;
+    const registering = mode === 'register';
+    document.getElementById('authTabLogin').classList.toggle('on', !registering);
+    document.getElementById('authTabRegister').classList.toggle('on', registering);
+    document.getElementById('authTitle').textContent = registering ? 'Kaydol' : 'Giriş';
+    document.getElementById('authSubmit').textContent = registering ? 'Kaydol' : 'Giriş yap';
+    document.getElementById('authNameField').hidden = !registering;
+    document.getElementById('authPasswordHint').hidden = !registering;
+    document.getElementById('authPassword').setAttribute(
+      'autocomplete', registering ? 'new-password' : 'current-password');
+    document.getElementById('authError').textContent = '';
+  }
+
+  async function openAuthModal(mode) {
+    setAuthMode(mode ?? 'login');
+    document.getElementById('authError').textContent = '';
+    document.getElementById('authPassword').value = '';
+    document.getElementById('authServerHint').textContent =
+      'Sunucu: ' + (teamState.apiUrl || 'ayarlanmadı');
+    authModal.classList.add('open');
+    // Focus what still needs filling in rather than always the first field.
+    const first = mode === 'register' ? 'authName' : 'authEmail';
+    setTimeout(() => document.getElementById(first).focus(), 0);
+  }
+
+  document.getElementById('authTabLogin').addEventListener('click', () => setAuthMode('login'));
+  document.getElementById('authTabRegister').addEventListener('click', () => setAuthMode('register'));
+  for (const id of ['authClose', 'authCancel']) {
+    document.getElementById(id).addEventListener('click', () => authModal.classList.remove('open'));
+  }
+  authModal.addEventListener('click', (e) => {
+    if (e.target === authModal) authModal.classList.remove('open');
+  });
+
+  async function submitAuth() {
+    const errorEl = document.getElementById('authError');
+    const fields = {
+      name: document.getElementById('authName').value.trim(),
+      email: document.getElementById('authEmail').value.trim(),
+      password: document.getElementById('authPassword').value,
+    };
+
+    const problem = authProblem(fields);
+    if (problem) {
+      errorEl.textContent = problem;
+      return;
+    }
+
+    const submitEl = document.getElementById('authSubmit');
+    submitEl.disabled = true;
+    errorEl.textContent = '';
+    try {
+      const res = await fetch('/api/backend/' + (authMode === 'register' ? 'register' : 'login'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(fields),
+      });
+      const data = await res.json();
+      if (data.error) {
+        errorEl.textContent = data.error;
+        return;
+      }
+      authModal.classList.remove('open');
+      document.getElementById('authPassword').value = '';
+      await loadTeamIdentity();
+      openTeamModal();
+    } catch (err) {
+      errorEl.textContent = String(err);
+    } finally {
+      submitEl.disabled = false;
+    }
+  }
+
+  document.getElementById('authSubmit').addEventListener('click', submitAuth);
+  // Enter submits from any field: a login form that needs a mouse is an
+  // annoyance every single time.
+  for (const id of ['authName', 'authEmail', 'authPassword']) {
+    document.getElementById(id).addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') submitAuth();
+    });
+  }
+
+  document.getElementById('teamChip').addEventListener('click', () => {
+    if (teamState.user) openTeamModal();
+    else openAuthModal('login');
+  });
+
+  /* --------------------------- assigning --------------------------- */
+
+  const assignModal = document.getElementById('assignModal');
+  let assignContext = { teamId: null, issueKey: null, pickedId: null };
+
+  /** Handing the current issue to someone else. A list you click, not a
+   * numbered prompt: the point of assigning is to pick a person, and a
+   * person is easier to recognise than to index. */
+  document.getElementById('assignBtn').addEventListener('click', async () => {
+    if (!currentIssue) return;
+    await loadTeamIdentity();
+    if (!teamState.user) {
+      openTeamModal();
+      return;
+    }
+
+    let teams = [];
+    try {
+      teams = (await (await fetch('/api/backend/teams')).json()).items ?? [];
+    } catch { /* reported below */ }
+    if (!teams.length) {
+      openTeamModal();
+      return;
+    }
+
+    const teamId = teams[0].id;
+    let members = [];
+    try {
+      members = (await (await fetch('/api/backend/teams/' + encodeURIComponent(teamId) + '/members')).json()).items ?? [];
+    } catch { /* reported below */ }
+    const others = members.filter((m) => m.id !== teamState.user.id);
+
+    assignContext = { teamId: teamId, issueKey: currentIssue, pickedId: null };
+    document.getElementById('assignSubject').innerHTML =
+      '<b>' + escapeHtml(currentIssue) + '</b>' +
+      (detailSummaryEl.textContent ? ' — ' + escapeHtml(detailSummaryEl.textContent) : '') +
+      '<br>Takım: ' + escapeHtml(teams[0].name);
+    document.getElementById('assignNote').value = '';
+    document.getElementById('assignResult').textContent = '';
+    document.getElementById('assignConfirm').disabled = true;
+
+    const peopleEl = document.getElementById('assignPeople');
+    peopleEl.innerHTML = others.length
+      ? others.map((m) =>
+          '<div class="memberRow pickable" data-id="' + escapeHtml(m.id) + '">' +
+          '<span>' + escapeHtml(m.name) + '</span>' +
+          '<span class="muted">' + escapeHtml(m.email) + '</span></div>').join('')
+      : '<div class="section-empty">Takımda başka kimse yok. Takım menüsünden birini ekleyebilirsin.</div>';
+
+    peopleEl.querySelectorAll('.memberRow.pickable').forEach((row) => {
+      row.addEventListener('click', () => {
+        peopleEl.querySelectorAll('.memberRow').forEach((r) => r.classList.remove('picked'));
+        row.classList.add('picked');
+        assignContext.pickedId = row.dataset.id;
+        document.getElementById('assignConfirm').disabled = false;
+      });
+    });
+
+    assignModal.classList.add('open');
+  });
+
+  for (const id of ['assignClose', 'assignCancel']) {
+    document.getElementById(id).addEventListener('click', () => assignModal.classList.remove('open'));
+  }
+  assignModal.addEventListener('click', (e) => {
+    if (e.target === assignModal) assignModal.classList.remove('open');
+  });
+
+  document.getElementById('assignConfirm').addEventListener('click', async () => {
+    const resultEl = document.getElementById('assignResult');
+    if (!assignContext.pickedId) return;
+    resultEl.textContent = 'atanıyor…';
+
+    try {
+      const res = await fetch('/api/backend/teams/' + encodeURIComponent(assignContext.teamId) + '/assign', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          issueKey: assignContext.issueKey,
+          assigneeId: assignContext.pickedId,
+          note: document.getElementById('assignNote').value,
+        }),
+      });
+      const data = await res.json();
+      if (data.error) {
+        resultEl.textContent = data.error;
+        return;
+      }
+      assignModal.classList.remove('open');
+      authModal.classList.remove('open');
+      loadAssigned();
+    } catch (err) {
+      resultEl.textContent = String(err);
+    }
+  });
+
+  /* ------------------------ assigned to me ------------------------- */
+
+  async function loadAssigned() {
+    const tab = document.getElementById('assignedTab');
+    const countEl = document.getElementById('assignedCount');
+    // The tab only exists when there is a backend to ask; otherwise it
+    // would be a permanently empty screen.
+    tab.hidden = !teamState.configured || !teamState.user;
+    if (tab.hidden) return;
+
+    let items = [];
+    try {
+      items = (await (await fetch('/api/backend/assignments')).json()).items ?? [];
+    } catch { /* rendered as empty below */ }
+
+    countEl.hidden = !items.length;
+    countEl.textContent = items.length || '';
+    countEl.classList.toggle('alert', items.length > 0);
+
+    const body = document.getElementById('assignedBody');
+    if (!items.length) {
+      body.innerHTML = '<div class="section-empty">Sana atanmış iş yok.</div>';
+      return;
+    }
+
+    body.innerHTML =
+      '<table class="decisions"><thead><tr>' +
+      '<th>Issue</th><th>Özet</th><th>Not</th><th>Atayan</th><th>Ne zaman</th><th></th>' +
+      '</tr></thead><tbody>' +
+      items.map((a) =>
+        '<tr>' +
+        '<td class="nowrap"><span class="issue-key openAssigned" style="cursor:pointer" ' +
+        'data-key="' + escapeHtml(a.issueKey) + '">' + escapeHtml(a.issueKey) + '</span></td>' +
+        '<td data-label="Özet">' + escapeHtml(a.summary || '—') + '</td>' +
+        '<td data-label="Not">' + escapeHtml(a.note || '—') + '</td>' +
+        '<td class="nowrap muted" data-label="Atayan">' + escapeHtml(a.assignedByName || '—') + '</td>' +
+        '<td class="nowrap muted" data-label="Ne zaman">' + escapeHtml(sinceText(a.assignedAt)) + ' önce</td>' +
+        '<td class="nowrap"><button class="btn closeAssigned" ' +
+        'data-team="' + escapeHtml(a.teamId) + '" data-key="' + escapeHtml(a.issueKey) + '">Bitti</button></td>' +
+        '</tr>').join('') +
+      '</tbody></table>';
+
+    body.querySelectorAll('.openAssigned').forEach((el) => {
+      el.addEventListener('click', () => {
+        showView('reviews');
+        openIssue(el.dataset.key);
+      });
+    });
+    body.querySelectorAll('.closeAssigned').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        await fetch('/api/backend/teams/' + encodeURIComponent(btn.dataset.team) +
+          '/assignments/' + encodeURIComponent(btn.dataset.key) + '/close', { method: 'POST' });
+        loadAssigned();
+      });
+    });
+  }
+
+  document.getElementById('teamClose').addEventListener('click', () => teamModal.classList.remove('open'));
+  teamModal.addEventListener('click', (e) => {
+    if (e.target === teamModal) teamModal.classList.remove('open');
+  });
+
+  async function openTeamModal() {
+    teamModal.classList.add('open');
+    await renderTeamModal();
+  }
+
+  async function renderTeamModal() {
+    const body = document.getElementById('teamBody');
+    await loadTeamIdentity();
+
+    if (!teamState.configured) {
+      body.innerHTML = '<div class="section-empty">Takım API adresi ayarlanmamış. Ayarlar\'dan ekleyebilirsin.</div>';
+      return;
+    }
+
+    if (!teamState.user) {
+      // Signing in is its own screen — see openAuthModal. A team modal that
+      // also handled credentials was one form doing two jobs badly.
+      teamModal.classList.remove('open');
+      openAuthModal('login');
+      return;
+    }
+
+    let teams = [];
+    try {
+      teams = (await (await fetch('/api/backend/teams')).json()).items ?? [];
+    } catch { /* rendered as none below */ }
+    teamState.teams = teams;
+
+    const current = teams[0];
+    let members = [];
+    if (current) {
+      try {
+        members = (await (await fetch('/api/backend/teams/' + encodeURIComponent(current.id) + '/members')).json()).items ?? [];
+      } catch { /* same */ }
+    }
+    teamState.members = members;
+
+    body.innerHTML =
+      '<p class="card-hint">Giriş yapan: <b>' + escapeHtml(teamState.user.name) + '</b> · ' +
+      escapeHtml(teamState.user.email) + '</p>' +
+      (teams.length
+        ? '<h4>' + escapeHtml(current.name) + (current.role === 'owner' ? ' <span class="role">sahip</span>' : '') + '</h4>' +
+          members.map((m) =>
+            '<div class="memberRow"><span>' + escapeHtml(m.name) + '</span>' +
+            '<span class="muted">' + escapeHtml(m.email) + '</span>' +
+            '<span class="spacer"></span><span class="role">' + escapeHtml(m.role) + '</span></div>').join('') +
+          (current.role === 'owner'
+            ? '<div class="note-add" style="margin-top:0.6rem">' +
+              '<input id="teamSearch" class="input" placeholder="isim veya e-posta ara (en az 2 harf)" />' +
+              '</div><div id="teamSearchResults"></div>'
+            : '')
+        : '<h4>Takım yok</h4>' +
+          '<div class="note-add"><input id="teamNewName" class="input" placeholder="takım adı" />' +
+          '<button id="teamCreateBtn" class="btn btn-primary">Oluştur</button></div>') +
+      '<div class="card-actions"><button id="teamLogoutBtn" class="btn btn-ghost">Çıkış yap</button></div>' +
+      '<div id="teamResult" class="card-hint"></div>';
+
+    const resultEl = document.getElementById('teamResult');
+    document.getElementById('teamLogoutBtn').addEventListener('click', () => void signOutToGate());
+    document.getElementById('teamCreateBtn')?.addEventListener('click', async () => {
+      const name = document.getElementById('teamNewName').value.trim();
+      if (!name) return;
+      const data = await (await fetch('/api/backend/teams', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }),
+      })).json();
+      if (data.error) { resultEl.textContent = data.error; return; }
+      await renderTeamModal();
+    });
+    // Search then pick, rather than typing an exact address: nobody
+    // remembers a colleague's email exactly, and a typo would otherwise
+    // read as "no such user".
+    const searchEl = document.getElementById('teamSearch');
+    const resultsEl = document.getElementById('teamSearchResults');
+    let searchTimer = null;
+
+    searchEl?.addEventListener('input', () => {
+      clearTimeout(searchTimer);
+      const q = searchEl.value.trim();
+      if (q.length < 2) {
+        resultsEl.innerHTML = '';
+        return;
+      }
+      // Debounced: a request per keystroke would be a lot of noise for a
+      // query that is only useful once you have typed a few letters.
+      searchTimer = setTimeout(async () => {
+        let data;
+        try {
+          data = await (await fetch('/api/backend/users?q=' + encodeURIComponent(q))).json();
+        } catch (err) {
+          resultsEl.innerHTML = '<div class="muted">' + escapeHtml(String(err)) + '</div>';
+          return;
+        }
+        if (data.error) {
+          resultsEl.innerHTML = '<div class="muted">' + escapeHtml(data.error) + '</div>';
+          return;
+        }
+
+        const already = new Set(members.map((m) => m.id));
+        const found = (data.items ?? []).filter((u) => !already.has(u.id));
+        resultsEl.innerHTML = found.length
+          ? found.map((u) =>
+              '<div class="memberRow"><span>' + escapeHtml(u.name) + '</span>' +
+              '<span class="muted">' + escapeHtml(u.email) + '</span><span class="spacer"></span>' +
+              '<button class="btn addMemberBtn" data-id="' + escapeHtml(u.id) + '">Ekle</button></div>').join('')
+          : '<div class="muted">Eşleşen (henüz üye olmayan) kimse yok.</div>';
+
+        resultsEl.querySelectorAll('.addMemberBtn').forEach((btn) => {
+          btn.addEventListener('click', async () => {
+            const res = await fetch('/api/backend/teams/' + encodeURIComponent(current.id) + '/members', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ userId: btn.dataset.id }),
+            });
+            const out = await res.json();
+            if (out.error) { resultEl.textContent = out.error; return; }
+            await renderTeamModal();
+          });
+        });
+      }, 250);
+    });
+  }
+
+  /* ---------------------------- backup ---------------------------- */
+
+  const backupModal = document.getElementById('backupModal');
+  document.getElementById('backupBtn').addEventListener('click', () => {
+    document.getElementById('importResult').textContent = '';
+    backupModal.classList.add('open');
+  });
+  for (const id of ['backupClose', 'backupCancel']) {
+    document.getElementById(id).addEventListener('click', () => backupModal.classList.remove('open'));
+  }
+  backupModal.addEventListener('click', (e) => {
+    if (e.target === backupModal) backupModal.classList.remove('open');
+  });
+
+  // A plain navigation, so the browser handles the download and the file
+  // name the server put in Content-Disposition.
+  document.getElementById('exportBtn').addEventListener('click', () => {
+    window.location.href = '/api/export';
+  });
+
+  document.getElementById('importBtn').addEventListener('click', async () => {
+    const fileEl = document.getElementById('importFile');
+    const resultEl = document.getElementById('importResult');
+    const file = fileEl.files && fileEl.files[0];
+    if (!file) {
+      resultEl.textContent = 'Önce bir yedek dosyası seç.';
+      return;
+    }
+    if (!confirm('Buradaki tüm review, not ve durum verisi silinip bu dosyadakiyle değiştirilecek. Devam edilsin mi?')) {
+      return;
+    }
+
+    resultEl.textContent = 'yükleniyor…';
+    let payload;
+    try {
+      payload = JSON.parse(await file.text());
+    } catch (err) {
+      resultEl.textContent = 'Dosya okunamadı: geçerli JSON değil.';
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (data.error) {
+        resultEl.textContent = 'Yüklenemedi: ' + data.error;
+        return;
+      }
+      resultEl.textContent =
+        data.reviews + ' review geri yüklendi.' +
+        (data.configIncluded ? ' (Yedekteki config.yaml uygulanmadı — elle kopyalayın.)' : '');
+      fileEl.value = '';
+      resetRenderCache();
+      loadReviews();
+      if (currentIssue) pollDetail(currentIssue);
+    } catch (err) {
+      resultEl.textContent = 'Yüklenemedi: ' + err;
+    }
+  });
+
+  document.getElementById('refresh').addEventListener('click', loadReviews);
+
+  let outcomeConfig = null;
+  async function loadOutcomeConfig() {
+    try {
+      outcomeConfig = await (await fetch('/api/outcome-config')).json();
+    } catch {
+      return;
+    }
+    // Say plainly whether these buttons touch the real Jira issue.
+    const hintEl = document.getElementById('outcomeHint');
+    const chipEl = document.getElementById('modeChip');
+    // The detail panel may already be open from a page refresh; give it the
+    // link now that the base URL has arrived.
+    if (currentIssue && outcomeConfig.jiraBaseUrl) {
+      detailTitleEl.href = outcomeConfig.jiraBaseUrl + '/browse/' + encodeURIComponent(currentIssue);
+      detailTitleEl.title = "Jira'da aç";
+    }
+
+    if (outcomeConfig.applyChanges) {
+      hintEl.textContent =
+        'Onayla → Jira\'da yorum + durum "' + outcomeConfig.approveStatus + '" + geliştiriciye atama. ' +
+        'Reddet → yorum + durum "' + outcomeConfig.rejectStatus + '" + geliştiriciye atama.';
+      hintEl.classList.add('live');
+      chipEl.textContent = 'CANLI · Jira yazılır';
+      chipEl.className = 'chip chip-live';
+    } else {
+      hintEl.textContent =
+        'DRY RUN: Jira\'ya hiçbir şey yazılmaz, yapılacaklar yalnızca loglanır ' +
+        '(config/config.yaml → jira.applyChanges).';
+      chipEl.textContent = 'DRY RUN';
+      chipEl.className = 'chip chip-dry';
+    }
+  }
+
+  document.getElementById('approveBtn').addEventListener('click', async () => {
+    if (!currentIssue) return;
+    if (outcomeConfig?.applyChanges &&
+        !confirm(currentIssue + ' Jira\'da "' + outcomeConfig.approveStatus + '" durumuna alınacak ve geliştiriciye atanacak. Onaylıyor musun?')) {
+      return;
+    }
+    await fetch('/api/reviews/' + encodeURIComponent(currentIssue) + '/approve', { method: 'POST' });
+    pollDetail(currentIssue);
+    loadReviews();
+    loadDecisions();
+  });
+
+  document.getElementById('rejectBtn').addEventListener('click', async () => {
+    if (!currentIssue) return;
+    const reasonEl = document.getElementById('rejectReason');
+    const reason = reasonEl.value.trim();
+    if (outcomeConfig?.applyChanges &&
+        !confirm(currentIssue + ' Jira\'da "' + outcomeConfig.rejectStatus + '" durumuna alınacak ve geliştiriciye atanacak. Reddediyor musun?')) {
+      return;
+    }
+    const res = await fetch('/api/reviews/' + encodeURIComponent(currentIssue) + '/reject', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason }),
+    });
+    const data = await res.json();
+    if (data.error) {
+      alert(data.error);
+      return;
+    }
+    reasonEl.value = '';
+    pollDetail(currentIssue);
+    loadReviews();
+    loadDecisions();
+  });
+
+  // The hash is how something outside the page asks for an issue: the
+  // desktop shell sets it when you click a notification, and it makes the
+  // browser's back button work between issues.
+  window.addEventListener('hashchange', () => {
+    const key = decodeURIComponent(location.hash.slice(1));
+    if (key && key !== currentIssue) {
+      showView('reviews');
+      openIssue(key);
+    }
+  });
+
+  /* ------------------------------ the gate ----------------------------- */
+
+  /**
+   * Nothing else runs until this resolves.
+   *
+   * The app is gated on identity even though reviews run locally, because
+   * the team half of it — who you are, what was assigned to you, whose
+   * policy applies — is meaningless without a name. The one concession is
+   * offline: a stored session gets you in when the server cannot be
+   * reached, with a banner saying so. Locking someone out of their own
+   * machine's reviews because a server is down would trade real
+   * availability for no real safety.
+   */
+  const gateEl = document.getElementById('gate');
+  const appEl = document.querySelector('.app');
+  let gateMode = 'login';
+
+  function gateProblem(fields) {
+    if (gateMode === 'register' && !fields.name) return 'İsim gerekli.';
+    if (!fields.email.includes('@')) return 'Geçerli bir e-posta gerekli.';
+    if (gateMode === 'register') {
+      if (fields.password.length < 10) return 'Parola en az 10 karakter olmalı.';
+      if (fields.password.length > 72) return 'Parola en fazla 72 karakter olabilir.';
+    } else if (!fields.password) {
+      return 'Parola gerekli.';
+    }
+    return null;
+  }
+
+  function setGateMode(mode) {
+    gateMode = mode;
+    const registering = mode === 'register';
+    document.getElementById('gateTabLogin').classList.toggle('on', !registering);
+    document.getElementById('gateTabRegister').classList.toggle('on', registering);
+    document.getElementById('gateSubmit').textContent = registering ? 'Kaydol' : 'Giriş yap';
+    document.getElementById('gateNameField').hidden = !registering;
+    document.getElementById('gatePasswordHint').hidden = !registering;
+    document.getElementById('gatePassword').setAttribute(
+      'autocomplete', registering ? 'new-password' : 'current-password');
+    document.getElementById('gateError').textContent = '';
+  }
+
+  function showGate(_section, info) {
+    gateEl.hidden = false;
+    appEl.hidden = true;
+    // The address ships with the build; showing it is the only reason it is
+    // on screen at all — so nobody has to guess which one they signed in to.
+    document.getElementById('gateServerLabel').textContent = info?.apiUrl
+      ? (info.production ? '' : 'Geliştirme sunucusu · ') + info.apiUrl
+      : '';
+    setTimeout(() => document.getElementById('gateEmail').focus(), 0);
+  }
+
+  function enterApp(info) {
+    gateEl.hidden = true;
+    appEl.hidden = false;
+
+    const banner = document.getElementById('offlineBanner');
+    banner.hidden = !info?.offline;
+    if (info?.offline) {
+      banner.textContent =
+        'Sunucuya ulaşılamıyor — kayıtlı oturumla devam ediliyor. Takım özellikleri güncel olmayabilir.';
+    }
+
+    // Everything that needed to know who you are can start now.
+    void loadOutcomeConfig();
+    void loadAutoPrepare();
+    void loadTeamIdentity();
+    loadReviews().then(() => {
+      const fromUrl = decodeURIComponent(location.hash.slice(1));
+      if (fromUrl) openIssue(fromUrl);
+    });
+  }
+
+  async function checkGate() {
+    let info;
+    try {
+      info = await (await fetch('/api/gate')).json();
+    } catch (err) {
+      document.getElementById('gateError').textContent = 'Uygulama sunucusuna ulaşılamadı: ' + err;
+      showGate('auth', {});
+      return;
+    }
+
+    teamState.apiUrl = info.apiUrl;
+    teamState.production = info.production;
+    if (info.state === 'needs-login') {
+      if (info.error) document.getElementById('gateError').textContent = info.error;
+      showGate('auth', info);
+      return;
+    }
+    enterApp(info);
+  }
+
+  document.getElementById('gateTabLogin').addEventListener('click', () => setGateMode('login'));
+  document.getElementById('gateTabRegister').addEventListener('click', () => setGateMode('register'));
+
+  async function submitGate() {
+    const errorEl = document.getElementById('gateError');
+    const fields = {
+      name: document.getElementById('gateName').value.trim(),
+      email: document.getElementById('gateEmail').value.trim(),
+      password: document.getElementById('gatePassword').value,
+    };
+
+    const problem = gateProblem(fields);
+    if (problem) {
+      errorEl.textContent = problem;
+      return;
+    }
+
+    const btn = document.getElementById('gateSubmit');
+    btn.disabled = true;
+    errorEl.textContent = '';
+    try {
+      const res = await fetch('/api/backend/' + (gateMode === 'register' ? 'register' : 'login'), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(fields),
+      });
+      const data = await res.json();
+      if (data.error) {
+        errorEl.textContent = data.error;
+        return;
+      }
+      document.getElementById('gatePassword').value = '';
+      await checkGate();
+    } catch (err) {
+      errorEl.textContent = String(err);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  document.getElementById('gateSubmit').addEventListener('click', submitGate);
+  for (const id of ['gateName', 'gateEmail', 'gatePassword']) {
+    document.getElementById(id).addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') submitGate();
+    });
+  }
+
+  // Logging out returns to the gate rather than leaving a signed-out app on
+  // screen — the gate is what "signed out" looks like here.
+  async function signOutToGate() {
+    await fetch('/api/backend/logout', { method: 'POST' });
+    teamModal.classList.remove('open');
+    teamState.user = null;
+    setGateMode('login');
+    await checkGate();
+  }
+
+  // Restore the previously open issue after a page refresh.
+  void checkGate();
+</script>
+</body>
+</html>

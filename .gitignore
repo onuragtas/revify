@@ -1,0 +1,31 @@
+node_modules/
+dist/
+*.log
+
+# electron-builder output.
+release/
+
+# The team API. Kept out of the public repo on purpose — it is a separate
+# service with its own users, sessions and database. The app works without
+# it: team features stay off until an API URL is configured, so removing
+# this directory changes nothing for anyone who clones the repo.
+api/
+~/.revify/settings.json
+
+# Credentials.
+.env
+
+# Everything this tool produces: reviews, answers, notes, queue state.
+# It is a verbatim record of internal Jira issues and diffs — the single
+# most sensitive thing in the working tree after .env.
+data/
+
+# Your team's JQL, project keys and workflow status names, plus the
+# switches that decide whether it writes to Jira. Copy config.example.yaml
+# to config/config.yaml and edit that.
+config/config.yaml
+
+# Half-written files from an interrupted atomic write.
+*.tmp
+
+.DS_Store

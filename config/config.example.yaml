@@ -1,0 +1,93 @@
+# Copy to config/config.yaml and edit. This file ships with the repo; the
+# copy does not, because it ends up holding your team's JQL, workflow status
+# names and project keys — not secrets, but nobody else's business either.
+#
+# Credentials never live here. They go in .env (see .env.example).
+#
+# Pipeline wiring is the "generic" part of the project: swapping any of the
+# names in `wiring` (and, if needed, adding a small new adapter file) is all
+# it takes to repoint this engine at a different automation.
+
+pollIntervalMs: 60000
+approvalPollIntervalMs: 20000
+stateFilePath: ./data/state.json
+reviewsFilePath: ./data/reviews.json
+
+jira:
+  # JQL used by the trigger to find issues that should enter the pipeline.
+  # Must match your project keys and the name your workflow gives the
+  # review column.
+  jql: 'project = "PROJ" AND status = "Code Review" ORDER BY updated ASC'
+
+  # Master switch for writing to Jira. OFF here on purpose: a fresh clone
+  # must not be one `npm start` away from commenting on real issues and
+  # moving real tickets. Turn it on deliberately, once you have watched a
+  # few dry runs and agree with what they would have done.
+  #
+  # Even when on, nothing fires by itself — writes only happen when someone
+  # clicks Approve/Reject in the web UI. The one exception is the headless
+  # mode (`npm run dev`) wired to `consoleApproval`, which auto-approves
+  # everything. Keep `wiring.approval: webApproval` unless you mean it.
+  applyChanges: false
+
+  # Where an issue goes after a decision. Both are resolved by status name
+  # at call time, so they must match your workflow exactly (case-insensitive).
+  approveStatus: Ready for Stage
+  rejectStatus: In Development
+
+review:
+  # Language the AI writes the review in — a plain language name, e.g.
+  # English, Turkish, German. Code identifiers, file paths, and diff
+  # snippets always stay in their original form.
+  language: English
+  # Clone the branch locally (shallow, single-branch) and give the model
+  # read-only tools (Read/Glob/Grep) scoped to it, so it can check the
+  # surrounding code instead of guessing from the diff. Set to false to
+  # go back to diff-only reviews (faster, no disk use, but the model has
+  # to hedge findings it can't verify).
+  useRepoCheckout: true
+  # Outside the project on purpose: these are real git checkouts, and an
+  # editor with this project open would treat every one of them as a nested
+  # repository — potentially several GB of other teams' code in this
+  # project's search, indexing and source control. `~` is expanded.
+  repoCacheDir: ~/.revify/repos
+  notesFilePath: ./data/reviewNotes.json
+  # Every repo already in repoCacheDir is mounted read-only as context on
+  # its default branch. The UI's project picker only decides what gets
+  # cloned — once on disk, a repo stays available to every later review.
+
+# Review new arrivals before anyone asks for one, so the result is already
+# waiting when you open the issue.
+#
+# OFF here for the same reason applyChanges is: a clone should not start
+# spending your Claude subscription's usage on a schedule you did not
+# choose. When you enable it, only issues that turn up *after* watching
+# starts are touched — the first poll records whatever is already in review
+# as a baseline and reviews none of it. Delete the `autoPrepare*` keys from
+# data/state.json to re-baseline.
+#
+# This never decides anything: a prepared review waits for your Approve or
+# Reject exactly like one you started yourself.
+autoPrepare:
+  enabled: false
+  pollIntervalMs: 120000
+
+wiring:
+  trigger: jiraStatusPoll
+  contextCollectors:
+    - jiraIssueContext
+    - gitlabBranchDiffContext
+  task: codeReview
+  # claudeCli = shells out to the `claude` CLI, using your Claude Code
+  # subscription's included usage (no separate API billing). Alternative:
+  # anthropic (calls the API directly via @anthropic-ai/sdk — needs a
+  # funded ANTHROPIC_API_KEY, billed separately from any subscription).
+  llm: claudeCli
+  # webApproval = the web UI (npm run ui) drives approval via Approve/Reject
+  # buttons. Alternatives: consoleApproval (no human gate, auto-approves —
+  # used by the headless `npm run dev` mode) or slackReaction (needs
+  # SLACK_BOT_TOKEN/SLACK_CHANNEL in .env).
+  approval: webApproval
+  # jiraReviewOutcome = comment + status transition + reassign to the
+  # developer who had the issue before the review. jiraComment = comment only.
+  action: jiraReviewOutcome
