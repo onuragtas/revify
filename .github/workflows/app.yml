@@ -159,7 +159,16 @@ jobs:
       # One platform failing should not hide whether the others worked.
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-latest]
+        include:
+          # Both Mac architectures from the one runner. The hosted macOS
+          # runners are Apple Silicon, so a plain build produced arm64 only
+          # — and someone on an Intel Mac found a release page with nothing
+          # on it they could run. Cross-packaging x64 from arm works, and
+          # the ad-hoc seal applies to either.
+          - os: macos-latest
+            args: --mac --arm64 --x64
+          - os: ubuntu-latest
+            args: --linux
     steps:
       - uses: actions/checkout@v4
 
@@ -186,13 +195,36 @@ jobs:
           REVIFY_ENV: production
 
       - name: Package
-        run: npx --yes electron-builder --publish never
+        run: npx --yes electron-builder ${{ matrix.args }} --publish never
         env:
           REVIFY_ENV: production
-          # Unsigned builds. Signing needs certificates, which are secrets,
-          # which fork pull requests must never see — so it is a separate,
-          # deliberate step rather than something this workflow assumes.
+          # No Developer ID here: a certificate is a secret, and fork pull
+          # requests must never see one. The bundle is still sealed —
+          # build/afterPack.cjs signs it ad-hoc, which is what keeps macOS
+          # from calling the download "damaged". Gatekeeper still asks the
+          # user to allow it, once.
           CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      # The failure this catches shipped once: electron-builder fills the
+      # bundle after Electron's own linker signature was made, so the seal
+      # no longer matches what is inside. macOS reports that as "Revify is
+      # damaged and can't be opened" — a dead end, on arm64 where a valid
+      # signature is mandatory. build/afterPack.cjs re-seals it; this makes
+      # sure it actually did, before anyone downloads the result.
+      - name: The macOS bundle must carry a valid signature
+        if: runner.os == 'macOS'
+        run: |
+          set -eu
+          shopt -s nullglob
+          bundles=(release/mac*/Revify.app)
+          # A glob that matched nothing would otherwise pass this step by
+          # checking no bundle at all.
+          [ ${#bundles[@]} -eq 2 ] || { echo "::error::expected 2 bundles, found ${#bundles[@]}"; exit 1; }
+          for bundle in "${bundles[@]}"; do
+            codesign --verify --strict "$bundle"
+            echo "ok: $bundle"
+          done
+        shell: bash
 
       - uses: actions/upload-artifact@v4
         with:

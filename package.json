@@ -67,6 +67,7 @@
         "owner": "onuragtas",
         "repo": "revify"
       }
-    ]
+    ],
+    "afterPack": "build/afterPack.cjs"
   }
 }
