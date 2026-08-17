@@ -12,6 +12,7 @@ import { loadConfig, refreshSettingsOverrides, type AppConfig } from '../config/
 import { buildPipeline, type Wired } from '../core/registry.js';
 import { Pipeline } from '../core/pipeline.js';
 import { isIssueKey, normalizeIssueKey, toTriggerEvent, UnknownIssueError } from '../core/issueEvent.js';
+import { NotARepositoryError, readLocalChange } from '../core/localRepo.js';
 import { ReviewQueue } from '../core/reviewQueue.js';
 import { AutoPrepareWatcher } from '../core/autoPrepare.js';
 import { ReminderWatcher } from '../core/reminderWatcher.js';
@@ -1163,6 +1164,80 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired) {
     // could never be prepared again — "clear" has to mean clear.
     state.forgetAutoPrepareSeen(issueKey);
     res.json({ ok: true });
+  });
+
+  /**
+   * Reviews a directory on this machine.
+   *
+   * The queue answers "what did the team ask for". This answers "look at
+   * what I have here" — work with no ticket yet, a ticket that links no
+   * branch, or a second pair of eyes before pushing.
+   *
+   * An optional Jira key attaches the result to an issue, and then
+   * Approve and Reject behave exactly as they always have. Without one it
+   * is a report: the decision is recorded here and nothing is written to
+   * Jira, because there is nothing to write it to.
+   */
+  app.post('/api/reviews/local', async (req, res) => {
+    const path = String(req.body?.path ?? '').trim();
+    if (!path) {
+      res.status(400).json({ error: 'Bir dizin yolu gerekli.' });
+      return;
+    }
+
+    let change;
+    try {
+      change = await readLocalChange(path);
+    } catch (err) {
+      const status = err instanceof NotARepositoryError ? 400 : 500;
+      res.status(status).json({ error: err instanceof Error ? err.message : String(err) });
+      return;
+    }
+
+    if (!change.committedDiff.trim() && !change.workingDiff.trim()) {
+      // Reviewing nothing produces a confident review of nothing, which is
+      // worse than saying there is nothing to review.
+      res.status(409).json({
+        error: `${change.projectPath} (${change.branch}) taban dalıyla aynı ve çalışma alanı temiz — incelenecek değişiklik yok.`,
+      });
+      return;
+    }
+
+    const issueKey = String(req.body?.issueKey ?? '').trim().toUpperCase();
+    if (issueKey && !isIssueKey(issueKey)) {
+      res.status(400).json({ error: `"${issueKey}" bir issue anahtarına benzemiyor (örn. BUY-2455).` });
+      return;
+    }
+
+    // Readable, and stable for the same directory and branch: re-running
+    // replaces the previous review rather than piling up rows.
+    const id = issueKey || `local:${change.projectPath}@${change.branch}`;
+    const summary = `${change.projectPath} · ${change.branch}`;
+
+    const event: TriggerEvent = {
+      id,
+      data: {
+        repoPath: change.path,
+        contextRepos: Array.isArray(req.body?.contextRepos) ? req.body.contextRepos.map(String) : [],
+        summary,
+        ...(issueKey ? { issueKey } : {}),
+      },
+    };
+    lastPolled = [...lastPolled.filter((e) => e.id !== id), event];
+
+    wired.reviewStore.archiveCurrentReview(id);
+    progressBus.clear(id);
+    wired.reviewStore.upsert(id, {
+      summary,
+      review: undefined,
+      error: undefined,
+      trigger: 'manual',
+      rejectionReason: undefined,
+      projectPaths: [change.projectPath],
+    });
+
+    const position = queue.enqueue(event);
+    res.json({ ok: true, issueKey: id, summary, position, local: !issueKey });
   });
 
   app.post('/api/reviews/:issueKey/start', async (req, res) => {

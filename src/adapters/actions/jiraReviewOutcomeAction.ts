@@ -84,7 +84,21 @@ export class JiraReviewOutcomeAction implements Action {
   }
 
   private async applyOutcome(event: TriggerEvent, comment: string, status: string): Promise<void> {
-    const issueKey = event.data.issueKey as string;
+    const issueKey = event.data.issueKey as string | undefined;
+
+    /*
+     * A local review has nowhere to post.
+     *
+     * Reviewing a directory produces a report, not a workflow transition:
+     * there is no issue to comment on, no status to move, nobody to
+     * reassign. Approving one is a decision recorded here and nothing
+     * more, which is the honest meaning of the button in that context.
+     */
+    if (!issueKey) {
+      progressBus.log(event.id, `yerel review — karar kaydedildi, Jira'ya bir şey yazılmadı`);
+      return;
+    }
+
     const developer = await this.findDeveloper(event, issueKey);
     const assigneeAccountId = developer?.accountId ?? null;
     const assigneeName = developer?.displayName ?? '(unknown)';

@@ -2,9 +2,12 @@ import type { ContextCollector, TriggerEvent } from '../../core/types.js';
 import { GitlabClient, parseProjectPathFromUrl } from '../../clients/gitlabClient.js';
 import type { RepoCache } from '../../clients/repoCache.js';
 import { progressBus } from '../../core/progressBus.js';
+import { mountContextRepos, type ContextRepo } from './contextRepos.js';
 
 /** One repository the change touches: its diff against that repo's own
  * default branch, plus the local checkout of the feature branch. */
+export type { ContextRepo };
+
 export interface RepoChange {
   projectPath: string;
   branchName: string;
@@ -12,12 +15,6 @@ export interface RepoChange {
   diff: string;
   files: Array<{ path: string; diff: string }>;
   repoPath: string | null;
-}
-
-export interface ContextRepo {
-  projectPath: string;
-  path: string;
-  branch: string;
 }
 
 /**
@@ -43,6 +40,12 @@ export class GitlabBranchDiffContext implements ContextCollector {
     contextSoFar: Record<string, unknown>,
     signal?: AbortSignal,
   ): Promise<Record<string, unknown>> {
+    // A local-directory review is not this collector's event. Without this
+    // it returned an empty `repoChanges`, and whether that empty array
+    // clobbered the real one came down to the order collectors happen to
+    // be listed in — a config edit away from a silently diff-less review.
+    if (event.data.repoPath) return {};
+
     const linkedBranches =
       (contextSoFar.linkedBranches as Array<{ name: string; repositoryUrl: string }> | undefined) ?? [];
 
@@ -99,7 +102,12 @@ export class GitlabBranchDiffContext implements ContextCollector {
 
     return {
       repoChanges,
-      contextRepos: await this.checkoutContextRepos(event, changedProjects, signal),
+      contextRepos: await mountContextRepos(event, {
+        repoCache: this.repoCache,
+        gitlabClient: this.gitlabClient,
+        exclude: changedProjects,
+        signal,
+      }),
     };
   }
 
@@ -113,45 +121,5 @@ export class GitlabBranchDiffContext implements ContextCollector {
    * All of them are put on their default branch, except the ones this
    * change touches (already checked out at their branch by the caller).
    */
-  private async checkoutContextRepos(
-    event: TriggerEvent,
-    changedProjects: Set<string>,
-    signal?: AbortSignal,
-  ): Promise<ContextRepo[]> {
-    if (!this.repoCache) return [];
 
-    // Clone anything newly selected that isn't cached yet.
-    const selected = (event.data.contextRepos as string[] | undefined) ?? [];
-    const cachedPaths = new Set(this.repoCache.listCached().map((r) => r.projectPath));
-    for (const projectPath of selected) {
-      if (cachedPaths.has(projectPath) || changedProjects.has(projectPath)) continue;
-      try {
-        const defaultBranch = await this.gitlabClient.getDefaultBranch(projectPath);
-        progressBus.log(event.id, `cloning ${projectPath}@${defaultBranch}...`);
-        await this.repoCache.ensureCheckout(projectPath, defaultBranch, defaultBranch, signal);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        progressBus.log(event.id, `could not clone ${projectPath} (${message}), skipping`);
-      }
-    }
-
-    const result: ContextRepo[] = [];
-    for (const cached of this.repoCache.listCached()) {
-      if (changedProjects.has(cached.projectPath)) continue;
-      try {
-        // Adopted checkouts don't know their default branch yet.
-        const defaultBranch = cached.defaultBranch || (await this.gitlabClient.getDefaultBranch(cached.projectPath));
-        const path = await this.repoCache.ensureDefaultBranch(cached.projectPath, defaultBranch, signal);
-        result.push({ projectPath: cached.projectPath, path, branch: defaultBranch });
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        progressBus.log(event.id, `context repo ${cached.projectPath} unavailable (${message})`);
-      }
-    }
-
-    if (result.length) {
-      progressBus.log(event.id, `${result.length} context repo(s) available at default branch`);
-    }
-    return result;
-  }
 }

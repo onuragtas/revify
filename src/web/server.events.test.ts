@@ -316,3 +316,18 @@ describe('reviewing by issue key', () => {
     server.shutdown();
   });
 });
+
+describe('reviewing a local directory', () => {
+  it('refuses a path that is not a repository, and one with nothing to review', async () => {
+    const server = createServer(makeConfig(), makeWired());
+
+    const notRepo = await request(server).post('/api/reviews/local').send({ path: dir });
+    expect(notRepo.status).toBe(400);
+    expect(notRepo.body.error).toContain('git deposu değil');
+
+    const empty = await request(server).post('/api/reviews/local').send({ path: '' });
+    expect(empty.status).toBe(400);
+
+    server.shutdown();
+  });
+});

@@ -16,8 +16,13 @@ export class JiraIssueContext implements ContextCollector {
   ) {}
 
   async collect(event: TriggerEvent): Promise<Record<string, unknown>> {
-    const issueKey = event.data.issueKey as string;
+    const issueKey = event.data.issueKey as string | undefined;
     const issueId = event.data.issueId as string;
+    // A review of a local directory has no issue behind it. Every
+    // collector sees every event, so recognising one's own is the price of
+    // a single wiring — and a single wiring is what keeps the two entry
+    // points from drifting apart.
+    if (!issueKey) return {};
 
     const [issue, linkedBranches, comments, related, attachments] = await Promise.all([
       this.jiraClient.getIssue(issueKey),

@@ -984,6 +984,10 @@
         <input id="byKeyInput" class="input" type="text" placeholder="BUY-2455 — anahtarla incele" />
         <button id="byKeyBtn" class="btn small">İncele</button>
       </div>
+      <div class="sidebar-head byKey">
+        <input id="byPathInput" class="input" type="text" placeholder="~/projects/api — yerel dizini incele" />
+        <button id="byPathBtn" class="btn small">İncele</button>
+      </div>
       <div id="byKeyResult" class="card-hint" hidden></div>
       <div id="rows" class="issue-list"></div>
       <div id="empty" class="detail-empty" style="display:none"></div>
@@ -1799,6 +1803,47 @@
       result.textContent = 'Başlatılamadı: ' + err;
     }
   }
+
+  /**
+   * Reviews a directory instead of an issue.
+   *
+   * Both the committed branch diff and whatever is uncommitted go in — the
+   * uncommitted half is the half most likely to be wrong, and leaving it
+   * out would produce a confident review of code nobody is about to push.
+   */
+  async function reviewByPath() {
+    const input = document.getElementById('byPathInput');
+    const result = document.getElementById('byKeyResult');
+    const path = input.value.trim();
+    if (!path) return;
+
+    result.hidden = false;
+    result.textContent = 'Dizin okunuyor…';
+    try {
+      const res = await fetch('/api/reviews/local', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path, contextRepos: [] }),
+      });
+      const data = await res.json();
+      if (data.error) {
+        result.textContent = data.error;
+        return;
+      }
+      result.hidden = true;
+      input.value = '';
+      showView('reviews');
+      openIssue(data.issueKey, { force: true });
+      loadReviews();
+    } catch (err) {
+      result.textContent = 'Başlatılamadı: ' + err;
+    }
+  }
+
+  document.getElementById('byPathBtn').addEventListener('click', reviewByPath);
+  document.getElementById('byPathInput').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') reviewByPath();
+  });
 
   document.getElementById('byKeyBtn').addEventListener('click', reviewByKey);
   document.getElementById('byKeyInput').addEventListener('keydown', (e) => {

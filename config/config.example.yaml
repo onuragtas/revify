@@ -93,6 +93,10 @@ wiring:
   contextCollectors:
     - jiraIssueContext
     - gitlabBranchDiffContext
+    # Reviewing a local directory instead of a Jira issue. Every collector
+    # sees every event and ignores the ones that are not its own, so both
+    # entry points share one wiring.
+    - localRepoDiffContext
   task: codeReview
   # claudeCli = shells out to the `claude` CLI, using your Claude Code
   # subscription's included usage (no separate API billing). Alternative:

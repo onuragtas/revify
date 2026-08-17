@@ -63,7 +63,9 @@ if (process.env.ANTHROPIC_API_KEY === '') {
  * the rest of the standard pipeline instead of failing to parse. */
 const wiringSchema = z.object({
   trigger: z.string().default('jiraStatusPoll'),
-  contextCollectors: z.array(z.string()).default(['jiraIssueContext', 'gitlabBranchDiffContext']),
+  contextCollectors: z
+    .array(z.string())
+    .default(['jiraIssueContext', 'gitlabBranchDiffContext', 'localRepoDiffContext']),
   task: z.string().default('codeReview'),
   llm: z.string().default('claudeCli'),
   approval: z.string().default('webApproval'),

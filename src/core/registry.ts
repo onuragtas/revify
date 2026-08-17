@@ -7,6 +7,7 @@ import { RepoCache } from '../clients/repoCache.js';
 import { JiraStatusPollTrigger } from '../adapters/triggers/jiraStatusPollTrigger.js';
 import { JiraIssueContext } from '../adapters/context/jiraIssueContext.js';
 import { GitlabBranchDiffContext } from '../adapters/context/gitlabBranchDiffContext.js';
+import { LocalRepoDiffContext } from '../adapters/context/localRepoDiffContext.js';
 import { AnthropicProvider } from '../adapters/llm/anthropicProvider.js';
 import { ClaudeCliProvider } from '../adapters/llm/claudeCliProvider.js';
 import { CodeReviewTask } from '../adapters/tasks/codeReviewTask.js';
@@ -95,6 +96,9 @@ export function buildPipeline(config: AppConfig, keep?: Stores): Wired {
     jiraIssueContext: () =>
       new JiraIssueContext(jiraClient, join(dirname(config.review.repoCacheDir), 'attachments')),
     gitlabBranchDiffContext: () => new GitlabBranchDiffContext(gitlabClient, repoCache),
+    // Reviewing a directory on this machine. Sits in the same wiring as
+    // the Jira collectors and ignores events that are not its own.
+    localRepoDiffContext: () => new LocalRepoDiffContext(gitlabClient, repoCache),
   };
   const wiredContextCollectors = config.wiring.contextCollectors.map((name) =>
     resolve(contextCollectors, name, 'contextCollector'),
