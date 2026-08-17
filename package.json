@@ -58,11 +58,6 @@
         "AppImage"
       ],
       "category": "Development"
-    },
-    "win": {
-      "target": [
-        "nsis"
-      ]
     }
   }
 }

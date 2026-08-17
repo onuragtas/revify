@@ -121,7 +121,7 @@ jobs:
       # One platform failing should not hide whether the others worked.
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-latest, windows-latest]
+        os: [macos-latest, ubuntu-latest]
     steps:
       - uses: actions/checkout@v4
 
@@ -157,7 +157,6 @@ jobs:
           path: |
             release/*.dmg
             release/*.AppImage
-            release/*.exe
           if-no-files-found: warn
           # Master builds are a convenience, not an archive; tagged releases
           # are what gets kept, and those are attached below.

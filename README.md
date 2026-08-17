@@ -185,7 +185,7 @@ availability for no real safety.
 
 | Pipeline | Builds | Runs |
 |---|---|---|
-| `.github/workflows/app.yml` | the app: typecheck, tests, smoke, packaged installers on `v*` tags | GitHub Actions, no secrets — fork pull requests run it in full |
+| `.github/workflows/app.yml` | the app: typecheck, tests, smoke, and macOS/Linux installers on every push to `master` | GitHub Actions, no secrets — fork pull requests run it in full |
 | `Jenkinsfile` | **only** the API: vet, race tests, static Linux binary, deploy | Jenkins, deploy gated on `main` + an explicit parameter |
 
 They ship to different places on different schedules — the API is one
@@ -222,7 +222,7 @@ Packaging (optional, needs `npm i -D electron-builder`):
 
 ```bash
 npm run app:pack     # unpacked app in release/
-npm run app:dist     # installer (.dmg / AppImage / .exe)
+npm run app:dist     # installer (.dmg / AppImage)
 ```
 
 Neither `.env` nor `config/config.yaml` is bundled — both are read from the
