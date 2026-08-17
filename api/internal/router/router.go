@@ -94,8 +94,17 @@ func New(repo *repository.Repository, sessionTTL time.Duration, build BuildInfo)
 	// team's queue, which is the same reason membership is owner-managed.
 	team.Get("/settings", settingsH.Get)
 	team.Put("/settings", middleware.RequireOwner("ayarlarını değiştirmek"), settingsH.Save)
+	// Notes are not policy, though they read like it. A note is what one
+	// reviewer learned while reading this repo — "the retry here is
+	// deliberate, stop flagging it" — and the person who learns it is
+	// whoever happened to review that issue. Requiring the owner to relay
+	// it is how a team keeps re-learning the same thing.
+	//
+	// Deleting stays with the owner: removing someone else's standing rule
+	// silently changes every future review, which is the same weight as
+	// changing the policy itself.
 	team.Get("/notes", settingsH.Notes)
-	team.Post("/notes", middleware.RequireOwner("notu eklemek"), settingsH.AddNote)
+	team.Post("/notes", settingsH.AddNote)
 	team.Delete("/notes/:noteID", middleware.RequireOwner("notu silmek"), settingsH.DeleteNote)
 
 	// Where reviews landed. Any member may record one — the decision has

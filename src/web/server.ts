@@ -87,6 +87,10 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired) {
     async (event, signal) => {
       progressBus.log(event.id, 'started');
       try {
+        // Before the review, not when someone opens the notes screen: an
+        // auto-prepared review runs with nobody watching, and it must
+        // still honour what the team decided this morning.
+        await syncTeamNotes();
         await pipeline.runOne(event, signal);
         // Stamped only on success: a run that was stopped or blew up did
         // not produce a review, so it must not move the log.
@@ -898,46 +902,101 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired) {
     });
   });
 
+  /**
+   * Mirrors the team's notes into the local store.
+   *
+   * The store is what a review actually reads, so without this the team's
+   * notes were decorative: shown in the list, never applied. A colleague's
+   * "the retry here is deliberate" appeared on screen while every review
+   * went on flagging it.
+   *
+   * Returns whether the team was reachable, so a caller can say which set
+   * it is showing rather than passing off a stale copy as current.
+   */
+  async function syncTeamNotes(): Promise<boolean> {
+    const teamId = settings.get('teamId');
+    if (!backend.configured || !teamId) return false;
+    try {
+      const items = (await backend.teamNotes(teamId)) as Array<Record<string, unknown>>;
+      wired.notesStore.replaceAll(
+        items.map((n) => ({
+          id: String(n.id ?? ''),
+          scope: n.scope === 'repo' ? ('repo' as const) : ('global' as const),
+          projectPath: n.projectPath ? String(n.projectPath) : null,
+          text: String(n.text ?? ''),
+          createdAt: String(n.createdAt ?? ''),
+        })),
+      );
+      return true;
+    } catch (err) {
+      console.warn(`[notes] takım notları alınamadı: ${err instanceof Error ? err.message : String(err)}`);
+      return false;
+    }
+  }
+
   /** Notes come from the team when there is one: "don't flag missing tests
    * in this repo" is accumulated team knowledge, and knowledge that lives
-   * on one laptop is re-learned by everyone else. Falls back to the local
-   * store when no backend is configured, and when it cannot be reached —
-   * a review should not lose its rules because a server is down. */
+   * on one laptop is re-learned by everyone else. The local store is the
+   * offline copy — shown, and used by reviews, when the server cannot be
+   * reached. */
   app.get('/api/notes', async (_req, res) => {
-    const teamId = settings.get('teamId');
-    if (backend.configured && teamId) {
-      try {
-        const items = await backend.teamNotes(teamId);
-        res.json({ items, source: 'team' });
-        return;
-      } catch (err) {
-        res.json({
-          items: wired.notesStore.list(),
-          source: 'local',
-          warning: `Takım notları alınamadı, yereldekiler gösteriliyor: ${err instanceof Error ? err.message : String(err)}`,
-        });
-        return;
-      }
-    }
-    res.json({ items: wired.notesStore.list(), source: 'local' });
+    const fromTeam = await syncTeamNotes();
+    res.json({ items: wired.notesStore.list(), source: fromTeam ? 'team' : 'local' });
   });
 
-  app.post('/api/notes', (req, res) => {
+  app.post('/api/notes', async (req, res) => {
     const { scope, projectPath, text } = req.body ?? {};
     if (scope !== 'global' && scope !== 'repo') {
       res.status(400).json({ error: 'scope must be "global" or "repo"' });
       return;
     }
+
+    const teamId = settings.get('teamId');
     try {
-      res.json({ note: wired.notesStore.add({ scope, projectPath, text: String(text ?? '') }) });
+      // To the team when there is one. Writing locally while reading from
+      // the team was the actual bug: you added a note and it vanished,
+      // because the list you were looking at came from somewhere else.
+      if (backend.configured && teamId) {
+        await backend.addTeamNote(teamId, {
+          scope,
+          projectPath: projectPath ? String(projectPath) : undefined,
+          text: String(text ?? ''),
+        });
+        await syncTeamNotes();
+        res.json({ ok: true, source: 'team', items: wired.notesStore.list() });
+        return;
+      }
+      res.json({ note: wired.notesStore.add({ scope, projectPath, text: String(text ?? '') }), source: 'local' });
     } catch (err) {
+      if (err instanceof BackendError) {
+        res.status(err.status).json({ error: err.message });
+        return;
+      }
       res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 
-  app.delete('/api/notes/:id', (req, res) => {
-    wired.notesStore.remove(req.params.id);
-    res.json({ ok: true });
+  app.delete('/api/notes/:id', async (req, res) => {
+    const teamId = settings.get('teamId');
+    try {
+      if (backend.configured && teamId) {
+        // Owner-only on the server. The refusal travels as-is rather than
+        // being reported as a local success, which is what deleting a
+        // team note used to do: `{ok:true}`, nothing removed.
+        await backend.deleteTeamNote(teamId, req.params.id);
+        await syncTeamNotes();
+        res.json({ ok: true, source: 'team' });
+        return;
+      }
+      wired.notesStore.remove(req.params.id);
+      res.json({ ok: true, source: 'local' });
+    } catch (err) {
+      if (err instanceof BackendError) {
+        res.status(err.status).json({ error: err.message });
+        return;
+      }
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
   });
 
   /** Projects this GitLab token can read, flagged with whether they are

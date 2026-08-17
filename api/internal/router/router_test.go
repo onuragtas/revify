@@ -502,11 +502,26 @@ func TestNotesAreSharedAndOwnerManaged(t *testing.T) {
 		t.Fatalf("member does not see the note: %v", seen)
 	}
 
+	// Any member may add: a note is what someone learned while reviewing,
+	// and the reviewer is whoever picked up the issue.
 	byMember := h.call(t, "POST", "/api/teams/"+team+"/notes", bo.cookie, map[string]string{
-		"scope": "global", "text": "başka",
+		"scope": "global", "text": "Mongo tarafında retry kasıtlı",
 	})
-	if byMember.code != http.StatusForbidden {
-		t.Fatalf("a plain member added a note: %d", byMember.code)
+	if byMember.code != http.StatusCreated {
+		t.Fatalf("a member could not add a note: %d %v", byMember.code, byMember.body)
+	}
+
+	// Deleting is the owner's: removing someone else's standing rule
+	// changes every future review.
+	noteID := byMember.body["note"].(map[string]any)["id"].(string)
+	if res := h.call(t, "DELETE", "/api/teams/"+team+"/notes/"+noteID, bo.cookie, nil); res.code != http.StatusForbidden {
+		t.Fatalf("a member deleted a note: %d", res.code)
+	}
+	if res := h.call(t, "DELETE", "/api/teams/"+team+"/notes/"+noteID, ada.cookie, nil); res.code != http.StatusOK {
+		t.Fatalf("owner could not delete a note: %d %v", res.code, res.body)
+	}
+	if n := len(items(t, h.call(t, "GET", "/api/teams/"+team+"/notes", bo.cookie, nil))); n != 1 {
+		t.Fatalf("after deleting one of two notes, %d remain", n)
 	}
 }
 

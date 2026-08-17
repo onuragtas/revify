@@ -23,6 +23,22 @@ let tray: Tray | null = null;
 let quitting = false;
 let baseUrl = '';
 
+/*
+ * A packaged build is a release, and a release talks to the deployed
+ * backend.
+ *
+ * This used to be "baked in at build time" by setting REVIFY_ENV while CI
+ * ran `npm run build` — which did nothing at all. tsc does not substitute
+ * environment variables; backendUrl() reads REVIFY_ENV when it is *called*,
+ * and the installed app has no such variable. So every release shipped
+ * pointing at http://localhost:4322.
+ *
+ * Being packaged is the honest signal, and it cannot be forgotten in a
+ * workflow file. An explicit REVIFY_ENV still wins, for anyone pointing a
+ * build at a staging server.
+ */
+if (app.isPackaged && !process.env.REVIFY_ENV) process.env.REVIFY_ENV = 'production';
+
 const config = loadConfigOrExit();
 const wired = buildPipeline(config);
 const server = createServer(config, wired);

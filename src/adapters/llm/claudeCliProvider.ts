@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { claudeNotFoundMessage, resolveClaudeCli } from './resolveClaudeCli.js';
 import type { LlmProvider } from '../../core/types.js';
 
 const MAX_OUTPUT_BYTES = 20 * 1024 * 1024;
@@ -122,7 +123,14 @@ export function runCli(
       if (settled) return;
       settled = true;
       cleanup();
-      reject(err);
+      // ENOENT here means the binary was not where we looked. The default
+      // message — "spawn claude ENOENT" — names the symptom and hides the
+      // cause, which in a packaged app is almost always PATH.
+      reject(
+        (err as NodeJS.ErrnoException).code === 'ENOENT'
+          ? new Error(claudeNotFoundMessage())
+          : err,
+      );
     });
 
     child.on('close', (code) => {
@@ -254,7 +262,7 @@ export class ClaudeCliProvider implements LlmProvider {
     heartbeat?.unref?.();
 
     try {
-      const { stderr } = await runCli('claude', args, {
+      const { stderr } = await runCli(resolveClaudeCli(), args, {
         // Run inside the checkout so relative paths the model uses resolve
         // against the repo rather than this project.
         cwd: workdir,

@@ -96,4 +96,21 @@ export class NotesStore {
     this.data.notes = this.data.notes.filter((n) => n.id !== id);
     this.save();
   }
+
+  /**
+   * Replaces everything with the team's notes.
+   *
+   * This store doubles as the offline copy of what the team decided. A
+   * review reads it directly rather than calling the backend mid-run: a
+   * review that loses its standing rules because a server blinked would
+   * report findings the team had already agreed to ignore.
+   *
+   * Wholesale replacement, not a merge — a note deleted on the server has
+   * to disappear here too, and there is no local edit worth preserving
+   * once a team owns the list.
+   */
+  replaceAll(notes: ReviewNote[]): void {
+    this.data.notes = notes;
+    this.save();
+  }
 }
