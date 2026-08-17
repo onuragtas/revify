@@ -160,6 +160,38 @@ Nothing in `pipeline.ts`, `stateStore.ts`, `reviewStore.ts`, or the web
 server needs to change — they only know about the five interfaces, never a
 concrete adapter.
 
+## Where the backend lives
+
+The address ships with the build, not with a settings screen:
+
+| Build | Backend |
+|---|---|
+| `npm run app`, `npm run ui` (default) | `http://localhost:4322` |
+| `REVIFY_ENV=production npm run build` | the deployed service |
+
+It is a property of the build, not a preference: a reviewer has no way to
+know the address, no reason to care, and every chance to mistype it.
+`REVIFY_API_URL` overrides both — an operator's escape hatch for a staging
+box, not something the app surfaces.
+
+The app opens on a sign-in screen. Reviews still run on your machine
+against your own credentials; the backend only knows who you are, who is on
+your team, and who owes whom a review. If it cannot be reached and you have
+signed in before, the app opens anyway with a warning — locking someone out
+of their own machine's reviews because a server is down would trade real
+availability for no real safety.
+
+## Continuous integration
+
+| Pipeline | Builds | Runs |
+|---|---|---|
+| `.github/workflows/app.yml` | the app: typecheck, tests, smoke, packaged installers on `v*` tags | GitHub Actions, no secrets — fork pull requests run it in full |
+| `Jenkinsfile` | **only** the API: vet, race tests, static Linux binary, deploy | Jenkins, deploy gated on `main` + an explicit parameter |
+
+They ship to different places on different schedules — the API is one
+binary on one server, the app is installers people download — so they are
+two pipelines rather than one with a lot of `when`.
+
 ## Desktop app
 
 ```bash

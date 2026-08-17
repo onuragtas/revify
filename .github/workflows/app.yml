@@ -1,0 +1,156 @@
+# Build and test the Revify desktop app.
+#
+# This runs on a public repository, which shapes two things:
+#
+#   1. It needs no secrets. Pull requests from forks run the whole pipeline,
+#      because nothing here can reach a real Jira, GitLab or model — the
+#      build never creates config/config.yaml or .env with real values.
+#   2. Releases are built from tags only. A workflow that publishes on every
+#      push is a workflow that publishes a mistake.
+#
+# The API is not built here: it lives outside this repository and is built
+# and deployed by Jenkins.
+
+name: App
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+# A new push to the same branch makes the previous run irrelevant.
+concurrency:
+  group: app-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Typecheck, test, smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # `npm ci` rather than `install`: it installs exactly the lockfile and
+      # fails if package.json and the lock disagree, so CI cannot silently
+      # test a different dependency tree than a developer has.
+      - run: npm ci
+
+      - name: Guard against committed credentials
+        run: |
+          set -eu
+          if git grep -nIE "glpat-[A-Za-z0-9_-]{20}|ATATT[A-Za-z0-9_-]{20}|sk-ant-[A-Za-z0-9_-]{20}|xoxb-[0-9]{10,}" -- .; then
+            echo "::error::A credential appears to be committed. Rotate it, then remove it from history."
+            exit 1
+          fi
+          for tracked in .env config/config.yaml; do
+            if git ls-files --error-unmatch "$tracked" >/dev/null 2>&1; then
+              echo "::error::$tracked is tracked but must never be."
+              exit 1
+            fi
+          done
+
+      - run: npx tsc --noEmit
+      - run: npm test
+      - run: npm run build
+
+      # A compile that produces something unrunnable still passes tsc. The
+      # UI is a single file the build copies; if that copy breaks, every run
+      # mode serves a blank page.
+      - name: Files the build must produce
+        run: |
+          test -f dist/web/public/index.html
+          test -f dist/adapters/tasks/prompts/codeReview.md
+          test -f dist/desktop/main.js
+
+      - name: Smoke — the server starts and serves the UI
+        run: |
+          set -eu
+          cp config/config.example.yaml config/config.yaml
+          cat > .env <<'ENVEOF'
+          JIRA_BASE_URL=https://example.invalid
+          JIRA_EMAIL=ci@example.invalid
+          JIRA_API_TOKEN=ci-not-a-real-token
+          GITLAB_BASE_URL=https://example.invalid
+          GITLAB_TOKEN=ci-not-a-real-token
+          ENVEOF
+
+          UI_PORT=4399 node dist/web/index.js > smoke.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -fsS -o /dev/null "http://127.0.0.1:4399/" && break
+            [ "$i" = "30" ] && { cat smoke.log; exit 1; }
+            sleep 1
+          done
+
+          # The example config must ship with Jira writes off. If this flips,
+          # a fresh clone is one command away from commenting on real issues.
+          curl -fsS http://127.0.0.1:4399/api/outcome-config | grep -q '"applyChanges":false'
+
+      - name: The dev build must not point at production
+        run: |
+          set -eu
+          node -e "import('./dist/core/backendUrl.js').then(m=>{
+            if (m.isProductionBackend()) { console.error('a default build points at production'); process.exit(1); }
+            console.log('dev backend:', m.backendUrl());
+          })"
+          REVIFY_ENV=production node -e "import('./dist/core/backendUrl.js').then(m=>{
+            if (!m.isProductionBackend()) { console.error('REVIFY_ENV=production did not take'); process.exit(1); }
+            console.log('prod backend:', m.backendUrl());
+          })"
+
+  package:
+    name: Package (${{ matrix.os }})
+    # Only for tags: packaging downloads hundreds of MB per platform, and an
+    # unreleased commit has nobody to install it.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: check
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # One platform failing should not hide whether the others worked.
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      # REVIFY_ENV decides which backend the build talks to, and it is baked
+      # in at build time on purpose — see src/core/backendUrl.ts. A released
+      # app must point at the deployed service.
+      - name: Build for production
+        run: npm run build
+        env:
+          REVIFY_ENV: production
+
+      - name: Package
+        run: npx --yes electron-builder --publish never
+        env:
+          REVIFY_ENV: production
+          # Unsigned builds. Signing needs certificates, which are secrets,
+          # which fork pull requests must never see — so it is a separate,
+          # deliberate step rather than something this workflow assumes.
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: revify-${{ matrix.os }}
+          path: |
+            release/*.dmg
+            release/*.AppImage
+            release/*.exe
+          if-no-files-found: warn

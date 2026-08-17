@@ -5,12 +5,16 @@ dist/
 # electron-builder output.
 release/
 
-# The team API. Kept out of the public repo on purpose — it is a separate
-# service with its own users, sessions and database. The app works without
-# it: team features stay off until an API URL is configured, so removing
-# this directory changes nothing for anyone who clones the repo.
-api/
-~/.revify/settings.json
+# The API's build output and local databases. The source itself is tracked:
+# Jenkins builds it from this checkout, so keeping it out would leave the
+# pipeline pointing at a directory that never exists. There is nothing to
+# hide in it either — credentials arrive as Jenkins credentials, the
+# database lives on the server, and security here comes from the auth code,
+# not from nobody being able to read it.
+api/build/
+api/*.db
+api/*.db-shm
+api/*.db-wal
 
 # Credentials.
 .env
