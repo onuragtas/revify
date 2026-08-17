@@ -12,7 +12,7 @@ const app = createServer(config, wired);
 
 const server = app.listen(port, () => {
   console.log(`Revify UI running at http://localhost:${port}`);
-  if (config.autoPrepare.enabled) {
+  if (config.autoPrepare.enabled && config.setup.configured) {
     // Worth stating plainly: this is the one thing that runs on its own.
     // It only *prepares* a review — nothing reaches Jira without a click.
     console.log(
@@ -20,6 +20,12 @@ const server = app.listen(port, () => {
         'New issues are reviewed as they arrive; approving stays yours.',
     );
     app.autoPrepare.start();
+  } else if (config.autoPrepare.enabled) {
+    // Enabled but with nothing to poll for. Started anyway it asked Jira an
+    // empty question every couple of minutes, and Jira refused every one —
+    // an error loop that says nothing about the actual problem, which is
+    // that this machine has no team policy yet.
+    console.log(`Auto-prepare is waiting for setup: ${config.setup.missing.join(', ')}`);
   } else {
     console.log('Nothing runs automatically — open the page and pick an issue to review.');
   }

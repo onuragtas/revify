@@ -28,11 +28,13 @@ func New(repo *repository.Repository, sessionTTL time.Duration, build BuildInfo)
 	teamSvc := service.NewTeam(repo)
 	assignSvc := service.NewAssignment(repo, teamSvc)
 	settingsSvc := service.NewSettings(repo)
+	decisionSvc := service.NewDecision(repo)
 
 	authH := handler.NewAuth(authSvc)
 	teamH := handler.NewTeam(teamSvc)
 	assignH := handler.NewAssignment(assignSvc)
 	settingsH := handler.NewSettings(settingsSvc)
+	decisionH := handler.NewDecision(decisionSvc)
 
 	app := fiber.New(fiber.Config{
 		// One error shape for the whole API, including the failures Fiber
@@ -95,6 +97,12 @@ func New(repo *repository.Repository, sessionTTL time.Duration, build BuildInfo)
 	team.Get("/notes", settingsH.Notes)
 	team.Post("/notes", middleware.RequireOwner("notu eklemek"), settingsH.AddNote)
 	team.Delete("/notes/:noteID", middleware.RequireOwner("notu silmek"), settingsH.DeleteNote)
+
+	// Where reviews landed. Any member may record one — the decision has
+	// already reached Jira by the time this is called, so refusing it here
+	// would only lose the record, not prevent the change.
+	team.Get("/decisions", decisionH.ForTeam)
+	team.Post("/decisions", decisionH.Record)
 
 	return app
 }

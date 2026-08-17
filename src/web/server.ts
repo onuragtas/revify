@@ -4,11 +4,11 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { writeFileAtomic } from '../core/atomicWrite.js';
 import { SettingsStore, SETTINGS_DIR } from '../core/settingsStore.js';
-import { backendUrl, isProductionBackend } from '../core/backendUrl.js';
+import { backendUrl, defaultBackendUrl, isProductionBackend } from '../core/backendUrl.js';
 import { BackendClient, BackendError } from '../clients/backendClient.js';
 import { fileURLToPath } from 'node:url';
-import type { AppConfig } from '../config/loadConfig.js';
-import type { Wired } from '../core/registry.js';
+import { loadConfig, refreshSettingsOverrides, type AppConfig } from '../config/loadConfig.js';
+import { buildPipeline, type Wired } from '../core/registry.js';
 import { Pipeline } from '../core/pipeline.js';
 import { ReviewQueue } from '../core/reviewQueue.js';
 import { AutoPrepareWatcher } from '../core/autoPrepare.js';
@@ -47,7 +47,20 @@ export interface ServerEvents {
   'review:auto-queued': { issueKey: string; summary?: string; position: number };
 }
 
-export function createServer(config: AppConfig, wired: Wired) {
+export function createServer(initialConfig: AppConfig, initialWired: Wired) {
+  /*
+   * Rebindable on purpose.
+   *
+   * Saving a credential used to mean restarting the app: the clients were
+   * built once from the config read at startup, so the new value sat on
+   * disk doing nothing until the next launch. These are `let` so that
+   * reload() can swap in a freshly built set, and every reference below —
+   * there are eighty-odd — reads the current one at call time rather than
+   * a copy captured when the server was created.
+   */
+  let config = initialConfig;
+  let wired = initialWired;
+
   const app = express();
   // Backups run to megabytes — well past express's 100kb default, which
   // would reject an import with a bare 413.
@@ -60,7 +73,7 @@ export function createServer(config: AppConfig, wired: Wired) {
   const events = new EventEmitter();
   const emit = <K extends keyof ServerEvents>(name: K, payload: ServerEvents[K]) => events.emit(name, payload);
 
-  const pipeline = new Pipeline(config, wired);
+  let pipeline = new Pipeline(config, wired);
   // The one instance, shared with the pipeline — see Wired.stateStore.
   const state = wired.stateStore;
 
@@ -142,8 +155,15 @@ export function createServer(config: AppConfig, wired: Wired) {
     // for https://" tells a new user nothing, and this is the first screen
     // they see.
     if (!config.setup.configured) {
+      // Two different problems wear the same 409, so the message names the
+      // one you actually have: credentials are typed in, a policy is
+      // inherited from a team. Telling someone to enter credentials they
+      // already entered sends them looking in the wrong place.
+      const onlyPolicy = config.setup.missing.every((m) => m.includes('JQL'));
       res.status(409).json({
-        error: `Önce kimlik bilgilerini gir (⚙ Ayarlar): ${config.setup.missing.join(', ')}`,
+        error: onlyPolicy
+          ? 'Hangi issue\'ların inceleneceğini takım politikası belirler ve henüz bir takımın yok. ⚙ Ayarlar → Takım politikası\'ndan bir takım oluştur.'
+          : `Önce kimlik bilgilerini gir (⚙ Ayarlar): ${config.setup.missing.join(', ')}`,
         setupRequired: true,
       });
       return;
@@ -340,21 +360,62 @@ export function createServer(config: AppConfig, wired: Wired) {
       }
     }
 
-    res.json({
-      jiraBaseUrl: config.jira.baseUrl.replace(/\/$/, ''),
-      items: decided.map((r) => {
-        const current = live.get(r.issueKey);
-        return {
-          issueKey: r.issueKey,
-          summary: current?.summary ?? r.summary ?? null,
-          decision: r.status,
-          decidedAt: r.updatedAt,
-          rejectionReason: r.rejectionReason || null,
-          jiraStatus: current?.status ?? null,
-          assignee: current?.assignee ?? null,
-        };
-      }),
+    const items = decided.map((r) => {
+      const current = live.get(r.issueKey);
+      return {
+        issueKey: r.issueKey,
+        summary: current?.summary ?? r.summary ?? null,
+        // 'posted' is an approval that reached Jira; the list is about the
+        // call, not about which step of ours it stopped at.
+        decision: r.status === 'posted' ? 'approved' : r.status,
+        decidedAt: r.updatedAt,
+        rejectionReason: r.rejectionReason || null,
+        jiraStatus: current?.status ?? null,
+        assignee: current?.assignee ?? null,
+        severity: r.review ? worstSeverity(r.review.markdown) : '',
+        decidedByName: null as string | null,
+        local: true,
+      };
     });
+
+    /*
+     * The team's decisions, for issues this machine never reviewed.
+     *
+     * Local records win where both exist: they carry the live Jira state
+     * and the reviewer's own reason. What the server adds is the half a
+     * reviewer could not see before — what everyone else decided, so
+     * nobody re-reviews an issue a colleague sent back an hour ago.
+     *
+     * Failure is silent by design: the local list is the one this person
+     * needs, and losing it because a server is down would be a worse
+     * trade than showing it alone.
+     */
+    const teamId = settings.get('teamId');
+    if (backend.configured && teamId) {
+      try {
+        const known = new Set(items.map((i) => i.issueKey));
+        for (const d of await backend.decisions(teamId)) {
+          if (known.has(d.issueKey)) continue;
+          items.push({
+            issueKey: d.issueKey,
+            summary: d.summary ?? null,
+            decision: d.decision,
+            decidedAt: d.decidedAt ?? '',
+            rejectionReason: d.note || null,
+            jiraStatus: null,
+            assignee: null,
+            severity: d.severity ?? '',
+            decidedByName: d.decidedByName ?? null,
+            local: false,
+          });
+        }
+        items.sort((a, b) => String(b.decidedAt).localeCompare(String(a.decidedAt)));
+      } catch (err) {
+        console.warn(`[decisions] takım kararları okunamadı: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    res.json({ jiraBaseUrl: config.jira.baseUrl.replace(/\/$/, ''), items });
   });
 
   /** Reviews finished and waiting on a human. Its own view because it is
@@ -523,14 +584,16 @@ export function createServer(config: AppConfig, wired: Wired) {
       settings: settings.redacted(),
       settingsPath: SETTINGS_DIR,
       setup: config.setup,
+      // What the field falls back to when left empty.
+      defaultApiUrl: defaultBackendUrl(),
     });
   });
 
-  app.post('/api/settings', (req, res) => {
+  app.post('/api/settings', async (req, res) => {
     const textFields = [
       'jiraBaseUrl', 'jiraEmail', 'jiraApiToken',
       'gitlabBaseUrl', 'gitlabToken',
-      'anthropicApiKey', 'anthropicModel', 'repoCacheDir',
+      'anthropicApiKey', 'anthropicModel', 'repoCacheDir', 'apiUrl',
     ] as const;
     const boolFields = ['applyChanges', 'autoPrepareEnabled', 'useRepoCheckout'] as const;
     const numberFields = ['autoPreparePollMs'] as const;
@@ -557,14 +620,15 @@ export function createServer(config: AppConfig, wired: Wired) {
       return;
     }
 
-    // Credentials are read once, when the clients are constructed. Saying
-    // so is better than appearing to work until the next Jira call fails.
-    // Credentials and config are read once, when the app starts. Saying so
-    // is better than appearing to work until the next Jira call fails.
+    const applied = await reload();
+
     res.json({
       ok: true,
       settings: settings.redacted(),
-      restartRequired: Object.keys(patch).length > 0,
+      applied: applied.ok,
+      // Only when the rebuild itself failed — the values are saved either
+      // way, so this is "not in force yet", not "not saved".
+      applyError: applied.ok ? undefined : applied.error,
     });
   });
 
@@ -603,7 +667,7 @@ export function createServer(config: AppConfig, wired: Wired) {
     // Two states, not three: the backend address ships with the build, so
     // "which server?" is no longer a question anyone has to answer.
     const hasSession = Boolean(settings.get('apiSessionToken'));
-    const apiUrl = backendUrl();
+    const apiUrl = backendUrl(settings.get('apiUrl'));
 
     try {
       const user = await backend.me();
@@ -632,7 +696,7 @@ export function createServer(config: AppConfig, wired: Wired) {
   });
 
   app.get('/api/backend/me', async (_req, res) => {
-    const apiUrl = backendUrl();
+    const apiUrl = backendUrl(settings.get('apiUrl'));
     try {
       res.json({ configured: true, user: await backend.me(), apiUrl });
     } catch (err) {
@@ -642,12 +706,105 @@ export function createServer(config: AppConfig, wired: Wired) {
     }
   });
 
-  app.post('/api/backend/login', backendRoute(async (req) =>
-    ({ user: await backend.login(String(req.body?.email ?? ''), String(req.body?.password ?? '')) })));
+  /**
+   * Mirrors the team's policy locally, and writes the config file if this
+   * machine has none.
+   *
+   * This is what makes a bare clone work: no config file, open the app,
+   * sign in, and the JQL, workflow statuses and review language arrive from
+   * the team you belong to. Nobody copies an example file and edits YAML to
+   * find out what their team already decided.
+   *
+   * The file is written only when it is absent, and only once there is
+   * something real to put in it — writing a placeholder at startup would
+   * produce a config that looks configured while pointing at project
+   * "PROJ". The team's values still override the file afterwards, so
+   * editing it locally changes the defaults, not the policy.
+   *
+   * Never throws: a failure here means the sign-in still worked and the app
+   * runs on what it last knew.
+   */
+  async function fillConfigFromTeam(): Promise<{ teamId?: string; wroteConfig: boolean }> {
+    try {
+      const teams = await backend.teams();
+      const stored = settings.get('teamId');
+      // The stored team when it is still one of yours, otherwise the only
+      // one — guessing between several would silently pick someone's queue.
+      const team = teams.find((t) => t.id === stored) ?? (teams.length === 1 ? teams[0] : undefined);
+      if (!team) return { wroteConfig: false };
 
-  app.post('/api/backend/register', backendRoute(async (req) =>
-    ({ user: await backend.register(
-      String(req.body?.email ?? ''), String(req.body?.name ?? ''), String(req.body?.password ?? '')) })));
+      const data = (await backend.teamSettings(team.id)) as { settings?: Record<string, string> };
+      const s = data.settings ?? {};
+      settings.update({
+        teamId: team.id,
+        teamJql: s.jql ?? '',
+        teamApproveStatus: s.approveStatus ?? '',
+        teamRejectStatus: s.rejectStatus ?? '',
+        teamLanguage: s.language ?? '',
+      });
+      // Only once the team has a query worth writing. A team with no
+      // policy yet would otherwise leave a file carrying the example's
+      // `project = "PROJ"` — and because the file then exists, that
+      // placeholder is read as a real query: a queue that reports itself
+      // configured and stays empty forever, which is the state this whole
+      // change exists to prevent.
+      const wroteConfig = Boolean(s.jql?.trim()) && writeConfigFile(s);
+      return { teamId: team.id, wroteConfig };
+    } catch (err) {
+      console.warn(`[setup] team policy could not be fetched: ${err instanceof Error ? err.message : String(err)}`);
+      return { wroteConfig: false };
+    }
+  }
+
+  /** Writes config/config.yaml from the example, with the team's policy
+   * substituted in. Returns false when a config already exists (never
+   * overwrites yours) or the directory is not writable — a packaged app can
+   * sit in a read-only place, which is why a missing file is survivable in
+   * the first place. */
+  function writeConfigFile(policy: Record<string, string>): boolean {
+    const target = 'config/config.yaml';
+    const example = 'config/config.example.yaml';
+    if (existsSync(target) || !existsSync(example)) return false;
+    try {
+      let text = readFileSync(example, 'utf-8');
+      const replacements: Array<[RegExp, string | undefined]> = [
+        [/^(\s*jql:\s*).*$/m, policy.jql && `$1'${policy.jql.replace(/'/g, "''")}'`],
+        [/^(\s*approveStatus:\s*).*$/m, policy.approveStatus && `$1${policy.approveStatus}`],
+        [/^(\s*rejectStatus:\s*).*$/m, policy.rejectStatus && `$1${policy.rejectStatus}`],
+        [/^(\s*language:\s*).*$/m, policy.language && `$1${policy.language}`],
+      ];
+      for (const [pattern, value] of replacements) if (value) text = text.replace(pattern, value);
+      writeFileAtomic(target, text);
+      console.log(`[setup] ${target} written from the team's policy`);
+      return true;
+    } catch (err) {
+      console.warn(`[setup] ${target} could not be written: ${err instanceof Error ? err.message : String(err)}`);
+      return false;
+    }
+  }
+
+  app.post('/api/backend/login', backendRoute(async (req) => {
+    const user = await backend.login(String(req.body?.email ?? ''), String(req.body?.password ?? ''));
+    // After the session exists, not before: fetching a team's policy needs
+    // the session it authorises.
+    const filled = await fillConfigFromTeam();
+    // The policy that just arrived decides which issues are yours — it has
+    // to be in force now, not after a restart nobody asked for.
+    if (filled.teamId) await reload();
+    return { user, ...filled, applied: config.setup.configured };
+  }));
+
+  app.post('/api/backend/register', backendRoute(async (req) => {
+    const user = await backend.register(
+      String(req.body?.email ?? ''), String(req.body?.name ?? ''), String(req.body?.password ?? ''));
+    // A new account has no team yet, so there is usually nothing to pull —
+    // it runs anyway for the case where someone was invited before signing up.
+    const filled = await fillConfigFromTeam();
+    // The policy that just arrived decides which issues are yours — it has
+    // to be in force now, not after a restart nobody asked for.
+    if (filled.teamId) await reload();
+    return { user, ...filled, applied: config.setup.configured };
+  }));
 
   app.post('/api/backend/logout', backendRoute(async () => {
     await backend.logout();
@@ -656,8 +813,14 @@ export function createServer(config: AppConfig, wired: Wired) {
 
   app.get('/api/backend/teams', backendRoute(async () => ({ items: await backend.teams() })));
 
-  app.post('/api/backend/teams', backendRoute(async (req) =>
-    ({ team: await backend.createTeam(String(req.body?.name ?? '')) })));
+  app.post('/api/backend/teams', backendRoute(async (req) => {
+    const team = await backend.createTeam(String(req.body?.name ?? ''));
+    // The first team is the moment a fresh account gains a policy to follow.
+    settings.update({ teamId: (team as { id?: string })?.id ?? '' });
+    const filled = await fillConfigFromTeam();
+    if (filled.teamId) await reload();
+    return { team, ...filled, applied: config.setup.configured };
+  }));
 
   app.get('/api/backend/teams/:teamId/members', backendRoute(async (req) =>
     ({ items: await backend.members(req.params.teamId) })));
@@ -699,7 +862,9 @@ export function createServer(config: AppConfig, wired: Wired) {
       teamRejectStatus: saved.rejectStatus ?? '',
       teamLanguage: saved.language ?? '',
     });
-    return { settings: saved, restartRequired: true };
+    // Saved team-wide, mirrored locally, and in force here immediately.
+    const applied = await reload();
+    return { settings: saved, applied: applied.ok };
   }));
 
   app.post('/api/backend/teams/:teamId/assign', backendRoute(async (req) => {
@@ -941,7 +1106,60 @@ export function createServer(config: AppConfig, wired: Wired) {
 
     // Approve ends at 'posted'; a rejection is already its own end state.
     if (decision === 'approved') wired.reviewStore.upsert(issueKey, { status: 'posted' });
+
+    void publishDecision(issueKey, decision, String(patch.rejectionReason ?? ''));
     return { status: 200, body: { ok: true } };
+  }
+
+  /**
+   * The heaviest finding in a review.
+   *
+   * Severity is not stored as a field — it lives in the finding headings
+   * (`### blocking — file:line`), which is how the UI colours them. The
+   * team list wants one label per issue, and the honest one is the worst:
+   * an issue with a blocking finding is not "minor" because two minors
+   * came after it.
+   */
+  function worstSeverity(markdown: string): string {
+    const order = ['blocking', 'major', 'minor'];
+    const found = new Set(
+      [...markdown.matchAll(/^#{1,6}\s*(blocking|major|minor)\b/gim)].map((m) => m[1].toLowerCase()),
+    );
+    return order.find((level) => found.has(level)) ?? '';
+  }
+
+  /**
+   * Tells the team where a review landed.
+   *
+   * Called only after Jira has actually been written to — publishing an
+   * intention would leave teammates reading outcomes that never happened.
+   *
+   * Deliberately not awaited and never able to fail the request: the
+   * decision is already in Jira, and refusing to report success because a
+   * bookkeeping call timed out would leave the reviewer clicking a button
+   * that had, in fact, worked.
+   *
+   * The review text does not travel. What was written about someone's code
+   * is for whoever asked for it; the team needs the call, not the critique.
+   */
+  async function publishDecision(issueKey: string, decision: 'approved' | 'rejected', note: string): Promise<void> {
+    const teamId = settings.get('teamId');
+    if (!backend.configured || !teamId) return;
+
+    const record = wired.reviewStore.get(issueKey);
+    try {
+      await backend.recordDecision(teamId, {
+        issueKey,
+        decision,
+        severity: worstSeverity(record?.review?.markdown ?? ''),
+        summary: record?.summary ?? '',
+        note,
+      });
+    } catch (err) {
+      // Worth a line in the log and nothing more: the local record is
+      // still right, and the next decision publishes independently.
+      console.warn(`[decisions] ${issueKey} sunucuya yazılamadı: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   app.post('/api/reviews/:issueKey/approve', async (req, res) => {
@@ -962,34 +1180,41 @@ export function createServer(config: AppConfig, wired: Wired) {
    * Reviews new arrivals before anyone asks. Started by the entry point so
    * a test can build the server without a background poller running.
    */
-  const autoPrepare = new AutoPrepareWatcher(config.autoPrepare, {
-    trigger: wired.trigger,
-    state,
-    enqueue: (event) => {
-      wired.reviewStore.upsert(event.id, {
-        summary: typeof event.data.summary === 'string' ? event.data.summary : undefined,
-        trigger: 'auto',
-      });
-      // Auto runs clone nothing new: whatever is already in the cache is
-      // mounted as context anyway, and a surprise multi-GB clone is not
-      // something to start on a poll nobody asked for.
-      event.data.contextRepos = [];
-      const position = queue.enqueue(event);
-      emit('review:auto-queued', {
-        issueKey: event.id,
-        summary: typeof event.data.summary === 'string' ? event.data.summary : undefined,
-        position,
-      });
-      return position;
-    },
-    // A finished or in-flight review is never redone on a poll; re-reviewing
-    // is a judgement call, so it stays a button.
-    alreadyHandled: (issueKey) => {
-      const status = wired.reviewStore.get(issueKey)?.status;
-      return status !== undefined && status !== 'idle' && status !== 'cancelled';
-    },
-    log: (message) => console.log(`[auto-prepare] ${message}`),
-  });
+  /** Built through a factory because reload() replaces it: the watcher
+   * holds the poll interval and the trigger it was created with, and
+   * both change when the settings do. */
+  function makeAutoPrepare(): AutoPrepareWatcher {
+    return new AutoPrepareWatcher(config.autoPrepare, {
+      trigger: wired.trigger,
+      state,
+      enqueue: (event) => {
+        wired.reviewStore.upsert(event.id, {
+          summary: typeof event.data.summary === 'string' ? event.data.summary : undefined,
+          trigger: 'auto',
+        });
+        // Auto runs clone nothing new: whatever is already in the cache is
+        // mounted as context anyway, and a surprise multi-GB clone is not
+        // something to start on a poll nobody asked for.
+        event.data.contextRepos = [];
+        const position = queue.enqueue(event);
+        emit('review:auto-queued', {
+          issueKey: event.id,
+          summary: typeof event.data.summary === 'string' ? event.data.summary : undefined,
+          position,
+        });
+        return position;
+      },
+      // A finished or in-flight review is never redone on a poll; re-reviewing
+      // is a judgement call, so it stays a button.
+      alreadyHandled: (issueKey) => {
+        const status = wired.reviewStore.get(issueKey)?.status;
+        return status !== undefined && status !== 'idle' && status !== 'cancelled';
+      },
+      log: (message) => console.log(`[auto-prepare] ${message}`),
+    });
+  }
+
+  let autoPrepare = makeAutoPrepare();
 
   app.get('/api/auto-prepare', (_req, res) => {
     res.json({
@@ -998,6 +1223,51 @@ export function createServer(config: AppConfig, wired: Wired) {
       lastReviewAt: state.lastReviewAt(),
     });
   });
+
+  /**
+   * Rebuilds everything the settings feed, without restarting the process.
+   *
+   * A saved credential used to sit on disk until the next launch, because
+   * the Jira and GitLab clients were constructed once from the config read
+   * at startup. This re-reads the settings, re-resolves the config and
+   * builds a fresh set of adapters.
+   *
+   * The file-backed stores are carried over rather than rebuilt: two
+   * instances writing one file overwrite each other, which is how an
+   * approval once reported success while reaching Jira not at all.
+   *
+   * A review that is already running keeps the clients it started with —
+   * it holds its own references, and swapping them underneath a request
+   * in flight would be a stranger failure than any restart.
+   */
+  async function reload(): Promise<{ ok: true } | { ok: false; error: string }> {
+    try {
+      await refreshSettingsOverrides();
+      const next = loadConfig();
+      const nextWired = buildPipeline(next, {
+        reviewStore: wired.reviewStore,
+        stateStore: wired.stateStore,
+        notesStore: wired.notesStore,
+      });
+
+      autoPrepare.stop();
+      config = next;
+      wired = nextWired;
+      pipeline = new Pipeline(config, wired);
+      autoPrepare = makeAutoPrepare();
+      if (config.autoPrepare.enabled && config.setup.configured) autoPrepare.start();
+
+      console.log('[settings] applied without restart');
+      return { ok: true };
+    } catch (err) {
+      // The old wiring is still in place and still works: a config that
+      // fails to build is a reason to keep running on what was there, not
+      // to leave the app with no clients at all.
+      const error = err instanceof Error ? err.message : String(err);
+      console.error(`[settings] could not apply: ${error}`);
+      return { ok: false, error };
+    }
+  }
 
   /** Stops everything this server started. The HTTP listener is the
    * caller's to close — it owns it. */
@@ -1057,7 +1327,12 @@ export function createServer(config: AppConfig, wired: Wired) {
   });
 
   return Object.assign(app, {
-    autoPrepare,
+    // A getter: reload() replaces the watcher, and a caller holding the
+    // original would be starting one that is no longer wired to anything.
+    get autoPrepare() {
+      return autoPrepare;
+    },
+    reload,
     shutdown,
     events,
     pendingCount,

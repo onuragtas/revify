@@ -251,7 +251,12 @@ if (!app.requestSingleInstanceLock()) {
       const { port } = listener.address() as AddressInfo;
       baseUrl = `http://127.0.0.1:${port}`;
       console.log(`Revify desktop running at ${baseUrl}`);
-      if (config.autoPrepare.enabled) server.autoPrepare.start();
+      // Not before setup is complete: with no JQL to poll, this only
+      // produced a Jira error every interval — see web/index.ts.
+      if (config.autoPrepare.enabled && config.setup.configured) server.autoPrepare.start();
+      else if (config.autoPrepare.enabled) {
+        console.log(`Auto-prepare is waiting for setup: ${config.setup.missing.join(', ')}`);
+      }
 
       tray = new Tray(trayIcon());
       buildTrayMenu();

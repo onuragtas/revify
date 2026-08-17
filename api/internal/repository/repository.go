@@ -33,7 +33,7 @@ func Open(path string, log logger.Interface) (*Repository, error) {
 
 	if err := db.AutoMigrate(
 		&model.User{}, &model.Team{}, &model.TeamMember{}, &model.Session{}, &model.Assignment{},
-		&model.TeamSettings{}, &model.TeamNote{},
+		&model.TeamSettings{}, &model.TeamNote{}, &model.Decision{},
 	); err != nil {
 		return nil, err
 	}
@@ -246,4 +246,29 @@ func (r *Repository) CloseAssignment(teamID, issueKey string) (bool, error) {
 		Where("team_id = ? AND issue_key = ?", teamID, issueKey).
 		Update("status", model.StatusDone)
 	return result.RowsAffected > 0, result.Error
+}
+
+/* ------------------------------ decisions ----------------------------- */
+
+// RecordDecision overwrites the team's record for that issue: one current
+// outcome per issue, replaced when it is reviewed again.
+func (r *Repository) RecordDecision(decision model.Decision) error {
+	return r.db.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "team_id"}, {Name: "issue_key"}},
+		UpdateAll: true,
+	}).Create(&decision).Error
+}
+
+// DecisionsForTeam joins the decider's name in SQL rather than making the
+// caller resolve ids — the same reason AssignmentsForUser does.
+func (r *Repository) DecisionsForTeam(teamID string) ([]model.DecisionView, error) {
+	var views []model.DecisionView
+	err := r.db.Table("decisions").
+		Select("decisions.issue_key, decisions.decision, decisions.severity, "+
+			"decisions.summary, decisions.note, decisions.decided_at, users.name AS decided_by_name").
+		Joins("LEFT JOIN users ON users.id = decisions.decided_by").
+		Where("decisions.team_id = ?", teamID).
+		Order("decisions.decided_at DESC").
+		Scan(&views).Error
+	return views, err
 }

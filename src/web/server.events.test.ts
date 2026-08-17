@@ -26,7 +26,7 @@ function makeConfig(): AppConfig {
       notesFilePath: join(dir, 'notes.json'),
     },
     autoPrepare: { enabled: false, pollIntervalMs: 120000 },
-    setup: { configured: true, missing: [] },
+    setup: { configured: true, missing: [], configMissing: false },
     wiring: {
       trigger: 'x',
       contextCollectors: [],

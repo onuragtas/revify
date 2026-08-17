@@ -749,6 +749,8 @@
     border: 1px solid var(--border); border-radius: var(--radius-sm);
     margin-bottom: 0.35rem; font-size: 0.85rem;
   }
+  .teamCreateRow { display: flex; gap: 0.5rem; margin-top: 0.5rem; }
+  .teamCreateRow .input { flex: 1; min-width: 0; }
   .memberRow .role {
     font-size: 0.68rem; padding: 0.05rem 0.4rem; border-radius: 999px;
     background: var(--accent-soft); color: var(--accent-text);
@@ -1258,8 +1260,6 @@
       <label class="field"><span>Review dili</span><input id="setTeamLanguage" class="input" placeholder="Turkish" /></label>
       <div id="teamPolicyState" class="card-hint"></div>
 
-      <h4>Sunucu</h4>
-      <p class="card-hint" id="settingsBackendHint"></p>
       <div id="settingsResult" class="card-hint"></div>
     </div>
     <div class="modal-foot">
@@ -2669,7 +2669,7 @@
 
     bodyEl.innerHTML =
       '<table class="decisions"><thead><tr>' +
-      '<th>Issue</th><th>Özet</th><th>Kararım</th><th>Karar zamanı</th>' +
+      '<th>Issue</th><th>Özet</th><th>Karar</th><th>Veren</th><th>Karar zamanı</th>' +
       '<th>Jira durumu</th><th>Atanan</th>' +
       '</tr></thead><tbody>' +
       data.items
@@ -2678,7 +2678,7 @@
           // seeing them side by side is the whole point of this view.
           const jiraStatus = d.jiraStatus
             ? escapeHtml(d.jiraStatus)
-            : '<span class="muted">okunamadı</span>';
+            : '<span class="muted">' + (d.local ? 'okunamadı' : '—') + '</span>';
           return (
             '<tr>' +
             '<td class="nowrap"><a class="jiraLink" target="_blank" rel="noopener" href="' +
@@ -2689,7 +2689,13 @@
               ? '<div class="decisionReason">' + escapeHtml(d.rejectionReason) + '</div>'
               : '') +
             '</td>' +
-            '<td class="nowrap" data-label="Kararım">' + badgeHtml(d.decision) + '</td>' +
+            '<td class="nowrap" data-label="Karar">' + badgeHtml(d.decision) +
+              (d.severity ? ' <span class="sev sev-' + escapeHtml(d.severity) + '">' +
+                escapeHtml(d.severity) + '</span>' : '') + '</td>' +
+            // Whose call it was. A decision made on another machine has a
+            // name; your own does not need one.
+            '<td class="nowrap muted" data-label="Veren">' +
+              (d.local ? 'sen' : escapeHtml(d.decidedByName ?? 'takım')) + '</td>' +
             '<td class="nowrap muted" data-label="Karar zamanı">' + escapeHtml(formatDate(d.decidedAt)) + '</td>' +
             '<td class="nowrap" data-label="Jira durumu">' + jiraStatus + '</td>' +
             '<td class="nowrap muted" data-label="Atanan">' + escapeHtml(d.assignee ?? '—') + '</td>' +
@@ -2834,6 +2840,8 @@
     ['setTeamRejectStatus', 'rejectStatus'], ['setTeamLanguage', 'language'],
   ];
   let teamPolicyRole = null;
+  let teamPolicyTeamId = null;
+  let storedTeamId = null;
   // Secrets come back as booleans, never values — so the form shows whether
   // one is set and only sends a new one when you actually type it.
   const SECRET_FIELDS = ['jiraApiToken', 'gitlabToken', 'anthropicApiKey'];
@@ -2873,11 +2881,54 @@
     document.getElementById('setAutoPreparePollMs').value =
       data.settings.autoPreparePollMs ? Math.round(data.settings.autoPreparePollMs / 1000) : '';
 
-    document.getElementById('settingsBackendHint').innerHTML =
-      'Bu sürüm <b>' + escapeHtml(teamState.apiUrl || '—') + '</b> sunucusuna bağlanır. ' +
-      'Adres uygulamayla birlikte gelir; ayar değildir.';
-
     await loadTeamPolicy();
+  }
+
+  /**
+   * No team yet — create one from here. Whoever creates it owns it, which
+   * is why this is offered rather than done automatically: it decides who
+   * gets to set the policy everyone else follows.
+   *
+   * The name is typed into a field rather than a prompt(): Electron does
+   * not implement prompt() at all, so the dialog this used to open threw
+   * and the button did nothing.
+   */
+  function offerTeam() {
+    const stateEl = document.getElementById('teamPolicyState');
+    TEAM_FIELDS.forEach(([id]) => { document.getElementById(id).disabled = true; });
+    stateEl.innerHTML =
+      '<div>Henüz bir takımın yok — politikayı belirlemek için bir takım kur.</div>' +
+      '<div class="teamCreateRow">' +
+      '<input id="teamPolicyName" class="input" placeholder="Takım adı" />' +
+      '<button type="button" class="btn primary small" id="teamPolicyCreate">Oluştur</button>' +
+      '</div>';
+
+    const nameEl = document.getElementById('teamPolicyName');
+    nameEl.value = (teamState.user?.name || '') ? teamState.user.name + ' takımı' : '';
+
+    const create = async () => {
+      const name = nameEl.value.trim();
+      if (!name) return nameEl.focus();
+      stateEl.textContent = 'Oluşturuluyor…';
+      try {
+        const res = await fetch('/api/backend/teams', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }),
+        });
+        const data = await res.json();
+        if (data.error) return disableTeamPolicy('Takım oluşturulamadı: ' + data.error);
+        storedTeamId = data.team?.id ?? null;
+        await loadTeamPolicy();
+      } catch (err) {
+        disableTeamPolicy('Takım oluşturulamadı: ' + err);
+      }
+    };
+    document.getElementById('teamPolicyCreate').addEventListener('click', create);
+    nameEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') create(); });
+  }
+
+  function disableTeamPolicy(why) {
+    TEAM_FIELDS.forEach(([id]) => { document.getElementById(id).disabled = true; });
+    document.getElementById('teamPolicyState').textContent = why;
   }
 
   /** Mirrors the team's policy into the form. Read-only for members: a JQL
@@ -2898,11 +2949,20 @@
     } catch (err) {
       return disable('Sunucuya ulaşılamadı: ' + err);
     }
-    if (!teams.length) return disable('Henüz bir takımın yok.');
+    // A fresh account has no team, so the policy it would follow does not
+    // exist yet. Saying so and stopping made this a dead end — the way out
+    // is one click, so it belongs here rather than in another screen.
+    if (!teams.length) return offerTeam();
+
+    // The team this machine already follows, not simply the first one:
+    // with two teams, "the first" is whichever the server happened to
+    // return, and the queue you get is then a coin toss.
+    const team = teams.find((t) => t.id === storedTeamId) ?? teams[0];
+    teamPolicyTeamId = team.id;
 
     let data;
     try {
-      data = await (await fetch('/api/backend/teams/' + encodeURIComponent(teams[0].id) + '/settings')).json();
+      data = await (await fetch('/api/backend/teams/' + encodeURIComponent(team.id) + '/settings')).json();
     } catch (err) {
       return disable('Politika okunamadı: ' + err);
     }
@@ -2915,8 +2975,8 @@
       el.disabled = data.role !== 'owner';
     }
     stateEl.textContent = data.role === 'owner'
-      ? teams[0].name + ' — sahibi sensin, değiştirebilirsin.'
-      : teams[0].name + ' — takım sahibi belirler, sen yalnızca görürsün.';
+      ? team.name + ' — sahibi sensin, değiştirebilirsin.'
+      : team.name + ' — takım sahibi belirler, sen yalnızca görürsün.';
   }
 
   document.getElementById('settingsBtn').addEventListener('click', async () => {
@@ -2960,12 +3020,11 @@
       }
       // The team half is a separate call: it goes to the server, and only
       // an owner may make it.
-      if (teamPolicyRole === 'owner') {
-        const teams = (await (await fetch('/api/backend/teams')).json()).items ?? [];
-        if (teams.length) {
+      if (teamPolicyRole === 'owner' && teamPolicyTeamId) {
+        {
           const policy = {};
           TEAM_FIELDS.forEach(([id, key]) => { policy[key] = document.getElementById(id).value.trim(); });
-          const teamRes = await fetch('/api/backend/teams/' + encodeURIComponent(teams[0].id) + '/settings', {
+          const teamRes = await fetch('/api/backend/teams/' + encodeURIComponent(teamPolicyTeamId) + '/settings', {
             method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(policy),
           });
           const teamData = await teamRes.json();
@@ -2976,9 +3035,12 @@
         }
       }
 
-      resultEl.textContent = data.restartRequired
-        ? 'Kaydedildi. Ayarlar açılışta okunduğu için uygulamayı yeniden başlatman gerekiyor.'
-        : 'Kaydedildi.';
+      // Applied means the clients were rebuilt on the spot. A failure here
+      // is "saved but not in force", which is a different thing from "not
+      // saved" — and the difference decides whether you try again.
+      resultEl.textContent = data.applied === false
+        ? 'Kaydedildi, ama uygulanamadı: ' + (data.applyError || 'bilinmeyen hata')
+        : 'Kaydedildi ve uygulandı.';
       await loadSettings();
       await loadTeamIdentity();
     } catch (err) {

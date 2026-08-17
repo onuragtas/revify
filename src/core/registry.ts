@@ -52,12 +52,21 @@ export interface Wired {
  * relevant registry map below (and, if needed, one small adapter file),
  * then reference its name from config.yaml — nothing else changes.
  */
-export function buildPipeline(config: AppConfig): Wired {
+/** The file-backed stores. Handed back in on a rebuild: two instances over
+ * one file overwrite each other's writes, which is exactly how an approval
+ * once reported success while reaching nothing. */
+export interface Stores {
+  reviewStore: ReviewStore;
+  stateStore: StateStore;
+  notesStore: NotesStore;
+}
+
+export function buildPipeline(config: AppConfig, keep?: Stores): Wired {
   const jiraClient = new JiraClient(config.jira);
   const gitlabClient = new GitlabClient(config.gitlab);
-  const reviewStore = new ReviewStore(config.reviewsFilePath);
-  const stateStore = new StateStore(config.stateFilePath);
-  const notesStore = new NotesStore(config.review.notesFilePath);
+  const reviewStore = keep?.reviewStore ?? new ReviewStore(config.reviewsFilePath);
+  const stateStore = keep?.stateStore ?? new StateStore(config.stateFilePath);
+  const notesStore = keep?.notesStore ?? new NotesStore(config.review.notesFilePath);
 
   const llmProviders: Record<string, () => LlmProvider> = {
     // Shells out to the `claude` CLI — uses your Claude Code subscription's

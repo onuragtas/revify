@@ -642,3 +642,76 @@ func TestSessionCookieIsSecureBehindTLS(t *testing.T) {
 		}
 	}
 }
+
+/* ------------------------------ decisions ----------------------------- */
+
+func TestDecisionsAreSharedAcrossTheTeam(t *testing.T) {
+	h := newHarness(t)
+	ada, bo, team := h.teamOfTwo(t)
+
+	// The point of moving these to the server: Bo's machine has never seen
+	// this issue, and still knows where it landed.
+	res := h.call(t, "POST", "/api/teams/"+team+"/decisions", ada.cookie, map[string]string{
+		"issueKey": "BUY-2455", "decision": "rejected", "severity": "major",
+		"summary": "Barcode listing", "note": "Outbox eksik",
+	})
+	if res.code != http.StatusOK {
+		t.Fatalf("record: %d %v", res.code, res.body)
+	}
+
+	seen := items(t, h.call(t, "GET", "/api/teams/"+team+"/decisions", bo.cookie, nil))
+	if len(seen) != 1 {
+		t.Fatalf("team mate sees %d decisions", len(seen))
+	}
+	got := seen[0].(map[string]any)
+	if got["issueKey"] != "BUY-2455" || got["decision"] != "rejected" ||
+		got["severity"] != "major" || got["decidedByName"] != "Ada" {
+		t.Fatalf("unexpected decision: %v", got)
+	}
+}
+
+func TestReReviewReplacesTheDecision(t *testing.T) {
+	h := newHarness(t)
+	ada, _, team := h.teamOfTwo(t)
+
+	h.call(t, "POST", "/api/teams/"+team+"/decisions", ada.cookie,
+		map[string]string{"issueKey": "BUY-1", "decision": "rejected"})
+	h.call(t, "POST", "/api/teams/"+team+"/decisions", ada.cookie,
+		map[string]string{"issueKey": "BUY-1", "decision": "approved"})
+
+	// One row, the current one: the list answers "where did this end up?".
+	all := items(t, h.call(t, "GET", "/api/teams/"+team+"/decisions", ada.cookie, nil))
+	if len(all) != 1 || all[0].(map[string]any)["decision"] != "approved" {
+		t.Fatalf("re-review did not replace: %v", all)
+	}
+}
+
+func TestDecisionRejectsAnythingButApprovedOrRejected(t *testing.T) {
+	h := newHarness(t)
+	ada, _, team := h.teamOfTwo(t)
+
+	for _, bad := range []map[string]string{
+		{"issueKey": "BUY-1", "decision": "maybe"},
+		{"issueKey": "", "decision": "approved"},
+	} {
+		if res := h.call(t, "POST", "/api/teams/"+team+"/decisions", ada.cookie, bad); res.code != http.StatusBadRequest {
+			t.Fatalf("accepted %v: %d", bad, res.code)
+		}
+	}
+}
+
+func TestDecisionsAreHiddenFromOutsiders(t *testing.T) {
+	h := newHarness(t)
+	ada, _, team := h.teamOfTwo(t)
+	outsider := h.signUp(t, "z@example.com", "Zoe")
+	h.call(t, "POST", "/api/teams/"+team+"/decisions", ada.cookie,
+		map[string]string{"issueKey": "BUY-1", "decision": "approved"})
+
+	if res := h.call(t, "GET", "/api/teams/"+team+"/decisions", outsider.cookie, nil); res.code != http.StatusForbidden {
+		t.Fatalf("outsider read the team's decisions: %d", res.code)
+	}
+	if res := h.call(t, "POST", "/api/teams/"+team+"/decisions", outsider.cookie,
+		map[string]string{"issueKey": "BUY-2", "decision": "approved"}); res.code != http.StatusForbidden {
+		t.Fatalf("outsider wrote a decision: %d", res.code)
+	}
+}

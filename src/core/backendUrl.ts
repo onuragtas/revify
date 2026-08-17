@@ -10,16 +10,19 @@
  *   - production  → the deployed service
  *   - anything else (dev, test) → a backend on this machine
  *
- * `REVIFY_API_URL` overrides both. That is an operator's escape hatch — for
- * a staging box, or someone self-hosting the whole thing — not a setting
- * the app surfaces. Nothing in the UI reads or writes it.
+ * Two ways to override, in order: the address saved in settings (what the
+ * settings screen writes), then `REVIFY_API_URL` for an operator who wants
+ * to point a build somewhere without opening it.
+ *
+ * The build's value is the default, not a lock: a staging box, a colleague
+ * running their own backend, or a moved server should not need a new build.
  */
 const PRODUCTION_URL = 'https://revify.resoft.org';
 const DEVELOPMENT_URL = 'http://localhost:4322';
 
-export function backendUrl(): string {
-  const override = process.env.REVIFY_API_URL?.trim();
-  if (override) return override.replace(/\/$/, '');
+export function backendUrl(override?: string): string {
+  const chosen = override?.trim() || process.env.REVIFY_API_URL?.trim();
+  if (chosen) return chosen.replace(/\/$/, '');
 
   // REVIFY_ENV is set by the build; NODE_ENV is honoured too so a plain
   // `NODE_ENV=production node dist/...` behaves the way anyone would expect.
@@ -27,8 +30,15 @@ export function backendUrl(): string {
   return env === 'production' ? PRODUCTION_URL : DEVELOPMENT_URL;
 }
 
-/** True when this build talks to the deployed service. Shown in the UI so
- * nobody has to guess which one they are signed in to. */
+/** The address this build was made with, ignoring any override. Shown as
+ * the settings field's placeholder so "leave it empty" has a visible
+ * meaning. */
+export function defaultBackendUrl(): string {
+  const env = (process.env.REVIFY_ENV ?? process.env.NODE_ENV ?? '').toLowerCase();
+  return env === 'production' ? PRODUCTION_URL : DEVELOPMENT_URL;
+}
+
+/** True when this build talks to the deployed service. */
 export function isProductionBackend(): boolean {
   return backendUrl() === PRODUCTION_URL;
 }

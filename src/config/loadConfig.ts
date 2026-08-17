@@ -3,7 +3,7 @@ import { config as loadDotenv } from 'dotenv';
 import { load as parseYaml } from 'js-yaml';
 import { z, ZodError } from 'zod';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 
 loadDotenv();
 
@@ -12,14 +12,27 @@ loadDotenv();
 // before the env schema is read, and tolerant of a missing/corrupt file so
 // a bad settings file can never make the app unstartable.
 let overrides: Record<string, unknown> = {};
-try {
-  const { SettingsStore, applySettingsToEnv, configOverrides } = await import('../core/settingsStore.js');
-  const store = new SettingsStore();
-  applySettingsToEnv(store);
-  overrides = configOverrides(store);
-} catch (err) {
-  console.warn('[settings] could not apply local settings:', err instanceof Error ? err.message : err);
+
+/**
+ * Re-reads the settings file and re-applies what it implies.
+ *
+ * Called once at import, and again whenever the settings screen saves —
+ * which is what lets a change take effect without restarting. Computing
+ * this only at import was the reason a saved setting used to need a
+ * restart: the value on disk had changed, but nothing ever looked again.
+ */
+export async function refreshSettingsOverrides(): Promise<void> {
+  try {
+    const { SettingsStore, applySettingsToEnv, configOverrides } = await import('../core/settingsStore.js');
+    const store = new SettingsStore();
+    applySettingsToEnv(store);
+    overrides = configOverrides(store);
+  } catch (err) {
+    console.warn('[settings] could not apply local settings:', err instanceof Error ? err.message : err);
+  }
 }
+
+await refreshSettingsOverrides();
 
 /** Applies dotted overrides onto the parsed YAML, in place. config.yaml
  * keeps the defaults and the wiring; this is what a person or a team
@@ -46,28 +59,34 @@ if (process.env.ANTHROPIC_API_KEY === '') {
   delete process.env.ANTHROPIC_API_KEY;
 }
 
+/** Defaulted field by field, so a config file that sets only `task:` keeps
+ * the rest of the standard pipeline instead of failing to parse. */
 const wiringSchema = z.object({
-  trigger: z.string(),
-  contextCollectors: z.array(z.string()),
-  task: z.string(),
-  llm: z.string(),
-  approval: z.string(),
-  action: z.string(),
+  trigger: z.string().default('jiraStatusPoll'),
+  contextCollectors: z.array(z.string()).default(['jiraIssueContext', 'gitlabBranchDiffContext']),
+  task: z.string().default('codeReview'),
+  llm: z.string().default('claudeCli'),
+  approval: z.string().default('webApproval'),
+  action: z.string().default('jiraReviewOutcome'),
 });
 
 const yamlConfigSchema = z.object({
-  pollIntervalMs: z.number().int().positive(),
-  approvalPollIntervalMs: z.number().int().positive(),
-  stateFilePath: z.string(),
+  pollIntervalMs: z.number().int().positive().default(60000),
+  approvalPollIntervalMs: z.number().int().positive().default(20000),
+  stateFilePath: z.string().default('./data/state.json'),
   reviewsFilePath: z.string().default('./data/reviews.json'),
   jira: z.object({
-    jql: z.string(),
+    /* Empty by default rather than a placeholder: there is no sensible
+     * guess at which issues are yours, and a placeholder that matches
+     * nothing looks like a working queue that never fills. Empty is
+     * reported as missing, and the team's policy fills it after sign-in. */
+    jql: z.string().default(''),
     /** Off by default: Jira changes are visible to the whole team and
      * awkward to undo, so live writes are an explicit opt-in. */
     applyChanges: z.boolean().default(false),
     approveStatus: z.string().default('Ready for Stage'),
     rejectStatus: z.string().default('In Development'),
-  }),
+  }).default({}),
   review: z
     .object({
       language: z.string().default('English'),
@@ -96,7 +115,7 @@ const yamlConfigSchema = z.object({
       pollIntervalMs: z.number().int().positive().default(120000),
     })
     .default({ enabled: false, pollIntervalMs: 120000 }),
-  wiring: wiringSchema,
+  wiring: wiringSchema.default({}),
 });
 
 /**
@@ -140,7 +159,7 @@ export interface AppConfig {
   autoPrepare: { enabled: boolean; pollIntervalMs: number };
   /** Whether this install has everything it needs to talk to Jira and
    * GitLab. False is a first-run state, not a failure. */
-  setup: { configured: boolean; missing: string[] };
+  setup: { configured: boolean; missing: string[]; configMissing: boolean };
   wiring: Wiring;
   jira: {
     baseUrl: string;
@@ -156,26 +175,59 @@ export interface AppConfig {
   anthropic: { apiKey?: string; model: string };
 }
 
-/** Config file absent — a setup step, not a crash. */
-export class MissingConfigError extends Error {
-  constructor(readonly configPath: string) {
-    super(`Config file not found: ${configPath}`);
-    this.name = 'MissingConfigError';
-  }
-}
-
 /** `~/x` -> `/home/you/x`. Shells expand this, config files do not. */
 function expandHome(p: string): string {
   return p.startsWith('~/') ? join(homedir(), p.slice(2)) : p;
 }
 
+/**
+ * Where `./data/state.json` actually lands.
+ *
+ * Relative paths in the config are relative to the checkout — which is
+ * right when you are running from one. An installed app has no checkout:
+ * its working directory is wherever the launcher happened to be (`/` on
+ * macOS), so `./data` meant a write to the root of the disk, and the app
+ * that could not find a config also could not save a thing.
+ *
+ * So: no config file means no checkout, and the data belongs with the
+ * settings, in the home directory. With a checkout, nothing changes — the
+ * data that is already in ./data stays where it is.
+ */
+function dataPath(p: string, baseDir: string): string {
+  const expanded = expandHome(p);
+  return isAbsolute(expanded) ? expanded : resolve(baseDir, expanded);
+}
+
 export function loadConfig(configPath = 'config/config.yaml'): AppConfig {
-  // Not in the repo on purpose — it holds your JQL and the switches that
-  // decide whether this writes to Jira, so it is yours to create.
-  if (!existsSync(configPath)) {
-    throw new MissingConfigError(configPath);
-  }
-  const rawYaml = parseYaml(readFileSync(configPath, 'utf-8')) as Record<string, any>;
+  /*
+   * A missing config file is a first run, not a failure.
+   *
+   * It used to exit here — which for the desktop app meant the process died
+   * before a window existed: you double-click and nothing happens, with the
+   * explanation in a terminal nobody opened. The same mistake as requiring
+   * credentials to start, in the one place it was not fixed.
+   *
+   * The example is the fallback because its defaults are the safe ones:
+   * Jira writes off, auto-prepare off. Failing that, the schema's own
+   * defaults. Either way the app opens and can say what is missing.
+   */
+  const examplePath = join(dirname(configPath), 'config.example.yaml');
+  const usedPath = existsSync(configPath)
+    ? configPath
+    : existsSync(examplePath)
+      ? examplePath
+      : null;
+  const configMissing = usedPath !== configPath;
+
+  const rawYaml = (usedPath ? parseYaml(readFileSync(usedPath, 'utf-8')) : {}) as Record<string, any>;
+
+  // The example's JQL is an illustration — `project = "PROJ"` — and it
+  // matches nothing. Inherited as-is it produced the worst possible state:
+  // a queue that reports itself configured and stays empty forever. The
+  // example lends its defaults and its wiring, not its query.
+  if (configMissing && rawYaml.jira) delete rawYaml.jira.jql;
+
+  // After the deletion, so a team policy or an env override still wins.
   applyOverrides(rawYaml);
   const yamlConfig = yamlConfigSchema.parse(rawYaml);
   const env = envSchema.parse(process.env);
@@ -188,14 +240,30 @@ export function loadConfig(configPath = 'config/config.yaml'): AppConfig {
     ['GITLAB_TOKEN', 'GitLab token'],
   ];
   const missing = required.filter(([key]) => !env[key]).map(([, label]) => label);
+  // A JQL is not something to default: without it there is no queue, and
+  // the team's policy supplies it once you sign in.
+  if (!yamlConfig.jira.jql.trim()) missing.push('takım politikası (JQL)');
+
+  /*
+   * The checkout, when there is one — and the example file is what proves
+   * it: an installed app ships neither config file, a checkout has at
+   * least the example. Keying off the *missing* config instead would have
+   * moved the data of anyone who merely deleted their config.yaml,
+   * hiding a review history that was sitting right there in ./data.
+   */
+  const baseDir = usedPath ? process.cwd() : join(homedir(), '.revify');
 
   return {
-    setup: { configured: missing.length === 0, missing },
+    setup: { configured: missing.length === 0, missing, configMissing },
     pollIntervalMs: yamlConfig.pollIntervalMs,
     approvalPollIntervalMs: yamlConfig.approvalPollIntervalMs,
-    stateFilePath: yamlConfig.stateFilePath,
-    reviewsFilePath: yamlConfig.reviewsFilePath,
-    review: { ...yamlConfig.review, repoCacheDir: expandHome(yamlConfig.review.repoCacheDir) },
+    stateFilePath: dataPath(yamlConfig.stateFilePath, baseDir),
+    reviewsFilePath: dataPath(yamlConfig.reviewsFilePath, baseDir),
+    review: {
+      ...yamlConfig.review,
+      repoCacheDir: expandHome(yamlConfig.review.repoCacheDir),
+      notesFilePath: dataPath(yamlConfig.review.notesFilePath, baseDir),
+    },
     autoPrepare: yamlConfig.autoPrepare,
     wiring: yamlConfig.wiring,
     jira: {
@@ -219,12 +287,6 @@ export function loadConfigOrExit(configPath?: string): AppConfig {
   try {
     return loadConfig(configPath);
   } catch (err) {
-    if (err instanceof MissingConfigError) {
-      console.error(`Config file not found: ${err.configPath}`);
-      console.error('\nRun:  cp config/config.example.yaml config/config.yaml');
-      console.error('then edit its `jira.jql` to match your project.');
-      process.exit(1);
-    }
     if (err instanceof ZodError) {
       console.error('Config/environment validation failed. Missing or invalid fields:');
       for (const issue of err.issues) {

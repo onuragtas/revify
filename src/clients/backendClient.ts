@@ -31,6 +31,16 @@ export class BackendError extends Error {
  * and a second place for the session to live. This way the page only ever
  * talks to its own server, and the session sits in a 0600 file.
  */
+export interface TeamDecision {
+  issueKey: string;
+  decision: 'approved' | 'rejected';
+  severity?: string;
+  summary?: string;
+  note?: string;
+  decidedAt?: string;
+  decidedByName?: string;
+}
+
 export class BackendClient {
   constructor(private readonly settings: SettingsStore) {}
 
@@ -41,8 +51,10 @@ export class BackendClient {
     return Boolean(backendUrl());
   }
 
+  /** Read per request, not cached: changing the address in settings takes
+   * effect on the next call instead of the next restart. */
   private baseUrl(): string {
-    return backendUrl();
+    return backendUrl(this.settings.get('apiUrl'));
   }
 
   private async request<T>(
@@ -159,6 +171,22 @@ export class BackendClient {
       { method: 'PUT', body: JSON.stringify(settings) },
     );
     return data.settings;
+  }
+
+  /** Where reviews landed, for the whole team. */
+  async decisions(teamId: string): Promise<TeamDecision[]> {
+    const { data } = await this.request<{ items: TeamDecision[] }>(
+      `/api/teams/${encodeURIComponent(teamId)}/decisions`,
+    );
+    return data.items ?? [];
+  }
+
+  /** Publishes a decision that has already reached Jira. */
+  async recordDecision(teamId: string, decision: Omit<TeamDecision, 'decidedAt' | 'decidedByName'>) {
+    await this.request(`/api/teams/${encodeURIComponent(teamId)}/decisions`, {
+      method: 'POST',
+      body: JSON.stringify(decision),
+    });
   }
 
   async teamNotes(teamId: string) {

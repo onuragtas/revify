@@ -134,3 +134,42 @@ type AssignmentView struct {
 	AssignedByName  string    `json:"assignedByName,omitempty"`
 	AssignedByEmail string    `json:"assignedByEmail,omitempty"`
 }
+
+// Decision is where a review landed: approved and posted, or sent back.
+//
+// The composite key is team+issue, so an issue that is reviewed a second
+// time replaces its own row — the list answers "where did this end up?",
+// not "how many times did we look at it?".
+//
+// It carries no review text. What was written about someone's code is for
+// the person who asked; the team only needs to know the call.
+type Decision struct {
+	TeamID   string `gorm:"primaryKey" json:"teamId"`
+	IssueKey string `gorm:"primaryKey" json:"issueKey"`
+	// DecisionApproved or DecisionRejected.
+	Decision string `gorm:"index;not null" json:"decision"`
+	Severity string `json:"severity,omitempty"`
+	Summary  string `json:"summary,omitempty"`
+	// The reviewer's own words when sending something back. Optional: the
+	// review itself already explains why.
+	Note      string    `json:"note,omitempty"`
+	DecidedBy string    `gorm:"not null" json:"decidedBy"`
+	DecidedAt time.Time `gorm:"index" json:"decidedAt"`
+}
+
+const (
+	DecisionApproved = "approved"
+	DecisionRejected = "rejected"
+)
+
+// DecisionView is a Decision with the decider's name resolved, so a client
+// can render a row without a second request per person.
+type DecisionView struct {
+	IssueKey      string    `json:"issueKey"`
+	Decision      string    `json:"decision"`
+	Severity      string    `json:"severity,omitempty"`
+	Summary       string    `json:"summary,omitempty"`
+	Note          string    `json:"note,omitempty"`
+	DecidedAt     time.Time `json:"decidedAt"`
+	DecidedByName string    `json:"decidedByName,omitempty"`
+}

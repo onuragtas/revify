@@ -44,6 +44,10 @@ export interface Settings {
   teamLanguage?: string;
   teamId?: string;
 
+  /** Overrides the address that ships with the build. Empty means "use the
+   * build's own" — see backendUrl(). Applied on the next request rather
+   * than at startup, so changing it takes effect immediately. */
+  apiUrl?: string;
   /** The session this machine holds with the team API. Kept server-side
    * rather than in a browser cookie: a cookie on localhost is readable by
    * anything else the user runs on localhost. */
