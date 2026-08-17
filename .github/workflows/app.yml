@@ -1,13 +1,13 @@
-# Build and test the Revify desktop app.
+# Build, package and release the Revify desktop app.
 #
 # This runs on a public repository, which shapes two things:
 #
-#   1. It needs no secrets. Pull requests from forks run the whole pipeline,
-#      because nothing here can reach a real Jira, GitLab or model — the
-#      build never creates config/config.yaml or .env with real values.
-#   2. Every push to master produces installers you can download from the
-#      run. Only a `v*` tag publishes a Release — a workflow that released
-#      on every push is a workflow that releases a mistake.
+#   1. It needs no secrets beyond the token GitHub already provides. Pull
+#      requests from forks run the checks in full, because nothing here can
+#      reach a real Jira, GitLab or model.
+#   2. Every push to master releases. The version is worked out here rather
+#      than tagged by hand — a release that needs someone to remember a
+#      command is a release that stops happening.
 #
 # The API's source lives in this repository too, but Jenkins builds and
 # deploys it (see the Jenkinsfile): one binary on one server is a different
@@ -109,13 +109,51 @@ jobs:
             console.log('prod backend:', m.backendUrl());
           })"
 
-  package:
-    name: Package (${{ matrix.os }})
-    # Every push to the default branch, and every tag. Pull requests are
-    # excluded: packaging downloads hundreds of MB per platform, and a
-    # proposed change has nobody to install it yet.
+  version:
+    name: Work out the version
     if: github.event_name != 'pull_request'
     needs: check
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.pick.outputs.version }}
+      tag: ${{ steps.pick.outputs.tag }}
+    steps:
+      # Tags are the record of what has been released, so the whole history
+      # is needed — a shallow clone has none of them.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: pick
+        name: Next version
+        run: |
+          set -eu
+
+          # A tag push releases exactly what was tagged. Anything else is a
+          # push to master, which becomes the next patch after the highest
+          # release so far — falling back to package.json when there are no
+          # releases yet.
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            tag="${GITHUB_REF_NAME}"
+            version="${tag#v}"
+          else
+            latest="$(git tag -l 'v*' --sort=-v:refname | head -n1)"
+            if [ -z "$latest" ]; then
+              version="$(node -p "require('./package.json').version")"
+            else
+              version="$(echo "${latest#v}" | awk -F. '{printf "%d.%d.%d", $1, $2, $3 + 1}')"
+            fi
+            tag="v${version}"
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Releasing $tag"
+
+  package:
+    name: Package (${{ matrix.os }})
+    if: github.event_name != 'pull_request'
+    needs: version
     runs-on: ${{ matrix.os }}
     strategy:
       # One platform failing should not hide whether the others worked.
@@ -131,6 +169,13 @@ jobs:
           cache: npm
 
       - run: npm ci
+
+      # electron-builder takes the installer's filename and the app's
+      # reported version straight from package.json. Without this, every
+      # release would ship a file called Revify-0.1.0.dmg whatever it
+      # actually was.
+      - name: Stamp the version
+        run: npm version "${{ needs.version.outputs.version }}" --no-git-tag-version --allow-same-version
 
       # REVIFY_ENV decides which backend the build talks to, and it is baked
       # in at build time on purpose — see src/core/backendUrl.ts. A released
@@ -151,33 +196,38 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          # The commit is in the name so a build from master can be told
-          # apart from the one before it without opening anything.
-          name: revify-${{ matrix.os }}-${{ github.sha }}
+          name: revify-${{ matrix.os }}
           path: |
             release/*.dmg
             release/*.AppImage
-          if-no-files-found: warn
-          # Master builds are a convenience, not an archive; tagged releases
-          # are what gets kept, and those are attached below.
-          retention-days: ${{ startsWith(github.ref, 'refs/tags/v') && 90 || 7 }}
+          # Producing nothing is a failure, not a warning: the release below
+          # would otherwise publish an empty download.
+          if-no-files-found: error
 
   release:
-    name: Release
-    # A tag is the only thing that publishes. A workflow that released on
-    # every push is a workflow that releases a mistake.
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: package
+    name: Release ${{ needs.version.outputs.tag }}
+    if: github.event_name != 'pull_request'
+    needs: [version, package]
     runs-on: ubuntu-latest
     permissions:
+      # Only this job writes, and only to create the tag and the release.
       contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
 
-      - uses: softprops/action-gh-release@v2
+      - name: Publish
+        uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ needs.version.outputs.tag }}
+          name: ${{ needs.version.outputs.tag }}
+          # Creates the tag on this commit if it does not exist yet — this
+          # is what lets a plain push to master release without anyone
+          # remembering to tag.
+          target_commitish: ${{ github.sha }}
           files: artifacts/**/*
           generate_release_notes: true
+          # Publishing a release with no installers attached is worse than
+          # failing: it looks like something you can download.
           fail_on_unmatched_files: true

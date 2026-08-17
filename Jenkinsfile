@@ -57,6 +57,63 @@ pipeline {
       }
     }
 
+    stage('Toolchain') {
+      steps {
+        // The agent is not assumed to have Go, and not assumed to have the
+        // right Go: `golang.org/x/crypto` requires 1.25, so a host with an
+        // older one fails in a way that reads like a code error rather than
+        // a missing tool. The version comes from go.mod so there is no
+        // second place for it to drift.
+        sh '''
+          set -eu
+          want="$(awk '/^go /{print $2; exit}' api/go.mod)"
+          case "$want" in *.*.*) ;; *) want="${want}.0" ;; esac
+
+          # Using what is already installed is the fastest path — when it is
+          # new enough.
+          if command -v go >/dev/null 2>&1; then
+            have="$(go env GOVERSION 2>/dev/null | sed 's/^go//')"
+            if [ -n "$have" ] && [ "$(printf '%s\n%s\n' "$want" "$have" | sort -V | head -n1)" = "$want" ]; then
+              echo "Using the agent's Go $have"
+              go env GOROOT > .goroot
+              exit 0
+            fi
+            echo "Agent has Go $have; $want is required"
+          fi
+
+          case "$(uname -m)" in
+            x86_64|amd64) arch=amd64 ;;
+            aarch64|arm64) arch=arm64 ;;
+            *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+          esac
+          os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+
+          # Cached outside the workspace on purpose: cleanWs empties the
+          # workspace after every run, and re-downloading 70MB each time is
+          # a cost with nothing to show for it.
+          cache="${GO_TOOLCHAIN_CACHE:-$HOME/.cache/revify-toolchain}"
+          goroot="$cache/go${want}"
+          if [ ! -x "$goroot/bin/go" ]; then
+            echo "Installing Go $want into $goroot"
+            mkdir -p "$cache"
+            curl -fsSL -o "$cache/go.tar.gz" "https://go.dev/dl/go${want}.${os}-${arch}.tar.gz"
+            rm -rf "$goroot" "$cache/go"
+            tar -C "$cache" -xzf "$cache/go.tar.gz"
+            mv "$cache/go" "$goroot"
+            rm -f "$cache/go.tar.gz"
+          fi
+          echo "$goroot" > .goroot
+        '''
+        script {
+          // Assigned to env so every later stage inherits it — a PATH set
+          // inside one `sh` step is gone by the next.
+          env.GOROOT = readFile('.goroot').trim()
+          env.PATH = "${env.GOROOT}/bin:${env.PATH}"
+        }
+        sh 'go version && go env GOROOT'
+      }
+    }
+
     stage('Vet') {
       steps {
         dir('api') {
