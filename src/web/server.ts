@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { loadConfig, refreshSettingsOverrides, type AppConfig } from '../config/loadConfig.js';
 import { buildPipeline, type Wired } from '../core/registry.js';
 import { Pipeline } from '../core/pipeline.js';
+import { isIssueKey, normalizeIssueKey, toTriggerEvent, UnknownIssueError } from '../core/issueEvent.js';
 import { ReviewQueue } from '../core/reviewQueue.js';
 import { AutoPrepareWatcher } from '../core/autoPrepare.js';
 import { ReminderWatcher } from '../core/reminderWatcher.js';
@@ -167,16 +168,21 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired) {
     // for https://" tells a new user nothing, and this is the first screen
     // they see.
     if (!config.setup.configured) {
-      // Two different problems wear the same 409, so the message names the
-      // one you actually have: credentials are typed in, a policy is
-      // inherited from a team. Telling someone to enter credentials they
-      // already entered sends them looking in the wrong place.
-      const onlyPolicy = config.setup.missing.every((m) => m.includes('JQL'));
       res.status(409).json({
-        error: onlyPolicy
-          ? 'Hangi issue\'ların inceleneceğini takım politikası belirler ve henüz bir takımın yok. ⚙ Ayarlar → Takım politikası\'ndan bir takım oluştur.'
-          : `Önce kimlik bilgilerini gir (⚙ Ayarlar): ${config.setup.missing.join(', ')}`,
+        error: `Önce kimlik bilgilerini gir (⚙ Ayarlar): ${config.setup.missing.join(', ')}`,
         setupRequired: true,
+      });
+      return;
+    }
+
+    // No query, no queue — but the app still works: a key typed into the
+    // box reviews fine without one. So this is an empty list with an
+    // explanation, not a refusal.
+    if (!config.setup.queueReady) {
+      res.json({
+        items: [],
+        queueReady: false,
+        hint: 'Takım politikası (JQL) yok, o yüzden liste boş. Issue anahtarı yazarak review başlatabilirsin.',
       });
       return;
     }
@@ -187,11 +193,11 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired) {
       return;
     }
 
-    const items = lastPolled.map((event) => {
+    const row = (event: TriggerEvent, manual: boolean) => {
       const record = wired.reviewStore.get(event.id);
       return {
         issueKey: event.id,
-        summary: event.data.summary ?? null,
+        summary: event.data.summary ?? record?.summary ?? null,
         jiraStatus: event.data.status ?? null,
         assignee: event.data.assignee ?? null,
         updated: event.data.updated ?? null,
@@ -201,9 +207,31 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired) {
         reviewedAt: record?.reviewedAt ?? null,
         review: record?.review ?? null,
         error: record?.error ?? null,
+        manual,
       };
-    });
-    res.json({ items });
+    };
+
+    const items = lastPolled.map((event) => row(event, false));
+
+    /*
+     * Issues reviewed by key, which the query does not match.
+     *
+     * Without this they vanish the moment the list refreshes: you type a
+     * key, the review starts, and the row it is running in disappears
+     * because Jira's answer to a different question does not mention it.
+     */
+    const inQueue = new Set(lastPolled.map((e) => e.id));
+    const manual = wired.reviewStore
+      .list()
+      .filter((r) => !inQueue.has(r.issueKey))
+      .filter((r) => r.status && r.status !== 'idle')
+      .sort((a, b) => (b.reviewedAt ?? b.updatedAt).localeCompare(a.reviewedAt ?? a.updatedAt))
+      .slice(0, 30)
+      .map((r) =>
+        row({ id: r.issueKey, data: { summary: r.summary ?? null } }, true),
+      );
+
+    res.json({ items: [...items, ...manual], queueReady: true });
   });
 
   /**
@@ -1137,11 +1165,40 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired) {
     res.json({ ok: true });
   });
 
-  app.post('/api/reviews/:issueKey/start', (req, res) => {
-    const event = lastPolled.find((e) => e.id === req.params.issueKey);
+  app.post('/api/reviews/:issueKey/start', async (req, res) => {
+    /*
+     * From the queue if it is there, from Jira if it is not.
+     *
+     * Events only ever came from the last JQL poll, so anything outside
+     * the team's query answered "refresh the list first" — which was
+     * impossible advice for an issue the query does not match. Typing a
+     * key is a deliberate act; it does not need a queue to permit it.
+     *
+     * No status check on purpose. The queue exists to find work; naming
+     * an issue *is* the finding. Approve and Reject are still clicks, so
+     * nothing reaches Jira on this path either.
+     */
+    const issueKey = normalizeIssueKey(req.params.issueKey);
+    let event = lastPolled.find((e) => e.id === issueKey);
+
     if (!event) {
-      res.status(404).json({ error: 'Unknown issue — refresh the list first.' });
-      return;
+      if (!isIssueKey(issueKey)) {
+        res.status(400).json({ error: `"${req.params.issueKey}" bir issue anahtarına benzemiyor (örn. BUY-2455).` });
+        return;
+      }
+      try {
+        event = toTriggerEvent(await wired.jiraClient.getIssue(issueKey));
+        // Kept for this session so the detail view, the diff and the
+        // approval path find it exactly as they would a polled one.
+        lastPolled = [...lastPolled.filter((e) => e.id !== issueKey), event];
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        const missing = message.includes('404');
+        res.status(missing ? 404 : 502).json({
+          error: missing ? new UnknownIssueError(issueKey).message : `Jira'dan okunamadı: ${message}`,
+        });
+        return;
+      }
     }
 
     // Repos the reviewer picked as worth having on disk. Cloning happens

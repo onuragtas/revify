@@ -314,6 +314,9 @@
     background: var(--surface);
     display: flex; flex-direction: column; min-height: 0;
   }
+  .byKey { border-top: 1px solid var(--border); }
+  .byKey .input { flex: 1; min-width: 0; }
+  #byKeyResult { padding: 0 0.9rem 0.5rem; }
   .sidebar-head {
     padding: 0.7rem 0.8rem; border-bottom: 1px solid var(--border);
     display: flex; align-items: center; gap: 0.5rem; flex-shrink: 0;
@@ -977,6 +980,11 @@
         <input id="issueFilter" class="input" type="text" placeholder="Issue veya özet ara…" />
         <span id="issueCount" class="sidebar-count"></span>
       </div>
+      <div class="sidebar-head byKey">
+        <input id="byKeyInput" class="input" type="text" placeholder="BUY-2455 — anahtarla incele" />
+        <button id="byKeyBtn" class="btn small">İncele</button>
+      </div>
+      <div id="byKeyResult" class="card-hint" hidden></div>
       <div id="rows" class="issue-list"></div>
       <div id="empty" class="detail-empty" style="display:none"></div>
     </aside>
@@ -1751,6 +1759,51 @@
       // background refresh should not put an error on screen by itself.
     }
   }
+
+  /**
+   * Review whatever key you type, queue or no queue.
+   *
+   * The list can only ever show what the team's JQL matches. Anything
+   * else — an issue in another project, one that has not reached the
+   * review column, one someone mentioned in a message — was unreachable,
+   * and the app's answer was "refresh the list first", which could never
+   * work for an issue the query does not match.
+   */
+  async function reviewByKey() {
+    const input = document.getElementById('byKeyInput');
+    const result = document.getElementById('byKeyResult');
+    const key = input.value.trim().toUpperCase();
+    if (!key) return;
+
+    result.hidden = false;
+    result.textContent = key + ' açılıyor…';
+    try {
+      const res = await fetch('/api/reviews/' + encodeURIComponent(key) + '/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contextRepos: [] }),
+      });
+      const data = await res.json();
+      if (data.error) {
+        result.textContent = data.error;
+        return;
+      }
+      result.hidden = true;
+      input.value = '';
+      // Straight into the issue: typing a key is a request to look at it,
+      // not to be told it is now in a list somewhere.
+      showView('reviews');
+      openIssue(key, { force: true });
+      loadReviews();
+    } catch (err) {
+      result.textContent = 'Başlatılamadı: ' + err;
+    }
+  }
+
+  document.getElementById('byKeyBtn').addEventListener('click', reviewByKey);
+  document.getElementById('byKeyInput').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') reviewByKey();
+  });
 
   setInterval(refreshStates, 2000);
   setInterval(() => {

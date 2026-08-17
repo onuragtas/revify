@@ -169,7 +169,7 @@ export interface AppConfig {
   reminders: { enabled: boolean; pollIntervalMs: number };
   /** Whether this install has everything it needs to talk to Jira and
    * GitLab. False is a first-run state, not a failure. */
-  setup: { configured: boolean; missing: string[]; configMissing: boolean };
+  setup: { configured: boolean; missing: string[]; configMissing: boolean; queueReady: boolean };
   wiring: Wiring;
   jira: {
     baseUrl: string;
@@ -250,9 +250,17 @@ export function loadConfig(configPath = 'config/config.yaml'): AppConfig {
     ['GITLAB_TOKEN', 'GitLab token'],
   ];
   const missing = required.filter(([key]) => !env[key]).map(([, label]) => label);
-  // A JQL is not something to default: without it there is no queue, and
-  // the team's policy supplies it once you sign in.
-  if (!yamlConfig.jira.jql.trim()) missing.push('takım politikası (JQL)');
+
+  /*
+   * A missing JQL is not a missing setup.
+   *
+   * It used to count as one, which made the whole app unusable without a
+   * team policy. But the JQL only decides what the *queue* contains —
+   * reviewing an issue by typing its key needs none of it. So the two are
+   * separate questions: credentials decide whether anything can work,
+   * the query decides whether a list can be filled.
+   */
+  const queueReady = Boolean(yamlConfig.jira.jql.trim());
 
   /*
    * The checkout, when there is one — and the example file is what proves
@@ -264,7 +272,7 @@ export function loadConfig(configPath = 'config/config.yaml'): AppConfig {
   const baseDir = usedPath ? process.cwd() : join(homedir(), '.revify');
 
   return {
-    setup: { configured: missing.length === 0, missing, configMissing },
+    setup: { configured: missing.length === 0, missing, configMissing, queueReady },
     pollIntervalMs: yamlConfig.pollIntervalMs,
     approvalPollIntervalMs: yamlConfig.approvalPollIntervalMs,
     stateFilePath: dataPath(yamlConfig.stateFilePath, baseDir),

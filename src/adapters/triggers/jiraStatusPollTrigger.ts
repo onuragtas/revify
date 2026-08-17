@@ -1,5 +1,6 @@
 import type { Trigger, TriggerEvent } from '../../core/types.js';
 import type { JiraClient } from '../../clients/jiraClient.js';
+import { toTriggerEvent } from '../../core/issueEvent.js';
 
 export class JiraStatusPollTrigger implements Trigger {
   constructor(
@@ -8,18 +9,13 @@ export class JiraStatusPollTrigger implements Trigger {
   ) {}
 
   async poll(): Promise<TriggerEvent[]> {
+    // An empty JQL means no queue has been configured. Asking Jira an
+    // empty question earns a "your query is too broad" every interval and
+    // says nothing about the real problem.
+    if (!this.jql.trim()) return [];
+
     const issues = await this.jiraClient.searchIssues(this.jql);
-    return issues.map((issue) => ({
-      id: issue.key,
-      data: {
-        issueKey: issue.key,
-        issueId: issue.id,
-        summary: issue.fields.summary,
-        status: issue.fields.status.name,
-        assignee: issue.fields.assignee?.displayName ?? null,
-        assigneeAccountId: issue.fields.assignee?.accountId ?? null,
-        updated: issue.fields.updated ?? null,
-      },
-    }));
+    // Shared with the review-by-key path — see toTriggerEvent.
+    return issues.map(toTriggerEvent);
   }
 }

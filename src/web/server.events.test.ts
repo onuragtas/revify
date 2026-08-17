@@ -27,7 +27,7 @@ function makeConfig(): AppConfig {
     },
     autoPrepare: { enabled: false, pollIntervalMs: 120000 },
     reminders: { enabled: false, pollIntervalMs: 900000 },
-    setup: { configured: true, missing: [], configMissing: false },
+    setup: { configured: true, missing: [], configMissing: false, queueReady: true },
     wiring: {
       trigger: 'x',
       contextCollectors: [],
@@ -85,7 +85,18 @@ function makeWired(options: { fail?: boolean } = {}): Wired {
     stateStore: new StateStore(join(dir, 'state.json')),
     notesStore: new NotesStore(join(dir, 'notes.json')),
     gitlabClient: { listProjects: async () => [] } as unknown as Wired['gitlabClient'],
-    jiraClient: {} as Wired['jiraClient'],
+    jiraClient: {
+      // Only what reviewing by key needs: BUY-9 exists, nothing else does.
+      getIssue: async (key: string) => {
+        if (key !== 'BUY-9') throw new Error('Jira API 404 Not Found');
+        return {
+          key,
+          id: '9009',
+          fields: { summary: 'Typed by hand', status: { name: 'In Progress' }, updated: '2026-08-17T09:00:00.000Z' },
+        };
+      },
+      searchIssues: async () => [],
+    } as unknown as Wired['jiraClient'],
   };
 }
 
@@ -246,5 +257,62 @@ describe('automatic update install', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('reviewing by issue key', () => {
+  it('starts an issue the query never returned', async () => {
+    const server = createServer(makeConfig(), makeWired());
+    const ready = vi.fn();
+    server.events.on('review:ready', ready);
+
+    // No list refresh first: the point is that an issue outside the team's
+    // JQL used to answer "refresh the list first", which was impossible
+    // advice for something the query does not match.
+    const res = await request(server).post('/api/reviews/BUY-9/start').send({ contextRepos: [] });
+    expect(res.status).toBe(200);
+
+    await vi.waitFor(() => expect(ready).toHaveBeenCalledTimes(1));
+    expect(ready.mock.calls[0][0]).toMatchObject({ issueKey: 'BUY-9', summary: 'Typed by hand' });
+
+    server.shutdown();
+  });
+
+  it('accepts a key however it was typed', async () => {
+    const server = createServer(makeConfig(), makeWired());
+    const res = await request(server).post('/api/reviews/buy-9/start').send({ contextRepos: [] });
+    expect(res.status).toBe(200);
+    server.shutdown();
+  });
+
+  it('answers a typo with a sentence, not a Jira error', async () => {
+    const server = createServer(makeConfig(), makeWired());
+
+    const typo = await request(server).post('/api/reviews/not-a-key!/start').send({});
+    expect(typo.status).toBe(400);
+    expect(typo.body.error).toContain('BUY-2455');
+
+    // Jira returns 404 both for "no such issue" and "not yours to see",
+    // so the message has to cover both or it sends someone hunting for a
+    // typo that isn't there.
+    const missing = await request(server).post('/api/reviews/BUY-404/start').send({});
+    expect(missing.status).toBe(404);
+    expect(missing.body.error).toContain('erişimin olmayabilir');
+
+    server.shutdown();
+  });
+
+  it('keeps a hand-typed issue in the list instead of losing it on refresh', async () => {
+    const wired = makeWired();
+    const server = createServer(makeConfig(), wired);
+    await request(server).post('/api/reviews/BUY-9/start').send({ contextRepos: [] });
+
+    // The queue answers a different question and will never mention BUY-9.
+    const list = await request(server).get('/api/reviews');
+    const row = list.body.items.find((i: { issueKey: string }) => i.issueKey === 'BUY-9');
+    expect(row).toBeDefined();
+    expect(row.manual).toBe(true);
+
+    server.shutdown();
   });
 });
