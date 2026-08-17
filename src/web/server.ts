@@ -947,7 +947,42 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired) {
     if (maxAge !== undefined && Date.now() - notesSyncedAt < maxAge) return true;
 
     try {
-      const items = (await backend.teamNotes(teamId)) as Array<Record<string, unknown>>;
+      let items = (await backend.teamNotes(teamId)) as Array<Record<string, unknown>>;
+
+      /*
+       * An empty team is not an instruction to forget.
+       *
+       * Notes used to live only on this machine. When they moved to the
+       * team, nothing carried the existing ones up — so the first sync
+       * after joining a team replaced a full local file with an empty
+       * server list, and a year of accumulated rules vanished silently.
+       * That is not a hypothetical: it happened here.
+       *
+       * So an empty team with a non-empty local store means "not migrated
+       * yet", and the migration runs.
+       */
+      const local = wired.notesStore.list();
+      if (!items.length && local.length) {
+        console.log(`[notes] ${local.length} yerel not takıma taşınıyor`);
+        for (const note of local) {
+          try {
+            await backend.addTeamNote(teamId, {
+              scope: note.scope,
+              projectPath: note.projectPath ?? undefined,
+              text: note.text,
+            });
+          } catch (err) {
+            // A note that cannot be uploaded stays local rather than
+            // being dropped: the store is not replaced below unless the
+            // team has something to replace it with.
+            console.warn(`[notes] taşınamadı: ${err instanceof Error ? err.message : String(err)}`);
+            return false;
+          }
+        }
+        items = (await backend.teamNotes(teamId)) as Array<Record<string, unknown>>;
+        if (!items.length) return false;
+      }
+
       wired.notesStore.replaceAll(
         items.map((n) => ({
           id: String(n.id ?? ''),

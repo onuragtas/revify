@@ -288,13 +288,32 @@ export function buildPrompt(input: CodeReviewPromptInput): string {
   const notes = (input.notes ?? []).map((n) => n.trim()).filter(Boolean);
   const notesSection = notes.length
     ? '\n## Project notes (standing decisions from the team)\n\n' +
-      'These are deliberate calls about this codebase. Honor them: do not report a finding\n' +
-      'that a note rules out, even if you would otherwise flag it. If a note conflicts with\n' +
-      'something you believe is genuinely dangerous (data loss, a security hole), still\n' +
-      'report it and say explicitly that it overlaps a note.\n\n' +
+      'These are deliberate calls about this codebase, already argued and settled. They\n' +
+      'outrank everything else in this prompt — including the issue\'s own description and\n' +
+      'its acceptance criteria. If a note covers something, it is not reported, however the\n' +
+      'issue words it and however strongly the sections below call for it.\n\n' +
+      'Two things a note cannot rule out: data loss and a security hole. Report those and\n' +
+      'say plainly that they overlap a note. Nothing else qualifies — not "the acceptance\n' +
+      'criteria mention it", not "it seems important", not "worth flagging anyway".\n\n' +
       notes.map((n) => `- ${n}`).join('\n') +
       '\n'
     : '';
+  /*
+   * The same rule again, where findings are decided.
+   *
+   * The notes sit with the context, some eighty lines before the section
+   * that lists what to report — and a constraint stated once, early, loses
+   * to instructions repeated later and closer to the decision. In practice
+   * a note would be acknowledged in the disclosure and the finding
+   * reported anyway.
+   */
+  const notesReminder = notes.length
+    ? '\n**Before writing any finding, check it against the project notes above.** A finding\n' +
+      'a note rules out is not written — not softened, not moved to QA notes, not mentioned\n' +
+      'in passing. The issue description does not override a note; the notes were written\n' +
+      'by people who had already read issues like this one.\n'
+    : '';
+
   const notesDisclosure = notes.length
     ? '\nAfter the verdict, disclose the notes you applied — one line each, in exactly this form:\n\n' +
       '```\n[note] <which note, and what you did not report because of it>\n```\n\n' +
@@ -315,6 +334,7 @@ export function buildPrompt(input: CodeReviewPromptInput): string {
     .replace('{{commentsSection}}', commentsSection)
     .replace('{{revisionSection}}', revisionSection)
     .replace('{{notesSection}}', notesSection)
+    .replace('{{notesReminder}}', notesReminder)
     .replace('{{notesDisclosure}}', notesDisclosure)
     .replace('{{languageInstruction}}', languageInstruction);
 }

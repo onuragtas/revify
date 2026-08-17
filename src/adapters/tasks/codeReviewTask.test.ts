@@ -189,6 +189,17 @@ describe('buildPrompt', () => {
     });
 
     expect(prompt).toContain('## Project notes');
+    // The rule is stated twice on purpose: once with the notes, and again
+    // where findings are decided. Stated only in the context block, eighty
+    // lines earlier, it lost to the instructions that came after it — the
+    // note would be acknowledged in the disclosure and the finding
+    // reported anyway.
+    const notesRuleAt = prompt.indexOf('outrank everything else');
+    const reminderAt = prompt.indexOf('Before writing any finding');
+    const reportingAt = prompt.indexOf('How to report each finding');
+    expect(notesRuleAt).toBeGreaterThan(-1);
+    expect(reminderAt).toBeGreaterThan(notesRuleAt);
+    expect(reminderAt).toBeLessThan(reportingAt);
     expect(prompt).toContain('- Do not flag missing tests here');
     expect(prompt).toContain('- Legacy naming is intentional');
     // Blank notes are dropped rather than rendered as empty bullets.
@@ -268,6 +279,8 @@ describe('buildPrompt', () => {
     const prompt = buildPrompt(baseInput);
 
     expect(prompt).not.toContain('{{notesSection}}');
+    expect(prompt).not.toContain('{{notesReminder}}');
+
     expect(prompt).not.toContain('{{notesDisclosure}}');
     expect(prompt).not.toContain('## Project notes');
     expect(prompt).not.toContain('Applied notes');

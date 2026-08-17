@@ -58,6 +58,7 @@ Explicitly out of scope: formatting, naming preferences, import order, and
 other style opinions. Do not report them.
 
 {{contextReposSection}}{{clarificationsSection}}{{challengesSection}}{{revisionSection}}{{notesSection}}
+{{notesReminder}}
 ## How to report each finding
 
 Give every finding a severity, and use exactly these three levels — do not
