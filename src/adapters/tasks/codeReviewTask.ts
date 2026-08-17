@@ -94,6 +94,11 @@ export interface CodeReviewPromptInput {
   /** Other services checked out read-only alongside this one, so a claim
    * about what they return can be checked rather than assumed. */
   contextRepos?: ContextRepo[];
+  /** Files pulled down from Jira, and the ones deliberately left behind. */
+  attachments?: {
+    fetched: Array<{ filename: string; path: string; size: number }>;
+    skipped: Array<{ filename: string; reason: string }>;
+  };
 }
 
 /** Pure so it's testable without an LLM call.
@@ -140,6 +145,31 @@ export function buildPrompt(input: CodeReviewPromptInput): string {
   // Other services' code, checked out read-only. Naming the paths matters:
   // without them the model knows the service exists but not where to look,
   // and falls back to assuming what it returns.
+  /*
+   * Attachments, named and located.
+   *
+   * The unreadable ones are listed too. A review that cannot see
+   * `flow.docx` should say so rather than reason as though the issue had
+   * no specification — and the reader is the one who can convert it.
+   */
+  const attachments = input.attachments ?? { fetched: [], skipped: [] };
+  const attachmentsSection =
+    attachments.fetched.length || attachments.skipped.length
+      ? '\n## Attachments\n\n' +
+        (attachments.fetched.length
+          ? 'Downloaded from this issue and the ones linked to it. Read the ones that look\n' +
+            'like a specification, a flow or an interface contract — they often carry the\n' +
+            'requirement the description only summarises.\n\n' +
+            attachments.fetched.map((f) => `- \`${f.filename}\` → ${f.path}`).join('\n') + '\n'
+          : '') +
+        (attachments.skipped.length
+          ? '\nPresent on the issue but not readable here. If one of them clearly holds the\n' +
+            'answer to something you cannot otherwise settle, say which, and say what it\n' +
+            'would settle:\n\n' +
+            attachments.skipped.map((f) => `- \`${f.filename}\` — ${f.reason}`).join('\n') + '\n'
+          : '')
+      : '';
+
   const contextRepos = input.contextRepos ?? [];
   const contextReposSection = contextRepos.length
     ? '\n## Other services available (read-only, default branch)\n\n' +
@@ -328,6 +358,7 @@ export function buildPrompt(input: CodeReviewPromptInput): string {
     .replace('{{codeChangeSection}}', codeChangeSection)
     .replace('{{repoInstruction}}', repoInstruction)
     .replace('{{contextReposSection}}', contextReposSection)
+    .replace('{{attachmentsSection}}', attachmentsSection)
     .replace('{{clarificationsSection}}', clarificationsSection)
     .replace('{{challengesSection}}', challengesSection)
     .replace('{{relatedSection}}', relatedSection)
@@ -389,6 +420,7 @@ export class CodeReviewTask implements AiTask {
       comments: context.jiraComments as CodeReviewPromptInput['comments'],
       relatedIssues: context.relatedIssues as CodeReviewPromptInput['relatedIssues'],
       contextRepos,
+      attachments: context.attachments as CodeReviewPromptInput['attachments'],
     });
 
     // The first changed repo is the working directory; everything else the
@@ -398,7 +430,13 @@ export class CodeReviewTask implements AiTask {
       system: buildSystemPrompt(this.language),
       prompt,
       workdir: changedPaths[0],
-      extraDirs: [...changedPaths.slice(1), ...contextRepos.map((r) => r.path)],
+      extraDirs: [
+        ...changedPaths.slice(1),
+        ...contextRepos.map((r) => r.path),
+        // Where the Jira files landed. Without this the paths in the
+        // prompt name files the model is not permitted to open.
+        ...(context.attachmentDir ? [context.attachmentDir as string] : []),
+      ],
       signal,
       onProgress: (message) => progressBus.log(event.id, message),
     });

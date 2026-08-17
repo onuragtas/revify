@@ -28,6 +28,15 @@ export interface JiraClientOptions {
 
 const SEARCH_FIELDS = ['summary', 'status', 'description', 'assignee', 'updated', 'issuetype', 'priority'];
 
+export interface JiraAttachment {
+  id: string;
+  filename: string;
+  mimeType: string;
+  size: number;
+  contentUrl: string;
+  created: string;
+}
+
 export interface JiraComment {
   author: string;
   created: string;
@@ -395,6 +404,57 @@ export class JiraClient {
       summary: i.fields.summary ?? '',
       description: adfToText(i.fields.description),
     }));
+  }
+
+  /**
+   * Files attached to an issue — including the ones added inside comments,
+   * which Jira stores on the issue rather than the comment.
+   *
+   * Only the listing. Downloading is the caller's business, because what
+   * is worth downloading depends on size and type, and that is a policy
+   * decision rather than a Jira one.
+   */
+  async getAttachments(issueKey: string): Promise<JiraAttachment[]> {
+    const issue = await this.request<{
+      fields: {
+        attachment?: Array<{
+          id: string;
+          filename?: string;
+          mimeType?: string;
+          size?: number;
+          content?: string;
+          created?: string;
+        }>;
+      };
+    }>(`/rest/api/3/issue/${issueKey}?fields=attachment`);
+
+    return (issue.fields.attachment ?? []).map((a) => ({
+      id: a.id,
+      filename: a.filename ?? `attachment-${a.id}`,
+      mimeType: a.mimeType ?? '',
+      size: a.size ?? 0,
+      contentUrl: a.content ?? '',
+      created: a.created ?? '',
+    }));
+  }
+
+  /**
+   * Downloads one attachment.
+   *
+   * Returns the bytes rather than writing them: where they land is the
+   * caller's decision, and this client has no business knowing about the
+   * directory the model is given.
+   */
+  async downloadAttachment(contentUrl: string): Promise<Buffer> {
+    const res = await fetch(contentUrl, {
+      headers: { Authorization: this.authHeader() },
+      // Jira answers the content URL with a redirect to storage; the
+      // Authorization header must not be replayed to another host, and
+      // fetch drops it for us on a cross-origin redirect.
+      redirect: 'follow',
+    });
+    if (!res.ok) throw new Error(`Jira attachment ${res.status} ${res.statusText}`);
+    return Buffer.from(await res.arrayBuffer());
   }
 
   /** Assigns by accountId. Passing null unassigns. */

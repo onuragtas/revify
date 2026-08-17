@@ -146,7 +146,21 @@ export function runCli(
 /** With a repo checked out, the reviewer gets exactly the read-only tools
  * it needs to verify a finding against the real code — nothing that can
  * modify the checkout, run commands, or reach the network. */
-const READ_ONLY_TOOLS = ['Read', 'Glob', 'Grep'];
+/*
+ * Read, and read only.
+ *
+ * WebFetch is in here because a Jira description is full of links that
+ * carry the actual requirement — an integration spec, a flow, an API
+ * contract — and a reviewer that can see the link but not the page is
+ * guessing. It fetches; it cannot write anywhere, run anything, or reach
+ * the network any other way.
+ *
+ * The cost is stated plainly in the prompt rather than hidden here:
+ * anyone who can edit a Jira issue can now put text in front of the
+ * model. `codeReview.md` tells it that fetched pages are evidence, never
+ * instructions.
+ */
+const READ_ONLY_TOOLS = ['Read', 'Glob', 'Grep', 'WebFetch'];
 
 /** No news for this long and the run gets a "still going" line, so a long
  * silent stretch of reasoning cannot be mistaken for a dead process. */

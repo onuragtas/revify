@@ -1,3 +1,4 @@
+import { dirname, join } from 'node:path';
 import type { AppConfig } from '../config/loadConfig.js';
 import type { Action, AiTask, ApprovalChannel, ContextCollector, LlmProvider, Trigger } from './types.js';
 import { JiraClient } from '../clients/jiraClient.js';
@@ -88,7 +89,11 @@ export function buildPipeline(config: AppConfig, keep?: Stores): Wired {
     : undefined;
 
   const contextCollectors: Record<string, () => ContextCollector> = {
-    jiraIssueContext: () => new JiraIssueContext(jiraClient),
+    // Attachments land beside the repo cache, outside the project, for
+    // the same reason clones do: they are other people's files, and an
+    // editor with this project open should not index them.
+    jiraIssueContext: () =>
+      new JiraIssueContext(jiraClient, join(dirname(config.review.repoCacheDir), 'attachments')),
     gitlabBranchDiffContext: () => new GitlabBranchDiffContext(gitlabClient, repoCache),
   };
   const wiredContextCollectors = config.wiring.contextCollectors.map((name) =>
