@@ -226,8 +226,12 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired) {
   // Polling-based detail endpoint — the reliable source of truth for the
   // UI's step panel. (An SSE /stream endpoint was tried first but proved
   // fragile in practice; plain polling always shows the full picture.)
-  app.get('/api/reviews/:issueKey/detail', (req, res) => {
+  app.get('/api/reviews/:issueKey/detail', async (req, res) => {
     const { issueKey } = req.params;
+    // Opening an issue should show the team's current rules, not whatever
+    // this machine cached the last time a review ran. Throttled, because
+    // this endpoint is polled once a second while an issue is open.
+    await syncTeamNotes({ maxAgeMs: NOTES_MAX_AGE_MS });
     const record = wired.reviewStore.get(issueKey);
     const projectPaths = record?.projectPaths ?? [];
     // The review is split server-side so the UI and the Jira action share
@@ -923,9 +927,23 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired) {
    * Returns whether the team was reachable, so a caller can say which set
    * it is showing rather than passing off a stale copy as current.
    */
-  async function syncTeamNotes(): Promise<boolean> {
+  /** When the notes last came down. Lets a page open fresh without a
+   * polling loop turning that into a request per second. */
+  let notesSyncedAt = 0;
+  const NOTES_MAX_AGE_MS = 60_000;
+
+  async function syncTeamNotes(options: { maxAgeMs?: number } = {}): Promise<boolean> {
     const teamId = settings.get('teamId');
     if (!backend.configured || !teamId) return false;
+
+    // A screen that opens should show what the team decided, not what this
+    // machine last happened to cache — but the issue detail is polled once
+    // a second while it is open, and syncing on each of those would be a
+    // request per second per reader. Freshness where it matters, silence
+    // where it does not.
+    const maxAge = options.maxAgeMs;
+    if (maxAge !== undefined && Date.now() - notesSyncedAt < maxAge) return true;
+
     try {
       const items = (await backend.teamNotes(teamId)) as Array<Record<string, unknown>>;
       wired.notesStore.replaceAll(
@@ -937,6 +955,7 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired) {
           createdAt: String(n.createdAt ?? ''),
         })),
       );
+      notesSyncedAt = Date.now();
       return true;
     } catch (err) {
       console.warn(`[notes] takım notları alınamadı: ${err instanceof Error ? err.message : String(err)}`);

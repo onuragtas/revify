@@ -193,6 +193,14 @@ func (r *Repository) TeamNotes(teamID string) ([]model.TeamNote, error) {
 
 func (r *Repository) CreateTeamNote(note model.TeamNote) error { return r.db.Create(&note).Error }
 
+// TeamNote reads one, so the service can decide who is allowed to remove
+// it before removing it.
+func (r *Repository) TeamNote(teamID, noteID string) (model.TeamNote, error) {
+	var note model.TeamNote
+	err := r.db.First(&note, "team_id = ? AND id = ?", teamID, noteID).Error
+	return note, err
+}
+
 func (r *Repository) DeleteTeamNote(teamID, noteID string) (bool, error) {
 	// Scoped by team as well as id: an id from another team must not be
 	// deletable just because the caller knows it.

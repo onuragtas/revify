@@ -57,7 +57,10 @@ func (h *Settings) AddNote(c *fiber.Ctx) error {
 }
 
 func (h *Settings) DeleteNote(c *fiber.Ctx) error {
-	if err := h.settings.DeleteNote(c.Params("teamID"), c.Params("noteID")); err != nil {
+	role, _ := c.Locals("role").(string)
+	if err := h.settings.DeleteNote(
+		c.Params("teamID"), c.Params("noteID"), middleware.CurrentUser(c).ID, role,
+	); err != nil {
 		return Fail(c, err)
 	}
 	return c.JSON(fiber.Map{"ok": true})

@@ -105,7 +105,28 @@ func (s *Settings) AddNote(teamID, createdBy string, in model.TeamNote) (model.T
 	return note, nil
 }
 
-func (s *Settings) DeleteNote(teamID, noteID string) error {
+// DeleteNote removes a standing rule.
+//
+// Your own, always; anyone's if you own the team.
+//
+// Owner-only deletion was the first arrangement, and it was inconsistent
+// with letting any member add one: someone who could write a rule that
+// changes every future review could not take it back after realising it
+// was wrong. What that teaches is not care, it is silence — people stop
+// writing notes rather than risk leaving one behind.
+//
+// Someone else's note still needs the owner. Removing a rule quietly
+// changes what every future review reports, and that is the same weight
+// as changing the policy.
+func (s *Settings) DeleteNote(teamID, noteID, userID, role string) error {
+	note, err := s.repo.TeamNote(teamID, noteID)
+	if err != nil {
+		return fail(KindNotFound, "Böyle bir not yok.")
+	}
+	if role != model.RoleOwner && note.CreatedBy != userID {
+		return fail(KindForbidden, "Bu not başkasına ait; yalnızca takım sahibi silebilir.")
+	}
+
 	found, err := s.repo.DeleteTeamNote(teamID, noteID)
 	if err != nil {
 		return wrap(err, "Not silinemedi.")

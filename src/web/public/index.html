@@ -1742,9 +1742,32 @@
   setInterval(() => {
     if (!document.hidden) loadReviews();
   }, 60000);
+  /**
+   * Whatever screen is open, kept current.
+   *
+   * These four read from the team API, and they used to be fetched once —
+   * when you switched to them. So an assignment a colleague made, a
+   * decision they recorded, a note they added, all sat invisible until you
+   * clicked away and back. A page that is open should show what is true.
+   *
+   * The assignment count runs even when its view is hidden: it is a badge,
+   * and a badge that only updates while you are looking at the thing it
+   * counts is decoration.
+   */
+  function refreshOpenView() {
+    if (document.hidden) return;
+    if (!document.getElementById('decisionsView').hidden) loadDecisions();
+    if (!document.getElementById('pendingView').hidden) loadPending();
+    void loadAssigned();
+  }
+
+  setInterval(refreshOpenView, 60000);
+
   // Coming back to the tab should show the truth immediately, not in a minute.
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) loadReviews();
+    if (document.hidden) return;
+    loadReviews();
+    refreshOpenView();
   });
 
   /* ------------------------------ polling ------------------------------ */

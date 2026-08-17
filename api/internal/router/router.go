@@ -105,12 +105,14 @@ func New(repo *repository.Repository, sessionTTL time.Duration, build BuildInfo)
 	// whoever happened to review that issue. Requiring the owner to relay
 	// it is how a team keeps re-learning the same thing.
 	//
-	// Deleting stays with the owner: removing someone else's standing rule
-	// silently changes every future review, which is the same weight as
-	// changing the policy itself.
+	// Deleting your own is always allowed; someone else's needs the owner,
+	// because removing a standing rule silently changes every future
+	// review. That distinction is made in the service — see DeleteNote.
 	team.Get("/notes", settingsH.Notes)
 	team.Post("/notes", settingsH.AddNote)
-	team.Delete("/notes/:noteID", middleware.RequireOwner("notu silmek"), settingsH.DeleteNote)
+	// Not owner-gated at the route: who may delete depends on *which* note
+	// it is — your own or someone else's — and the route cannot see that.
+	team.Delete("/notes/:noteID", settingsH.DeleteNote)
 
 	// Where reviews landed. Any member may record one — the decision has
 	// already reached Jira by the time this is called, so refusing it here

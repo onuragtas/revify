@@ -512,17 +512,25 @@ func TestNotesAreSharedAndOwnerManaged(t *testing.T) {
 		t.Fatalf("a member could not add a note: %d %v", byMember.code, byMember.body)
 	}
 
-	// Deleting is the owner's: removing someone else's standing rule
-	// changes every future review.
-	noteID := byMember.body["note"].(map[string]any)["id"].(string)
-	if res := h.call(t, "DELETE", "/api/teams/"+team+"/notes/"+noteID, bo.cookie, nil); res.code != http.StatusForbidden {
-		t.Fatalf("a member deleted a note: %d", res.code)
+	// Your own note is yours to take back. Someone who may write a rule
+	// that changes every future review but may not withdraw it learns to
+	// write no rules at all.
+	memberNoteID := byMember.body["note"].(map[string]any)["id"].(string)
+	if res := h.call(t, "DELETE", "/api/teams/"+team+"/notes/"+memberNoteID, bo.cookie, nil); res.code != http.StatusOK {
+		t.Fatalf("a member could not delete their own note: %d %v", res.code, res.body)
 	}
-	if res := h.call(t, "DELETE", "/api/teams/"+team+"/notes/"+noteID, ada.cookie, nil); res.code != http.StatusOK {
+
+	// Someone else's still needs the owner: removing a standing rule
+	// silently changes what every future review reports.
+	ownerNoteID := added.body["note"].(map[string]any)["id"].(string)
+	if res := h.call(t, "DELETE", "/api/teams/"+team+"/notes/"+ownerNoteID, bo.cookie, nil); res.code != http.StatusForbidden {
+		t.Fatalf("a member deleted someone else's note: %d", res.code)
+	}
+	if res := h.call(t, "DELETE", "/api/teams/"+team+"/notes/"+ownerNoteID, ada.cookie, nil); res.code != http.StatusOK {
 		t.Fatalf("owner could not delete a note: %d %v", res.code, res.body)
 	}
-	if n := len(items(t, h.call(t, "GET", "/api/teams/"+team+"/notes", bo.cookie, nil))); n != 1 {
-		t.Fatalf("after deleting one of two notes, %d remain", n)
+	if n := len(items(t, h.call(t, "GET", "/api/teams/"+team+"/notes", bo.cookie, nil))); n != 0 {
+		t.Fatalf("after deleting both notes, %d remain", n)
 	}
 }
 
