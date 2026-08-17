@@ -98,6 +98,14 @@
 
   * { box-sizing: border-box; }
 
+  /* The browser's own `[hidden] { display: none }` is the weakest rule
+     there is: any author rule that sets `display` beats it. Several classes
+     here do (.field, .btn, .viewTab, .chip), so `el.hidden = true` was
+     writing an attribute that changed nothing on screen — the sign-up name
+     field stayed visible on the sign-in form, and tabs that should have
+     been absent were not. This makes the attribute mean what it says. */
+  [hidden] { display: none !important; }
+
   /* Long unbroken tokens — a file path, a URL, a Java package name — have
      no space to break at, so they push their container wider than the
      screen and the whole page scrolls sideways. These are the places such a

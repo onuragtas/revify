@@ -11,6 +11,7 @@ DEPLOY_DIR="${DEPLOY_DIR:-/opt/revify}"
 APP_UID="${APP_UID:-10001}"
 APP_GID="${APP_GID:-$APP_UID}"
 API_PORT="${API_PORT:-4322}"
+API_BIND="${API_BIND:-0.0.0.0}"
 HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:${API_PORT}/api/health}"
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -63,7 +64,7 @@ install -m 0644 "$here/docker-compose.yml" "$DEPLOY_DIR/docker-compose.yml"
 [ -f "$here/BUILD_INFO" ] && install -m 0644 "$here/BUILD_INFO" "$DEPLOY_DIR/BUILD_INFO"
 
 cd "$DEPLOY_DIR"
-export BUILD_NUMBER="${BUILD_NUMBER:-local}" API_PORT APP_UID APP_GID
+export BUILD_NUMBER="${BUILD_NUMBER:-local}" API_PORT API_BIND APP_UID APP_GID
 
 echo "==> Building image and starting"
 $COMPOSE up -d --build --remove-orphans
