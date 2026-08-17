@@ -29,12 +29,14 @@ func New(repo *repository.Repository, sessionTTL time.Duration, build BuildInfo)
 	assignSvc := service.NewAssignment(repo, teamSvc)
 	settingsSvc := service.NewSettings(repo)
 	decisionSvc := service.NewDecision(repo)
+	nudgeSvc := service.NewNudge(repo, teamSvc)
 
 	authH := handler.NewAuth(authSvc)
 	teamH := handler.NewTeam(teamSvc)
 	assignH := handler.NewAssignment(assignSvc)
 	settingsH := handler.NewSettings(settingsSvc)
 	decisionH := handler.NewDecision(decisionSvc)
+	nudgeH := handler.NewNudge(nudgeSvc)
 
 	app := fiber.New(fiber.Config{
 		// One error shape for the whole API, including the failures Fiber
@@ -75,6 +77,9 @@ func New(repo *repository.Repository, sessionTTL time.Duration, build BuildInfo)
 	// Everything below needs a session.
 	api.Get("/users", requireUser, teamH.SearchUsers)
 	api.Get("/assignments/mine", requireUser, assignH.Mine)
+	// Not team-scoped: you poll for everything anyone has asked you to
+	// look at, across every team you are on.
+	api.Get("/nudges/mine", requireUser, nudgeH.Mine)
 
 	teams := api.Group("/teams", requireUser)
 	teams.Get("/", teamH.List)
@@ -112,6 +117,12 @@ func New(repo *repository.Repository, sessionTTL time.Duration, build BuildInfo)
 	// would only lose the record, not prevent the change.
 	team.Get("/decisions", decisionH.ForTeam)
 	team.Post("/decisions", decisionH.Record)
+
+	// "Bu işe bakar mısın." Any member may send one; the target must be on
+	// the team, which is what keeps this from being a way to put a
+	// notification on any account.
+	team.Post("/assignments/:issueKey/nudge", nudgeH.Send)
+	team.Get("/assignments/:issueKey/nudges", nudgeH.ForIssue)
 
 	return app
 }

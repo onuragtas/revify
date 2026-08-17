@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -728,5 +729,85 @@ func TestDecisionsAreHiddenFromOutsiders(t *testing.T) {
 	if res := h.call(t, "POST", "/api/teams/"+team+"/decisions", outsider.cookie,
 		map[string]string{"issueKey": "BUY-2", "decision": "approved"}); res.code != http.StatusForbidden {
 		t.Fatalf("outsider wrote a decision: %d", res.code)
+	}
+}
+
+/* -------------------------------- nudges ------------------------------ */
+
+func TestNudgeReachesTheAssignee(t *testing.T) {
+	h := newHarness(t)
+	ada, bo, team := h.teamOfTwo(t)
+	h.call(t, "POST", "/api/teams/"+team+"/assignments", ada.cookie,
+		map[string]string{"issueKey": "BUY-2455", "assigneeId": bo.id})
+
+	sent := h.call(t, "POST", "/api/teams/"+team+"/assignments/BUY-2455/nudge", ada.cookie,
+		map[string]string{"toUserId": bo.id, "message": "Bugün çıkması lazım"})
+	if sent.code != http.StatusCreated {
+		t.Fatalf("nudge: %d %v", sent.code, sent.body)
+	}
+
+	mine := items(t, h.call(t, "GET", "/api/nudges/mine", bo.cookie, nil))
+	if len(mine) != 1 {
+		t.Fatalf("assignee sees %d nudges", len(mine))
+	}
+	got := mine[0].(map[string]any)
+	if got["issueKey"] != "BUY-2455" || got["fromName"] != "Ada" || got["message"] != "Bugün çıkması lazım" {
+		t.Fatalf("unexpected nudge: %v", got)
+	}
+
+	// The sender's own list stays empty: a nudge is for the other person.
+	if n := len(items(t, h.call(t, "GET", "/api/nudges/mine", ada.cookie, nil))); n != 0 {
+		t.Fatalf("sender received their own nudge (%d)", n)
+	}
+}
+
+func TestNudgingTwiceIsVisibleAsTwice(t *testing.T) {
+	h := newHarness(t)
+	ada, bo, team := h.teamOfTwo(t)
+
+	for i := 0; i < 2; i++ {
+		h.call(t, "POST", "/api/teams/"+team+"/assignments/BUY-1/nudge", ada.cookie,
+			map[string]string{"toUserId": bo.id})
+	}
+
+	// Asking twice must look like asking twice — otherwise nobody notices
+	// they are nudging into silence.
+	onIssue := items(t, h.call(t, "GET", "/api/teams/"+team+"/assignments/BUY-1/nudges", ada.cookie, nil))
+	if len(onIssue) != 2 {
+		t.Fatalf("two nudges collapsed into %d", len(onIssue))
+	}
+}
+
+func TestNudgeStaysInsideTheTeam(t *testing.T) {
+	h := newHarness(t)
+	ada, bo, team := h.teamOfTwo(t)
+	outsider := h.signUp(t, "z@example.com", "Zoe")
+
+	// Otherwise this endpoint is a way to put a notification on any account.
+	if res := h.call(t, "POST", "/api/teams/"+team+"/assignments/BUY-1/nudge", ada.cookie,
+		map[string]string{"toUserId": outsider.id}); res.code != http.StatusBadRequest {
+		t.Fatalf("nudged an outsider: %d", res.code)
+	}
+	if res := h.call(t, "POST", "/api/teams/"+team+"/assignments/BUY-1/nudge", outsider.cookie,
+		map[string]string{"toUserId": bo.id}); res.code != http.StatusForbidden {
+		t.Fatalf("an outsider nudged a member: %d", res.code)
+	}
+	if res := h.call(t, "POST", "/api/teams/"+team+"/assignments/BUY-1/nudge", ada.cookie,
+		map[string]string{"toUserId": ada.id}); res.code != http.StatusBadRequest {
+		t.Fatalf("nudged themselves: %d", res.code)
+	}
+}
+
+func TestNudgePollIsBoundedBySince(t *testing.T) {
+	h := newHarness(t)
+	ada, bo, team := h.teamOfTwo(t)
+	h.call(t, "POST", "/api/teams/"+team+"/assignments/BUY-1/nudge", ada.cookie,
+		map[string]string{"toUserId": bo.id})
+
+	// The app's high-water mark: everything already announced is excluded,
+	// so a long-running app does not re-notify its whole history.
+	future := time.Now().UTC().Add(time.Hour).Format(time.RFC3339)
+	if n := len(items(t, h.call(t, "GET", "/api/nudges/mine?since="+url.QueryEscape(future), bo.cookie, nil))); n != 0 {
+		t.Fatalf("since was ignored: %d nudges returned", n)
 	}
 }

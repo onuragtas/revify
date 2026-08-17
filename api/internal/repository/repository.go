@@ -33,7 +33,7 @@ func Open(path string, log logger.Interface) (*Repository, error) {
 
 	if err := db.AutoMigrate(
 		&model.User{}, &model.Team{}, &model.TeamMember{}, &model.Session{}, &model.Assignment{},
-		&model.TeamSettings{}, &model.TeamNote{}, &model.Decision{},
+		&model.TeamSettings{}, &model.TeamNote{}, &model.Decision{}, &model.Nudge{},
 	); err != nil {
 		return nil, err
 	}
@@ -269,6 +269,47 @@ func (r *Repository) DecisionsForTeam(teamID string) ([]model.DecisionView, erro
 		Joins("LEFT JOIN users ON users.id = decisions.decided_by").
 		Where("decisions.team_id = ?", teamID).
 		Order("decisions.decided_at DESC").
+		Scan(&views).Error
+	return views, err
+}
+
+/* -------------------------------- nudges ------------------------------ */
+
+func (r *Repository) CreateNudge(nudge model.Nudge) error { return r.db.Create(&nudge).Error }
+
+// NudgesForUser returns what someone has been asked to look at, newest
+// first. Bounded by `since` so an app that has been running for months
+// does not re-read years of them on every poll.
+func (r *Repository) NudgesForUser(userID string, since time.Time) ([]model.NudgeView, error) {
+	views := []model.NudgeView{}
+	query := r.db.Table("nudges").
+		Select("nudges.id, nudges.team_id, nudges.issue_key, nudges.message, "+
+			"nudges.created_at, users.name AS from_name").
+		Joins("LEFT JOIN users ON users.id = nudges.from_user_id").
+		Where("nudges.to_user_id = ?", userID)
+
+	// Only when the caller has a mark to compare against. A zero time is
+	// "I have never polled", and comparing against it dropped every row —
+	// the driver does not read year 1 the way the stored values are
+	// written, so the filter excluded exactly what it was meant to pass.
+	if !since.IsZero() {
+		query = query.Where("nudges.created_at > ?", since)
+	}
+
+	err := query.Order("nudges.created_at DESC").Limit(200).Scan(&views).Error
+	return views, err
+}
+
+// NudgesForIssue is what the sender sees: asking twice should look like
+// asking twice.
+func (r *Repository) NudgesForIssue(teamID, issueKey string) ([]model.NudgeView, error) {
+	views := []model.NudgeView{}
+	err := r.db.Table("nudges").
+		Select("nudges.id, nudges.team_id, nudges.issue_key, nudges.message, "+
+			"nudges.created_at, users.name AS from_name").
+		Joins("LEFT JOIN users ON users.id = nudges.from_user_id").
+		Where("nudges.team_id = ? AND nudges.issue_key = ?", teamID, issueKey).
+		Order("nudges.created_at DESC").
 		Scan(&views).Error
 	return views, err
 }

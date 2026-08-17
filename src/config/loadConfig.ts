@@ -115,6 +115,15 @@ const yamlConfigSchema = z.object({
       pollIntervalMs: z.number().int().positive().default(120000),
     })
     .default({ enabled: false, pollIntervalMs: 120000 }),
+  /** How often to check what is waiting on you. Separate from the trigger
+   * poll: this one also asks the team API, and it is what decides how soon
+   * an assignment from a colleague reaches you. */
+  reminders: z
+    .object({
+      enabled: z.boolean().default(true),
+      pollIntervalMs: z.number().int().positive().default(900000),
+    })
+    .default({ enabled: true, pollIntervalMs: 900000 }),
   wiring: wiringSchema.default({}),
 });
 
@@ -157,6 +166,7 @@ export interface AppConfig {
     notesFilePath: string;
   };
   autoPrepare: { enabled: boolean; pollIntervalMs: number };
+  reminders: { enabled: boolean; pollIntervalMs: number };
   /** Whether this install has everything it needs to talk to Jira and
    * GitLab. False is a first-run state, not a failure. */
   setup: { configured: boolean; missing: string[]; configMissing: boolean };
@@ -265,6 +275,7 @@ export function loadConfig(configPath = 'config/config.yaml'): AppConfig {
       notesFilePath: dataPath(yamlConfig.review.notesFilePath, baseDir),
     },
     autoPrepare: yamlConfig.autoPrepare,
+    reminders: yamlConfig.reminders,
     wiring: yamlConfig.wiring,
     jira: {
       baseUrl: env.JIRA_BASE_URL ?? '',

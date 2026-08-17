@@ -41,6 +41,15 @@ export interface TeamDecision {
   decidedByName?: string;
 }
 
+export interface TeamNudge {
+  id: string;
+  teamId?: string;
+  issueKey: string;
+  message?: string;
+  createdAt: string;
+  fromName?: string;
+}
+
 export class BackendClient {
   constructor(private readonly settings: SettingsStore) {}
 
@@ -187,6 +196,29 @@ export class BackendClient {
       method: 'POST',
       body: JSON.stringify(decision),
     });
+  }
+
+  /** Reminders someone sent you, newer than the mark you last saw. */
+  async nudges(since: string | null): Promise<TeamNudge[]> {
+    const query = since ? `?since=${encodeURIComponent(since)}` : '';
+    const { data } = await this.request<{ items: TeamNudge[] }>(`/api/nudges/mine${query}`);
+    return data.items ?? [];
+  }
+
+  /** "Bu işe bakar mısın." */
+  async nudge(teamId: string, issueKey: string, toUserId: string, message: string) {
+    await this.request(
+      `/api/teams/${encodeURIComponent(teamId)}/assignments/${encodeURIComponent(issueKey)}/nudge`,
+      { method: 'POST', body: JSON.stringify({ toUserId, message }) },
+    );
+  }
+
+  /** Who has already asked about this issue, and when. */
+  async nudgesForIssue(teamId: string, issueKey: string): Promise<TeamNudge[]> {
+    const { data } = await this.request<{ items: TeamNudge[] }>(
+      `/api/teams/${encodeURIComponent(teamId)}/assignments/${encodeURIComponent(issueKey)}/nudges`,
+    );
+    return data.items ?? [];
   }
 
   async teamNotes(teamId: string) {

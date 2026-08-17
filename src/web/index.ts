@@ -29,6 +29,12 @@ const server = app.listen(port, () => {
   } else {
     console.log('Nothing runs automatically — open the page and pick an issue to review.');
   }
+
+  // Reminders run in the plain web mode too. There is no desktop
+  // notification here, but the events still drive the page's own list —
+  // and the log line is what tells someone running headless what is piling
+  // up on them.
+  if (config.reminders.enabled) app.reminders.start();
 });
 
 /**

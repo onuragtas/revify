@@ -173,3 +173,32 @@ type DecisionView struct {
 	DecidedAt     time.Time `json:"decidedAt"`
 	DecidedByName string    `json:"decidedByName,omitempty"`
 }
+
+// Nudge is one person asking another to look at an issue.
+//
+// Kept as its own row rather than a flag on the assignment, because "who
+// asked, and how many times" is the part worth seeing: a second nudge on
+// the same issue means something a boolean cannot say, and an automatic
+// reminder that cannot be told apart from a colleague's is one people
+// learn to ignore.
+type Nudge struct {
+	ID       string `gorm:"primaryKey" json:"id"`
+	TeamID   string `gorm:"index;not null" json:"teamId"`
+	IssueKey string `gorm:"index;not null" json:"issueKey"`
+	// Who it is for, and who sent it.
+	ToUserID   string    `gorm:"index;not null" json:"toUserId"`
+	FromUserID string    `gorm:"not null" json:"fromUserId"`
+	Message    string    `json:"message,omitempty"`
+	CreatedAt  time.Time `gorm:"index" json:"createdAt"`
+}
+
+// NudgeView carries the sender's name so a client can render a nudge
+// without looking anyone up.
+type NudgeView struct {
+	ID        string    `json:"id"`
+	TeamID    string    `json:"teamId"`
+	IssueKey  string    `json:"issueKey"`
+	Message   string    `json:"message,omitempty"`
+	CreatedAt time.Time `json:"createdAt"`
+	FromName  string    `json:"fromName,omitempty"`
+}

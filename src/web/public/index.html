@@ -1260,6 +1260,12 @@
       <label class="field"><span>Review dili</span><input id="setTeamLanguage" class="input" placeholder="Turkish" /></label>
       <div id="teamPolicyState" class="card-hint"></div>
 
+      <h4>Sürüm</h4>
+      <div class="teamCreateRow">
+        <span class="card-hint" id="updateCheckState" style="flex:1">Sürüm bilgisi yükleniyor…</span>
+        <button type="button" class="btn small" id="updateCheckBtn">Şimdi kontrol et</button>
+      </div>
+
       <div id="settingsResult" class="card-hint"></div>
     </div>
     <div class="modal-foot">
@@ -2882,6 +2888,16 @@
       data.settings.autoPreparePollMs ? Math.round(data.settings.autoPreparePollMs / 1000) : '';
 
     await loadTeamPolicy();
+
+    try {
+      const info = await (await fetch('/api/update')).json();
+      document.getElementById('updateCheckState').textContent = info.supported
+        ? 'Sürüm ' + (info.current ?? '?') + (info.status === 'ready' || info.status === 'manual'
+            ? ' — ' + info.version + ' hazır.' : '.')
+        : 'Geliştirme sürümü — güncelleme kontrolü yok.';
+    } catch {
+      /* the version line is not worth failing the settings screen over */
+    }
   }
 
   /**
@@ -3233,6 +3249,67 @@
     });
   }
 
+  /**
+   * What the team has open, with a way to say "bu işe bakar mısın".
+   *
+   * The assignee's own list was the only place an assignment appeared, so
+   * whoever handed the work out had no way of seeing it was still sitting
+   * there — let alone of asking about it without leaving the app.
+   */
+  async function renderTeamAssignments(teamId) {
+    const host = document.getElementById('teamAssignments');
+    if (!host) return;
+
+    let items = [];
+    try {
+      items = (await (await fetch('/api/backend/teams/' + encodeURIComponent(teamId) + '/assignments')).json()).items ?? [];
+    } catch {
+      host.innerHTML = '<p class="card-hint">Takım atamaları okunamadı.</p>';
+      return;
+    }
+
+    const open = items.filter((a) => a.status !== 'closed');
+    if (!open.length) {
+      host.innerHTML = '<h4>Açık atamalar</h4><p class="card-hint">Takımda açık atama yok.</p>';
+      return;
+    }
+
+    host.innerHTML = '<h4>Açık atamalar</h4>' + open.map((a) =>
+      '<div class="memberRow">' +
+      '<span>' + escapeHtml(a.issueKey) + '</span>' +
+      '<span class="muted">' + escapeHtml(a.assigneeName || '—') + ' · ' +
+        escapeHtml(sinceText(a.assignedAt)) + ' önce</span>' +
+      '<span class="spacer"></span>' +
+      // Nudging yourself is refused by the server; not offering it is
+      // kinder than explaining it afterwards.
+      (a.assigneeId && a.assigneeId !== teamState.user.id
+        ? '<button class="btn small nudgeBtn" data-key="' + escapeHtml(a.issueKey) +
+          '" data-to="' + escapeHtml(a.assigneeId) + '">Hatırlat</button>'
+        : '<span class="role">sende</span>') +
+      '</div>').join('');
+
+    host.querySelectorAll('.nudgeBtn').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        const original = btn.textContent;
+        try {
+          const res = await fetch('/api/reminders/nudge', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ issueKey: btn.dataset.key, toUserId: btn.dataset.to }),
+          });
+          const data = await res.json();
+          // Saying "gönderildi" and leaving the button dead is how someone
+          // ends up nudging four times without knowing.
+          btn.textContent = data.error ? 'Gönderilemedi' : 'Gönderildi';
+        } catch {
+          btn.textContent = 'Gönderilemedi';
+        }
+        setTimeout(() => { btn.textContent = original; btn.disabled = false; }, 4000);
+      });
+    });
+  }
+
   document.getElementById('teamClose').addEventListener('click', () => teamModal.classList.remove('open'));
   teamModal.addEventListener('click', (e) => {
     if (e.target === teamModal) teamModal.classList.remove('open');
@@ -3290,8 +3367,11 @@
         : '<h4>Takım yok</h4>' +
           '<div class="note-add"><input id="teamNewName" class="input" placeholder="takım adı" />' +
           '<button id="teamCreateBtn" class="btn btn-primary">Oluştur</button></div>') +
+      '<div id="teamAssignments"></div>' +
       '<div class="card-actions"><button id="teamLogoutBtn" class="btn btn-ghost">Çıkış yap</button></div>' +
       '<div id="teamResult" class="card-hint"></div>';
+
+    if (current) void renderTeamAssignments(current.id);
 
     const resultEl = document.getElementById('teamResult');
     document.getElementById('teamLogoutBtn').addEventListener('click', () => void signOutToGate());
@@ -3401,6 +3481,27 @@
     btn.hidden = false;
     btn.textContent = 'Kur ve yeniden başlat';
   }
+
+  /** Asking should get an answer, including "you are up to date" — that
+   * ends the question, which is the whole reason someone clicked. */
+  document.getElementById('updateCheckBtn').addEventListener('click', async () => {
+    const btn = document.getElementById('updateCheckBtn');
+    const stateEl = document.getElementById('updateCheckState');
+    btn.disabled = true;
+    stateEl.textContent = 'Kontrol ediliyor…';
+    try {
+      const res = await fetch('/api/update/check', { method: 'POST' });
+      const data = await res.json();
+      if (data.error) stateEl.textContent = data.error;
+      else if (data.available) stateEl.textContent = 'Yeni sürüm var: ' + data.version;
+      else stateEl.textContent = 'Güncel (' + (data.version ?? '') + ').';
+      await pollUpdate();
+    } catch (err) {
+      stateEl.textContent = 'Kontrol edilemedi: ' + err;
+    } finally {
+      btn.disabled = false;
+    }
+  });
 
   document.getElementById('updateBtn').addEventListener('click', async () => {
     const btn = document.getElementById('updateBtn');

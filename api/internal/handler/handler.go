@@ -8,6 +8,7 @@ package handler
 
 import (
 	"github.com/gofiber/fiber/v2"
+	"reflect"
 
 	"github.com/onuragtas/revify/internal/service"
 )
@@ -41,4 +42,13 @@ func Fail(c *fiber.Ctx, err error) error {
 	return c.Status(statusFor(kind)).JSON(fiber.Map{"error": message})
 }
 
-func List(c *fiber.Ctx, items any) error { return c.JSON(fiber.Map{"items": items}) }
+// An empty list is `[]`, never `null`. A nil Go slice serialises to null,
+// and a client that reasonably writes `items.length` crashes on it — the
+// shape of a response should not depend on how many rows came back.
+func List(c *fiber.Ctx, items any) error {
+	value := reflect.ValueOf(items)
+	if items == nil || (value.Kind() == reflect.Slice && value.IsNil()) {
+		return c.JSON(fiber.Map{"items": []any{}})
+	}
+	return c.JSON(fiber.Map{"items": items})
+}

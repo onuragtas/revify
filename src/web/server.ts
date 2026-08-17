@@ -13,6 +13,8 @@ import { buildPipeline, type Wired } from '../core/registry.js';
 import { Pipeline } from '../core/pipeline.js';
 import { ReviewQueue } from '../core/reviewQueue.js';
 import { AutoPrepareWatcher } from '../core/autoPrepare.js';
+import { ReminderWatcher } from '../core/reminderWatcher.js';
+import type { DueReminder, ReminderItem } from '../core/reminders.js';
 import { progressBus } from '../core/progressBus.js';
 import { splitReview } from '../core/reviewParts.js';
 import type { TriggerEvent } from '../core/types.js';
@@ -46,6 +48,9 @@ export interface ServerEvents {
   'review:ready': { issueKey: string; summary?: string };
   'review:failed': { issueKey: string; error: string };
   'review:auto-queued': { issueKey: string; summary?: string; position: number };
+  /** Something has been waiting long enough to say so again. Carries the
+   * whole batch: one interruption for five waiting issues, not five. */
+  'reminder:due': { items: DueReminder[]; title: string; body: string };
 }
 
 export function createServer(initialConfig: AppConfig, initialWired: Wired) {
@@ -838,6 +843,11 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired) {
 
   app.get('/api/backend/assignments', backendRoute(async () => ({ items: await backend.myAssignments() })));
 
+  /** What the team has handed out, so whoever assigned something can see
+   * it is still sitting there — and say so. */
+  app.get('/api/backend/teams/:teamId/assignments', backendRoute(async (req) =>
+    ({ items: await backend.teamAssignments(req.params.teamId) })));
+
   /** Reads the team's policy and mirrors it locally, so the next start uses
    * it even if the backend is unreachable then. */
   app.get('/api/backend/teams/:teamId/settings', backendRoute(async (req) => {
@@ -1276,6 +1286,144 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired) {
 
   let autoPrepare = makeAutoPrepare();
 
+  /* ------------------------------ reminders ---------------------------- */
+
+  /**
+   * What is waiting on this person, from every direction at once.
+   *
+   * Assembled here rather than in the watcher because only the server has
+   * all four: the backend client, the local review store and Jira. The
+   * watcher owns the schedule; these own the facts.
+   */
+  const reminderSources = {
+    /** Work a team-mate handed you, still open. */
+    async assignments(): Promise<ReminderItem[]> {
+      if (!backend.configured || !settings.get('apiSessionToken')) return [];
+      const items = (await backend.myAssignments()) as Array<Record<string, unknown>>;
+      return items
+        .filter((a) => a.status !== 'closed')
+        .map((a) => ({
+          kind: 'assignment' as const,
+          key: `assignment:${String(a.issueKey)}`,
+          issueKey: String(a.issueKey),
+          summary: a.summary ? String(a.summary) : undefined,
+          since: String(a.assignedAt ?? new Date().toISOString()),
+          from: a.assignedByName ? String(a.assignedByName) : undefined,
+        }));
+    },
+
+    /** Reviews finished on this machine, waiting on a decision that only
+     * this person can make. Announced once when ready, then by the clock —
+     * a review nobody decides is a developer nobody unblocks. */
+    approvals(): ReminderItem[] {
+      return wired.reviewStore
+        .list()
+        .filter((r) => r.status === 'awaiting_approval')
+        .map((r) => ({
+          kind: 'approval' as const,
+          key: `approval:${r.issueKey}`,
+          issueKey: r.issueKey,
+          summary: r.summary ?? undefined,
+          since: r.reviewedAt ?? r.updatedAt,
+        }));
+    },
+
+    /** Sitting in the review column with no review at all. Costs one JQL
+     * call, which is why it rides the reminder interval rather than a
+     * timer of its own. */
+    async stale(): Promise<ReminderItem[]> {
+      if (!config.setup.configured) return [];
+      const events = await wired.trigger.poll();
+      return events
+        .filter((e) => {
+          const status = wired.reviewStore.get(e.id)?.status;
+          return status === undefined || status === 'idle' || status === 'cancelled';
+        })
+        .map((e) => ({
+          kind: 'stale' as const,
+          key: `stale:${e.id}`,
+          issueKey: e.id,
+          summary: typeof e.data.summary === 'string' ? e.data.summary : undefined,
+          // When it last moved in Jira, which is the closest thing to
+          // "how long has this been sitting here" without a changelog
+          // call per issue.
+          since: typeof e.data.updated === 'string' ? e.data.updated : new Date().toISOString(),
+        }));
+    },
+
+    /** A person asking, which is why these are announced once each and
+     * never folded into the clock's schedule. */
+    async nudges(): Promise<ReminderItem[]> {
+      if (!backend.configured || !settings.get('apiSessionToken')) return [];
+      const items = await backend.nudges(state.nudgesSeenUntil());
+      if (!items.length) return [];
+
+      // The mark moves to the newest one seen, so the next poll asks only
+      // for what came after.
+      const newest = items.map((n) => n.createdAt).sort().pop();
+      if (newest) state.setNudgesSeenUntil(newest);
+
+      return items.map((n) => ({
+        kind: 'nudge' as const,
+        key: `nudge:${n.id}`,
+        issueKey: n.issueKey,
+        since: n.createdAt,
+        message: n.message || undefined,
+        from: n.fromName || undefined,
+      }));
+    },
+  };
+
+  function makeReminders(): ReminderWatcher {
+    return new ReminderWatcher(
+    { enabled: true, pollIntervalMs: config.reminders.pollIntervalMs },
+    {
+      sources: reminderSources,
+      read: () => state.reminderState(),
+      write: (next) => state.setReminderState(next),
+      announce: (due, summary) => {
+        emit('reminder:due', { items: due, title: summary.title, body: summary.body });
+        console.log(`[reminders] ${summary.title} — ${due.length} iş`);
+      },
+      log: (message) => console.log(`[reminders] ${message}`),
+      },
+    );
+  }
+
+  let reminders = makeReminders();
+
+  /** What is waiting, without waiting for the timer. Also what the
+   * "hatırlat" button calls, so asking to be reminded reminds you now. */
+  app.post('/api/reminders/check', async (_req, res) => {
+    const due = await reminders.tick();
+    res.json({ items: due, count: due.length });
+  });
+
+  /** The same list, for a screen rather than a notification. */
+  app.get('/api/reminders', async (_req, res) => {
+    const items = await Promise.allSettled([
+      reminderSources.assignments(),
+      Promise.resolve(reminderSources.approvals()),
+      reminderSources.stale(),
+    ]);
+    res.json({
+      items: items.flatMap((r) => (r.status === 'fulfilled' ? r.value : [])),
+    });
+  });
+
+  /** Asks a team-mate to look at something. */
+  app.post('/api/reminders/nudge', backendRoute(async (req) => {
+    const teamId = settings.get('teamId');
+    if (!teamId) throw new BackendError('Önce bir takıma katılmalısın.', 409);
+    await backend.nudge(
+      teamId,
+      String(req.body?.issueKey ?? ''),
+      String(req.body?.toUserId ?? ''),
+      String(req.body?.message ?? ''),
+    );
+    return { ok: true };
+  }));
+
   app.get('/api/auto-prepare', (_req, res) => {
     res.json({
       enabled: config.autoPrepare.enabled,
@@ -1311,11 +1459,14 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired) {
       });
 
       autoPrepare.stop();
+      reminders.stop();
       config = next;
       wired = nextWired;
       pipeline = new Pipeline(config, wired);
       autoPrepare = makeAutoPrepare();
       if (config.autoPrepare.enabled && config.setup.configured) autoPrepare.start();
+      reminders = makeReminders();
+      if (config.reminders.enabled) reminders.start();
 
       console.log('[settings] applied without restart');
       return { ok: true };
@@ -1342,6 +1493,7 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired) {
    * caller's to close — it owns it. */
   function shutdown(): void {
     autoPrepare.stop();
+    reminders.stop();
     queue.stopAll();
   }
 
@@ -1365,8 +1517,30 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired) {
   let updateState: Record<string, unknown> = { supported: false };
   let installUpdate: (() => void) | null = null;
 
+  let checkForUpdate: (() => Promise<Record<string, unknown>>) | null = null;
+
   app.get('/api/update', (_req, res) => {
     res.json(updateState);
+  });
+
+  /**
+   * "Check now."
+   *
+   * The automatic check runs hourly and on focus, which is enough — but a
+   * person who has just heard a version is out should not have to wait
+   * for a timer or restart the app to find out. Answering "you are up to
+   * date" is as useful as finding an update: it ends the question.
+   */
+  app.post('/api/update/check', async (_req, res) => {
+    if (!checkForUpdate) {
+      res.status(409).json({ error: 'Bu çalışma biçiminde güncelleme kontrolü yok (geliştirme sürümü).' });
+      return;
+    }
+    try {
+      res.json(await checkForUpdate());
+    } catch (err) {
+      res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+    }
   });
 
   app.post('/api/update/install', (_req, res) => {
@@ -1401,11 +1575,19 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired) {
     get autoPrepare() {
       return autoPrepare;
     },
+    get reminders() {
+      return reminders;
+    },
     reload,
     shutdown,
     events,
     pendingCount,
     /** Called by the desktop shell as the updater reports progress. */
+    /** Supplied by the desktop shell: the web-only mode has no updater,
+     * and a button that does nothing is worse than no button. */
+    setUpdateChecker(check: () => Promise<Record<string, unknown>>) {
+      checkForUpdate = check;
+    },
     setUpdateState(state: Record<string, unknown>, install?: () => void) {
       updateState = state;
       if (install) installUpdate = install;

@@ -252,12 +252,48 @@ async function setupUpdates(): Promise<void> {
   });
 
   const check = () => {
-    autoUpdater.checkForUpdates().catch((err) => console.error('[updater] check failed:', err));
+    lastCheckedAt = new Date().toISOString();
+    return autoUpdater.checkForUpdates().catch((err) => {
+      console.error('[updater] check failed:', err);
+      return null;
+    });
   };
-  // Not at the very start: the first seconds belong to showing a window.
+
+  // Checking is cheap — one request for a small YAML file — and the cost
+  // of checking rarely is real: on macOS an update needs a person to go
+  // and fetch it, so a version that appears in the morning should not
+  // wait until evening to be mentioned. Hourly, plus whenever the window
+  // comes back to the front, which is when someone is actually there to
+  // act on it.
   setTimeout(check, 15_000).unref?.();
-  setInterval(check, 6 * 60 * 60 * 1000).unref?.();
+  setInterval(check, 60 * 60 * 1000).unref?.();
+
+  // Focus is the cheapest possible signal that a person is present. Rate
+  // limited to fifteen minutes so alt-tabbing does not hammer GitHub.
+  let lastFocusCheck = 0;
+  app.on('browser-window-focus', () => {
+    const now = Date.now();
+    if (now - lastFocusCheck < 15 * 60 * 1000) return;
+    lastFocusCheck = now;
+    void check();
+  });
+
+  // "Check now", from the settings screen. A person who asks should get an
+  // answer rather than being told to wait for a timer — and if there is
+  // nothing new, saying so plainly is the answer.
+  server.setUpdateChecker(async () => {
+    const result = await check();
+    return {
+      checkedAt: lastCheckedAt,
+      version: result?.updateInfo?.version ?? current,
+      available: Boolean(result?.updateInfo && result.updateInfo.version !== current),
+    };
+  });
 }
+
+/** When the last check ran, so the UI can say "kontrol edildi: 3 dk önce"
+ * instead of leaving someone guessing whether it ever happens. */
+let lastCheckedAt: string | null = null;
 
 function releasesUrl(): string {
   return 'https://github.com/onuragtas/revify/releases/latest';
@@ -286,6 +322,9 @@ if (!app.requestSingleInstanceLock()) {
       // Not before setup is complete: with no JQL to poll, this only
       // produced a Jira error every interval — see web/index.ts.
       if (config.autoPrepare.enabled && config.setup.configured) server.autoPrepare.start();
+      // Independent of auto-prepare: even with nothing reviewed here,
+      // a colleague can assign you work, and that is what this watches.
+      if (config.reminders.enabled) server.reminders.start();
       else if (config.autoPrepare.enabled) {
         console.log(`Auto-prepare is waiting for setup: ${config.setup.missing.join(', ')}`);
       }
@@ -322,6 +361,15 @@ if (!app.requestSingleInstanceLock()) {
         () => openIssue(issueKey),
         true,
       );
+    });
+
+    server.events.on('reminder:due', ({ items, title, body }) => {
+      refreshBadge();
+      // Clicking opens the oldest of the batch: with one item that is the
+      // obvious thing, and with several it is the one that has waited
+      // longest — which is the one to look at first anyway.
+      const oldest = [...items].sort((a, b) => b.waitedHours - a.waitedHours)[0];
+      notify(title, body, oldest ? () => openIssue(oldest.issueKey) : undefined);
     });
 
     app.on('activate', () => showWindow());

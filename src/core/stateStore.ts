@@ -1,6 +1,7 @@
 import { readFileSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { writeFileAtomic } from './atomicWrite.js';
+import type { ReminderState } from './reminders.js';
 import type { PendingApproval } from './types.js';
 
 interface StateFile {
@@ -20,6 +21,12 @@ interface StateFile {
    * count doubles as the ordering the reviews were produced in. */
   lastReviewAt: string | null;
   reviewCount: number;
+  /** What the reminder watcher has already announced, and at which stage.
+   * Persisted so a restart does not re-announce everything waiting. */
+  reminders?: ReminderState;
+  /** The newest nudge this machine has seen. Kept as a mark rather than a
+   * server-side "read" flag so a second machine still tells you. */
+  nudgesSeenUntil?: string | null;
 }
 
 const EMPTY_STATE: StateFile = {
@@ -29,6 +36,8 @@ const EMPTY_STATE: StateFile = {
   autoPrepareSince: null,
   lastReviewAt: null,
   reviewCount: 0,
+  reminders: {},
+  nudgesSeenUntil: null,
 };
 
 export class StateStore {
@@ -151,5 +160,25 @@ export class StateStore {
     this.state.reviewCount += 1;
     this.save();
     return this.state.reviewCount;
+  }
+
+  /* ------------------------------ reminders ---------------------------- */
+
+  reminderState(): ReminderState {
+    return this.state.reminders ?? {};
+  }
+
+  setReminderState(next: ReminderState): void {
+    this.state.reminders = next;
+    this.save();
+  }
+
+  nudgesSeenUntil(): string | null {
+    return this.state.nudgesSeenUntil ?? null;
+  }
+
+  setNudgesSeenUntil(at: string): void {
+    this.state.nudgesSeenUntil = at;
+    this.save();
   }
 }

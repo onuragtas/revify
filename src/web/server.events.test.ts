@@ -26,6 +26,7 @@ function makeConfig(): AppConfig {
       notesFilePath: join(dir, 'notes.json'),
     },
     autoPrepare: { enabled: false, pollIntervalMs: 120000 },
+    reminders: { enabled: false, pollIntervalMs: 900000 },
     setup: { configured: true, missing: [], configMissing: false },
     wiring: {
       trigger: 'x',
