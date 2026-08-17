@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import { ZodError } from 'zod';
 import express from 'express';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -1263,7 +1264,16 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired) {
       // The old wiring is still in place and still works: a config that
       // fails to build is a reason to keep running on what was there, not
       // to leave the app with no clients at all.
-      const error = err instanceof Error ? err.message : String(err);
+      //
+      // A ZodError's message is a JSON dump of its issues. Shown raw it
+      // told the reader to fix "path: [JIRA_EMAIL]"; named plainly it
+      // tells them which field they got wrong.
+      const error =
+        err instanceof ZodError
+          ? err.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join(', ')
+          : err instanceof Error
+            ? err.message
+            : String(err);
       console.error(`[settings] could not apply: ${error}`);
       return { ok: false, error };
     }
