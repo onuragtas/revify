@@ -1444,6 +1444,8 @@
   let currentIssue = null;
   let currentProjectPath = null;
   let pollTimer = null;
+  /** Which polling run owns the screen — see startPolling. */
+  let pollGeneration = 0;
   let allItems = [];
   let lastWaitingCount = -1;
 
@@ -1955,12 +1957,25 @@
     pollTimer = null;
   }
 
-  /** (Re)starts the once-a-second detail poll. Needed on its own because a
-   * settled review stops polling, and a fix asked for afterwards has
-   * progress of its own to report. */
+  /**
+   * (Re)starts the once-a-second detail poll.
+   *
+   * Needed on its own because a settled review stops polling, and work
+   * asked for afterwards — a re-review, a fix — has progress of its own to
+   * report.
+   *
+   * Each run gets a number. A request already in flight when this is called
+   * belongs to the previous run, and its answer describes the state *before*
+   * whatever just started: letting it paint would show a stale screen, and
+   * letting it call stopPolling() would kill the poll that replaced it —
+   * which is exactly how the step log froze the moment a review was started
+   * from an already-finished one.
+   */
   function startPolling(issueKey) {
     stopPolling();
-    startPolling(issueKey);
+    const generation = ++pollGeneration;
+    void pollDetail(issueKey, generation);
+    pollTimer = setInterval(() => void pollDetail(issueKey, generation), 1000);
   }
 
   /** Once a review reaches one of these, nothing changes until you act, so
@@ -1968,10 +1983,12 @@
    * DOM under your cursor. */
   const SETTLED = ['awaiting_approval', 'approved', 'rejected', 'posted', 'failed', 'cancelled'];
 
-  async function pollDetail(issueKey) {
+  async function pollDetail(issueKey, generation = pollGeneration) {
     try {
       const res = await fetch('/api/reviews/' + encodeURIComponent(issueKey) + '/detail');
       const detail = await res.json();
+      // Superseded while this was in flight — see startPolling.
+      if (generation !== pollGeneration) return;
       connStateEl.textContent = '';
       connStateEl.classList.remove('error');
       renderDetail(detail);
@@ -2419,26 +2436,40 @@
       }
       button.disabled = true;
       resultEl.textContent = 'uygulanıyor…';
+
+      /*
+       * The request is the only part that may report a failure.
+       *
+       * Once the server says the patch went in, it is in someone's working
+       * copy. Anything that goes wrong afterwards is a screen problem, and
+       * reporting it as "Uygulanamadı" invites a second apply — which lands
+       * the same change twice or collides with itself. So the try covers the
+       * call and nothing else.
+       */
+      let data;
       try {
         const res = await fetch('/api/reviews/' + encodeURIComponent(currentIssue) + '/fix/apply', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ projectPath: project, path }),
         });
-        const data = await res.json();
-        if (data.error) {
-          resultEl.textContent = data.error;
-          button.disabled = false;
-          return;
-        }
-        resultEl.textContent =
-          data.files.length + ' dosya ' + data.root + ' içinde değişti — commitlenmedi.';
-        // Re-render so the card shows where it landed.
-        startPolling(currentIssue);
+        data = await res.json();
       } catch (err) {
         resultEl.textContent = 'Uygulanamadı: ' + err;
         button.disabled = false;
+        return;
       }
+
+      if (data.error) {
+        resultEl.textContent = data.error;
+        button.disabled = false;
+        return;
+      }
+
+      resultEl.textContent =
+        data.files.length + ' dosya ' + data.root + ' içinde değişti — commitlenmedi.';
+      // Re-render so the card shows where it landed.
+      startPolling(currentIssue);
     }
   });
 
@@ -2489,26 +2520,34 @@
     if (!picked.length) return;
 
     resultEl.textContent = 'başlatılıyor…';
+
+    // Same rule as apply: only the request itself may report a failure. The
+    // run is already queued by the time this returns, and saying it did not
+    // start would be false — and would invite a second one.
+    let data;
     try {
       const res = await fetch('/api/reviews/' + encodeURIComponent(currentIssue) + '/fix', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ findings: picked }),
       });
-      const data = await res.json();
-      if (data.error) {
-        resultEl.textContent = data.error;
-        return;
-      }
-      for (const k of Object.keys(patchBodies)) delete patchBodies[k];
-      fixModal.classList.remove('open');
-      showTab('patch');
-      // The review itself is settled, so the detail poll has stopped —
-      // start it again or the run would look like it never began.
-      startPolling(currentIssue);
+      data = await res.json();
     } catch (err) {
       resultEl.textContent = 'Başlatılamadı: ' + err;
+      return;
     }
+
+    if (data.error) {
+      resultEl.textContent = data.error;
+      return;
+    }
+
+    for (const k of Object.keys(patchBodies)) delete patchBodies[k];
+    fixModal.classList.remove('open');
+    showTab('patch');
+    // The review itself is settled, so the detail poll has stopped — start
+    // it again or the run would look like it never began.
+    startPolling(currentIssue);
   });
 
   /* -------------------------- verify: questions ------------------------ */
@@ -2912,8 +2951,7 @@
     document.getElementById('issueDesc').textContent = 'Jira detayları yükleniyor…';
     void loadIssueMeta(issueKey);
 
-    pollDetail(issueKey);
-    pollTimer = setInterval(() => pollDetail(issueKey), 1000);
+    startPolling(issueKey);
 
     // Highlight the card without a full list reload.
     rowsEl.querySelectorAll('.issue-card').forEach((card) => {
@@ -3023,6 +3061,11 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ contextRepos }),
       });
+      // Only now is the record 'queued'. The poll openIssue started read the
+      // status as it was before this request — for an issue that had already
+      // been reviewed that reads as "settled", and it would stop polling a
+      // run that is just beginning.
+      startPolling(issueKey);
     } catch (err) {
       stepsEl.textContent = 'Başlatılamadı: ' + err;
     }
