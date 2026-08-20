@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import { ZodError } from 'zod';
 import express from 'express';
 import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import { writeFileAtomic } from '../core/atomicWrite.js';
 import { SettingsStore, SETTINGS_DIR } from '../core/settingsStore.js';
 import { backendUrl, defaultBackendUrl, isProductionBackend } from '../core/backendUrl.js';
@@ -19,6 +19,17 @@ import { ReminderWatcher } from '../core/reminderWatcher.js';
 import type { DueReminder, ReminderItem } from '../core/reminders.js';
 import { progressBus } from '../core/progressBus.js';
 import { splitReview } from '../core/reviewParts.js';
+import { FIXABLE_SEVERITIES, parseFindings, worstSeverity, type Finding } from '../core/findings.js';
+import {
+  applyFixPatch,
+  createFixWorkspace,
+  extractFixPatch,
+  filesInPatch,
+  removeFixWorkspace,
+} from '../core/fixWorkspace.js';
+import { cacheDirName } from '../clients/repoCache.js';
+import { parseFixReport } from '../adapters/tasks/codeFixTask.js';
+import type { FixPatch, FixRecord, ReviewRecord } from '../core/reviewStore.js';
 import type { TriggerEvent } from '../core/types.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -50,6 +61,9 @@ export interface ServerEvents {
   'review:ready': { issueKey: string; summary?: string };
   'review:failed': { issueKey: string; error: string };
   'review:auto-queued': { issueKey: string; summary?: string; position: number };
+  /** A patch is waiting to be looked at — the fix run finished. */
+  'fix:ready': { issueKey: string; files: number };
+  'fix:failed': { issueKey: string; error: string };
   /** Something has been waiting long enough to say so again. Carries the
    * whole batch: one interruption for five waiting issues, not five. */
   'reminder:due': { items: DueReminder[]; title: string; body: string };
@@ -93,7 +107,14 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired) {
   // Reviews run strictly one at a time — see ReviewQueue for why that is a
   // correctness requirement and not just throttling.
   const queue = new ReviewQueue(
-    async (event, signal) => {
+    async (event, signal, kind) => {
+      // A fix is not a review and must not touch the review's status — the
+      // record is still sitting at awaiting_approval with a human's
+      // decision pending on it.
+      if (kind === 'fix') {
+        await runFix(event, signal);
+        return;
+      }
       progressBus.log(event.id, 'started');
       try {
         // Before the review, not when someone opens the notes screen: an
@@ -132,7 +153,18 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired) {
         emit('review:failed', { issueKey: event.id, error: message });
       }
     },
-    (issueKey, position) => {
+    (issueKey, position, kind) => {
+      if (kind === 'fix') {
+        patchFix(issueKey, {
+          status: position === 0 ? 'running' : 'queued',
+          queuePosition: position === 0 ? undefined : position,
+        });
+        progressBus.log(
+          issueKey,
+          position === 0 ? 'fix: başlıyor' : `fix: sırada — ${position} iş önde`,
+        );
+        return;
+      }
       if (position === 0) {
         wired.reviewStore.upsert(issueKey, { status: 'running', queuePosition: undefined });
         return;
@@ -141,6 +173,247 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired) {
       progressBus.log(issueKey, `queued — ${position} review(s) ahead`);
     },
   );
+
+
+  /* ------------------------------- fixes -------------------------------
+   *
+   * A review says what is wrong; a fix run turns the findings a human
+   * picked into a patch. It never edits the repo cache and never touches
+   * anyone's working copy on its own — see core/fixWorkspace.ts for why.
+   * Applying the patch is a separate, explicit request against a directory
+   * the person names.
+   */
+
+  /** Merges into the fix record and leaves the review around it alone. The
+   * review is usually sitting at `awaiting_approval` with a decision
+   * pending; a fix must not move it. */
+  function patchFix(issueKey: string, patch: Partial<FixRecord>): void {
+    const current = wired.reviewStore.get(issueKey)?.fix;
+    if (!current) return;
+    wired.reviewStore.upsert(issueKey, { fix: { ...current, ...patch } });
+  }
+
+  /**
+   * Where a checkout lives decides how the fix starts from it.
+   *
+   * A repo-cache clone is re-fetched first (another review may have left it
+   * on a different branch entirely) and holds nothing uncommitted. A
+   * directory someone reviewed by path is their own working copy, and the
+   * uncommitted half of it is exactly what the review read — so it has to
+   * travel into the workspace or the fix starts from code nobody reviewed.
+   */
+  function isRepoCacheCheckout(repoPath: string): boolean {
+    const root = resolve(config.review.repoCacheDir);
+    const dir = resolve(repoPath);
+    return dir === root || dir.startsWith(root + sep);
+  }
+
+  /** `src/a.ts:42`, `src/a.ts:42-51` and a bare path all name the same
+   * file. Anything else (a flow, a prose description) yields ''. */
+  function fileOfFinding(location: string): string {
+    const cleaned = location.replace(/:\d+(?:-\d+)?\s*$/, '').trim();
+    return /\.[a-zA-Z0-9]+$|\//.test(cleaned) ? cleaned : '';
+  }
+
+  /**
+   * Which findings belong to which repository.
+   *
+   * A change can span services, and each repo's fix runs in its own
+   * workspace — so a finding has to be sent to the repo whose file it
+   * names. One that names no file, or a file no repo in this review
+   * touched, goes to every run: the prompt tells the fixer to skip what
+   * isn't its own, and losing a blocking finding to a path-matching miss
+   * would be far worse than a run that reads one line and skips it.
+   */
+  function findingsForRepo(
+    findings: Finding[],
+    change: NonNullable<ReviewRecord['repoChanges']>[number],
+    all: NonNullable<ReviewRecord['repoChanges']>,
+  ): Finding[] {
+    const belongsTo = (f: Finding, c: typeof change): boolean => {
+      const file = fileOfFinding(f.location);
+      if (!file) return false;
+      return c.files.some(
+        (entry) => entry.path === file || entry.path.endsWith(`/${file}`) || file.endsWith(`/${entry.path}`),
+      );
+    };
+    return findings.filter((f) => belongsTo(f, change) || !all.some((c) => belongsTo(f, c)));
+  }
+
+  /** The directory a repository's fix workspace is cloned from, made
+   * current first. */
+  async function fixSourceFor(
+    change: NonNullable<ReviewRecord['repoChanges']>[number],
+    issueKey: string,
+    signal: AbortSignal,
+  ): Promise<{ dir: string; includeWorkingTree: boolean }> {
+    const reviewed = (change as { repoPath?: string | null }).repoPath ?? null;
+
+    if (reviewed && !isRepoCacheCheckout(reviewed)) {
+      if (!existsSync(reviewed)) {
+        throw new Error(`${reviewed} artık yok — bu dizinin yamasını üretemem.`);
+      }
+      return { dir: reviewed, includeWorkingTree: true };
+    }
+
+    if (!wired.repoCache) {
+      throw new Error('Repo checkout kapalı (Ayarlar → yerel checkout), düzeltme için kod gerekiyor.');
+    }
+    progressBus.log(issueKey, `fix: ${change.projectPath}@${change.branchName} güncelleniyor…`);
+    const dir = await wired.repoCache.ensureCheckout(
+      change.projectPath,
+      change.branchName,
+      change.baseBranch,
+      signal,
+    );
+    return { dir, includeWorkingTree: false };
+  }
+
+  /**
+   * One fix run: every repository the selected findings touch, each in its
+   * own throwaway workspace, each leaving a patch behind.
+   *
+   * A repository that fails is recorded against that repository and the
+   * others carry on. One unreachable service must not cost the patch for
+   * the one that was ready.
+   */
+  async function runFix(event: TriggerEvent, signal: AbortSignal): Promise<void> {
+    const issueKey = event.id;
+    const record = wired.reviewStore.get(issueKey);
+    const wanted = new Set((event.data.fixFindingIds as string[] | undefined) ?? []);
+
+    // Cleared or re-reviewed while this waited in line: there is nothing
+    // left to fix, and nowhere to report it either.
+    if (!record?.fix) {
+      progressBus.log(issueKey, 'fix: review değişti, iptal edildi');
+      return;
+    }
+    if (!record.review) {
+      patchFix(issueKey, {
+        status: 'failed',
+        error: 'Review kaydı yok — düzeltilecek bulgu kalmamış.',
+        finishedAt: new Date().toISOString(),
+      });
+      return;
+    }
+
+    const findings = parseFindings(record.review.markdown).filter((f) => wanted.has(f.id));
+    const changes = record.repoChanges ?? [];
+    const patches: FixPatch[] = [];
+    const report: Array<{ outcome: 'fixed' | 'skipped'; text: string }> = [];
+    let ran = 0;
+
+    try {
+      if (!findings.length) throw new Error('Seçilen bulgular bu review\'da bulunamadı.');
+      if (!changes.length) throw new Error('Bu review\'a bağlı bir repo yok.');
+
+      for (const change of changes) {
+        signal.throwIfAborted();
+        const mine = findingsForRepo(findings, change, changes);
+        if (!mine.length) continue;
+
+        const workspace = join(
+          wired.fixWorkspaceRoot,
+          `${issueKey.replace(/[^a-zA-Z0-9._-]+/g, '_')}__${cacheDirName(change.projectPath)}`,
+        );
+
+        try {
+          const source = await fixSourceFor(change, issueKey, signal);
+          progressBus.log(
+            issueKey,
+            `fix: ${change.projectPath} — ${mine.length} bulgu, çalışma kopyası hazırlanıyor…`,
+          );
+          await createFixWorkspace(source, workspace, signal);
+
+          const answer = await wired.fixTask.run({
+            issueKey,
+            summary: record.summary ?? '',
+            projectPath: change.projectPath,
+            branchName: change.branchName,
+            // The diff as it was reviewed, reassembled from the per-file
+            // chunks the record keeps.
+            diff: change.files.map((f) => f.diff).join('\n\n'),
+            findings: mine,
+            workdir: workspace,
+            signal,
+            onProgress: (message) => progressBus.log(issueKey, `fix: ${message}`),
+          });
+
+          signal.throwIfAborted();
+          const { patch, stats } = await extractFixPatch(workspace, signal);
+          report.push(...parseFixReport(answer));
+          ran++;
+
+          if (patch.trim()) {
+            patches.push({
+              projectPath: change.projectPath,
+              branchName: change.branchName,
+              patch,
+              stats,
+              files: filesInPatch(patch),
+            });
+            progressBus.log(
+              issueKey,
+              `fix: ${change.projectPath} — ${stats.files} dosya, +${stats.insertions}/-${stats.deletions}`,
+            );
+          } else {
+            progressBus.log(issueKey, `fix: ${change.projectPath} — hiçbir dosya değişmedi`);
+          }
+        } catch (err) {
+          if (signal.aborted) throw err;
+          const message = err instanceof Error ? err.message : String(err);
+          progressBus.log(issueKey, `fix: ${change.projectPath} BAŞARISIZ: ${message}`);
+          patches.push({
+            projectPath: change.projectPath,
+            branchName: change.branchName,
+            patch: '',
+            stats: { files: 0, insertions: 0, deletions: 0 },
+            files: [],
+            error: message,
+          });
+        } finally {
+          // The workspace is scratch space; its only lasting output is the
+          // patch that has already been taken out of it.
+          removeFixWorkspace(workspace);
+        }
+      }
+
+      if (!ran) {
+        throw new Error(
+          patches.find((p) => p.error)?.error ?? 'Seçilen bulguların dosyaları hiçbir repoda bulunamadı.',
+        );
+      }
+
+      patchFix(issueKey, {
+        status: 'ready',
+        patches,
+        report,
+        queuePosition: undefined,
+        error: undefined,
+        finishedAt: new Date().toISOString(),
+      });
+      const changed = patches.reduce((total, p) => total + p.stats.files, 0);
+      progressBus.log(issueKey, changed ? `fix: yama hazır (${changed} dosya)` : 'fix: yama boş');
+      emit('fix:ready', { issueKey, files: changed });
+    } catch (err) {
+      if (signal.aborted) {
+        patchFix(issueKey, { status: 'cancelled', queuePosition: undefined, finishedAt: new Date().toISOString() });
+        progressBus.log(issueKey, 'fix: durduruldu');
+        return;
+      }
+      const message = err instanceof Error ? err.message : String(err);
+      patchFix(issueKey, {
+        status: 'failed',
+        patches,
+        report,
+        queuePosition: undefined,
+        error: message,
+        finishedAt: new Date().toISOString(),
+      });
+      progressBus.log(issueKey, `fix: BAŞARISIZ: ${message}`);
+      emit('fix:failed', { issueKey, error: message });
+    }
+  }
 
   // Pending approvals whose review is gone would post stale text if a
   // decision ever reached them. Cleared before anything can.
@@ -281,6 +554,36 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired) {
       appliedNotes: parts?.appliedNotes ?? [],
       repoChanges: record?.repoChanges ?? null,
       history: record?.history ?? [],
+      // The review read as a list, so the fix screen can offer the findings
+      // as checkboxes rather than asking a human to retype them.
+      findings: record?.review
+        ? parseFindings(record.review.markdown).map((f) => ({
+            id: f.id,
+            severity: f.severity,
+            location: f.location,
+            heading: f.heading,
+          }))
+        : [],
+      /*
+       * The fix, minus the patches themselves.
+       *
+       * This endpoint is polled once a second while an issue is open and a
+       * patch is measured in kilobytes — sending it with every poll would
+       * be the same bytes over and over for a panel that only needs to know
+       * how big it is. The text has its own endpoint.
+       */
+      fix: record?.fix
+        ? {
+            ...record.fix,
+            patches: record.fix.patches.map(({ patch, ...rest }) => ({ ...rest, size: patch.length })),
+          }
+        : null,
+      /** False when this machine's LLM provider has no file tools — the UI
+       * says why instead of offering a button that cannot work. */
+      fixAvailable: wired.fixTask.available && Boolean(record?.repoChanges?.length),
+      /** Where each project was last applied on this machine, so the apply
+       * form opens filled in. */
+      fixTargets: settings.get('fixTargets') ?? {},
       clarifications: record?.clarifications ?? [],
       rejectionReason: record?.rejectionReason ?? null,
       revisionRequest: record?.revisionRequest ?? '',
@@ -417,7 +720,7 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired) {
         rejectionReason: r.rejectionReason || null,
         jiraStatus: current?.status ?? null,
         assignee: current?.assignee ?? null,
-        severity: r.review ? worstSeverity(r.review.markdown) : '',
+        severity: (r.review ? worstSeverity(r.review.markdown) : '') as string,
         decidedByName: null as string | null,
         local: true,
       };
@@ -1155,8 +1458,10 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired) {
   app.delete('/api/reviews/:issueKey', (req, res) => {
     const { issueKey } = req.params;
     // Drop it from the line too, or clearing a queued task would leave it
-    // to start later against state the user thought they had wiped.
+    // to start later against state the user thought they had wiped. Both
+    // kinds: a fix left in the line would run against a review that is gone.
     queue.cancel(issueKey);
+    queue.cancel(issueKey, 'fix');
     progressBus.clear(issueKey);
     wired.reviewStore.reset(issueKey);
     pipeline.forget(issueKey);
@@ -1233,6 +1538,7 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired) {
       error: undefined,
       trigger: 'manual',
       rejectionReason: undefined,
+      fix: undefined,
       projectPaths: [change.projectPath],
     });
 
@@ -1296,7 +1602,16 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired) {
       // Belongs to the decision that just got superseded — keeping it would
       // attach the old rejection's reason to a brand new review.
       rejectionReason: undefined,
+      // Same reasoning, and it matters more: a patch is built from specific
+      // findings, and after a re-review nobody can tell which review it
+      // belonged to. Applying a stale one would undo work that was just done.
+      fix: undefined,
     });
+
+    // Any fix still in the line belonged to the review being replaced. Its
+    // findings are about to stop existing, so let it go rather than spend
+    // minutes producing a patch against them.
+    queue.cancel(event.id, 'fix');
 
     // The queue sets the status — running if it starts now, queued
     // otherwise — and starts the run itself. The caller polls /detail.
@@ -1320,6 +1635,161 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired) {
       progressBus.log(issueKey, 'kuyruktan çıkarıldı');
     }
     res.json({ ok: true });
+  });
+
+
+  /**
+   * Turns the findings a human picked into a patch.
+   *
+   * Nothing is decided here and nothing is written to anyone's code: the
+   * run produces a patch and stops. Applying it is a separate call against
+   * a directory the person names, and even then it is left uncommitted.
+   *
+   * Defaults to every blocking and major finding — a minor is a nit, and a
+   * patch nobody asked for is noise in someone's working copy.
+   */
+  app.post('/api/reviews/:issueKey/fix', (req, res) => {
+    const { issueKey } = req.params;
+    const record = wired.reviewStore.get(issueKey);
+
+    if (!record?.review) {
+      res.status(409).json({ error: 'Önce bir review gerekiyor — düzeltilecek bulgu yok.' });
+      return;
+    }
+    if (!wired.fixTask.available) {
+      res.status(409).json({
+        error:
+          'Bu makinedeki LLM sağlayıcısı dosya düzenleyemiyor. Düzeltme için `claude` CLI sağlayıcısı gerekiyor (config.yaml → wiring.llm: claudeCli).',
+      });
+      return;
+    }
+    if (!record.repoChanges?.length) {
+      res.status(409).json({
+        error: 'Bu review yerel bir checkout olmadan üretilmiş — üzerinde değişiklik yapılacak kod yok.',
+      });
+      return;
+    }
+    if (queue.positionOf(issueKey, 'fix') !== null) {
+      res.status(409).json({ error: 'Bu iş için bir düzeltme zaten çalışıyor.' });
+      return;
+    }
+
+    const all = parseFindings(record.review.markdown);
+    const asked: string[] = Array.isArray(req.body?.findings) ? req.body.findings.map(String) : [];
+    const selected = asked.length
+      ? all.filter((f) => asked.includes(f.id))
+      : all.filter((f) => FIXABLE_SEVERITIES.includes(f.severity));
+
+    if (!selected.length) {
+      res.status(400).json({ error: 'Düzeltilecek bulgu seçilmedi.' });
+      return;
+    }
+
+    wired.reviewStore.upsert(issueKey, {
+      fix: {
+        status: 'queued',
+        findings: selected.map((f) => ({ severity: f.severity, heading: f.heading })),
+        patches: [],
+        requestedAt: new Date().toISOString(),
+      },
+    });
+
+    const position = queue.enqueue(
+      { id: issueKey, data: { summary: record.summary, fixFindingIds: selected.map((f) => f.id) } },
+      'fix',
+    );
+    res.json({ ok: true, position, findings: selected.length });
+  });
+
+  /** Stops a fix that is running or waiting. The review it belongs to is
+   * untouched — it was never part of this. */
+  app.post('/api/reviews/:issueKey/fix/stop', (req, res) => {
+    const { issueKey } = req.params;
+    if (!queue.cancel(issueKey, 'fix')) {
+      res.status(409).json({ error: 'Çalışan bir düzeltme yok.' });
+      return;
+    }
+    // A running one marks itself when the abort unwinds; a waiting one
+    // never starts, so nothing else would ever mark it.
+    if (wired.reviewStore.get(issueKey)?.fix?.status === 'queued') {
+      patchFix(issueKey, { status: 'cancelled', queuePosition: undefined });
+    }
+    res.json({ ok: true });
+  });
+
+  /** Throws the patch away. Used before asking for a different one, and by
+   * the UI when a patch has served its purpose. */
+  app.delete('/api/reviews/:issueKey/fix', (req, res) => {
+    const { issueKey } = req.params;
+    queue.cancel(issueKey, 'fix');
+    wired.reviewStore.upsert(issueKey, { fix: undefined });
+    res.json({ ok: true });
+  });
+
+  /** The patch text itself. Kept out of /detail because that endpoint is
+   * polled once a second and a patch is measured in kilobytes. */
+  app.get('/api/reviews/:issueKey/fix/patch', (req, res) => {
+    const { issueKey } = req.params;
+    const projectPath = String(req.query.projectPath ?? '');
+    const entry = wired.reviewStore
+      .get(issueKey)
+      ?.fix?.patches.find((p) => !projectPath || p.projectPath === projectPath);
+
+    if (!entry?.patch) {
+      res.status(404).json({ error: 'Bu proje için yama yok.' });
+      return;
+    }
+    if (req.query.download) {
+      const name = `${issueKey}-${entry.projectPath.replace(/[^a-zA-Z0-9._-]+/g, '_')}.patch`;
+      res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
+    }
+    res.type('text/plain; charset=utf-8').send(entry.patch);
+  });
+
+  /**
+   * Applies a patch to a working copy on this machine and leaves it there,
+   * uncommitted.
+   *
+   * The directory is named by the person, never guessed. The repo cache is
+   * not a candidate however tempting: an apply there looks like it worked
+   * and is erased by the next review that touches the repo.
+   */
+  app.post('/api/reviews/:issueKey/fix/apply', async (req, res) => {
+    const { issueKey } = req.params;
+    const fix = wired.reviewStore.get(issueKey)?.fix;
+    const projectPath = String(req.body?.projectPath ?? '');
+    const target = String(req.body?.path ?? '').trim();
+
+    if (!fix || fix.status !== 'ready') {
+      res.status(409).json({ error: 'Uygulanacak hazır bir yama yok.' });
+      return;
+    }
+    if (!target) {
+      res.status(400).json({ error: 'Yamanın uygulanacağı dizini seç.' });
+      return;
+    }
+    const entry = fix.patches.find((p) => p.projectPath === projectPath);
+    if (!entry?.patch.trim()) {
+      res.status(404).json({ error: `${projectPath} için yama yok.` });
+      return;
+    }
+
+    try {
+      const result = await applyFixPatch(target, entry.patch);
+      const at = new Date().toISOString();
+      patchFix(issueKey, {
+        patches: fix.patches.map((p) =>
+          p.projectPath === projectPath
+            ? { ...p, appliedTo: result.root, appliedAt: at, appliedWithMerge: result.merged }
+            : p,
+        ),
+      });
+      // Remembered so the next patch for this repo doesn't ask again.
+      settings.update({ fixTargets: { ...(settings.get('fixTargets') ?? {}), [projectPath]: result.root } });
+      res.json({ ok: true, root: result.root, files: result.files, merged: result.merged });
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+    }
   });
 
   /**
@@ -1367,23 +1837,6 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired) {
 
     void publishDecision(issueKey, decision, String(patch.rejectionReason ?? ''));
     return { status: 200, body: { ok: true } };
-  }
-
-  /**
-   * The heaviest finding in a review.
-   *
-   * Severity is not stored as a field — it lives in the finding headings
-   * (`### blocking — file:line`), which is how the UI colours them. The
-   * team list wants one label per issue, and the honest one is the worst:
-   * an issue with a blocking finding is not "minor" because two minors
-   * came after it.
-   */
-  function worstSeverity(markdown: string): string {
-    const order = ['blocking', 'major', 'minor'];
-    const found = new Set(
-      [...markdown.matchAll(/^#{1,6}\s*(blocking|major|minor)\b/gim)].map((m) => m[1].toLowerCase()),
-    );
-    return order.find((level) => found.has(level)) ?? '';
   }
 
   /**

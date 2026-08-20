@@ -518,6 +518,34 @@
   .sev-minor { background: var(--blue-soft); color: var(--blue); }
   .sev-loc { font-family: var(--mono); font-size: 0.82rem; color: var(--text-muted); }
 
+  /* fix / patch */
+  .findingRow {
+    display: flex; align-items: flex-start; gap: 0.55rem; padding: 0.5rem 0.6rem;
+    border: 1px solid var(--border); border-radius: var(--radius-sm);
+    margin-bottom: 0.35rem; font-size: 0.85rem; cursor: pointer;
+  }
+  .findingRow:hover { background: var(--surface-2); }
+  .findingRow input { margin-top: 0.15rem; accent-color: var(--accent); }
+  .findingRow .sev-loc { display: block; margin-top: 0.15rem; }
+  .patchCard { margin-bottom: 0.9rem; }
+  .patchStat { font-family: var(--mono); font-size: 0.78rem; color: var(--text-muted); }
+  .patchStat .add { color: var(--green); }
+  .patchStat .del { color: var(--red); }
+  .patchFiles { font-family: var(--mono); font-size: 0.78rem; margin: 0.5rem 0 0; }
+  .patchFiles div { padding: 0.12rem 0; word-break: break-all; }
+  .patchText {
+    max-height: 26rem; overflow: auto; background: var(--surface-2);
+    border-radius: var(--radius-sm); padding: 0.6rem; margin: 0.6rem 0 0;
+    font-family: var(--mono); font-size: 0.76rem; white-space: pre;
+  }
+  .applyRow { display: flex; gap: 0.5rem; margin-top: 0.7rem; flex-wrap: wrap; align-items: center; }
+  .applyRow .input { flex: 1; min-width: 15rem; }
+  .fixReport { list-style: none; padding: 0; margin: 0.4rem 0 0; font-size: 0.85rem; }
+  .fixReport li { padding: 0.3rem 0; display: flex; gap: 0.5rem; align-items: baseline; }
+  .fixReport .mark { font-weight: 700; font-family: var(--mono); font-size: 0.72rem; }
+  .fixReport .fixed .mark { color: var(--green); }
+  .fixReport .skipped .mark { color: var(--amber); }
+
   /* decision */
   .decision { border-color: var(--border-strong); }
   #outcomeHint {
@@ -1012,6 +1040,7 @@
             <div class="detail-head-actions">
               <button id="reviewBtn" class="btn btn-primary">İncele</button>
               <button id="assignBtn" class="btn" style="display:none" title="Bu işi bir takım arkadaşına devret">Ata…</button>
+              <button id="fixBtn" class="btn" style="display:none" title="Blocking ve major bulgular için yama üret">Düzelt…</button>
               <button id="stopBtn" class="btn btn-reject" style="display:none">Durdur</button>
               <button id="toggleContextBtn" class="btn">Bağlam…</button>
               <button id="clearBtn" class="btn btn-ghost" title="Bu görevin review durumunu sıfırla">Temizle</button>
@@ -1024,6 +1053,7 @@
             <button class="tab active" data-tab="review">Review<span class="tab-count" data-count="review" hidden></span></button>
             <button class="tab" data-tab="steps">Adımlar</button>
             <button class="tab" data-tab="diff">Değişiklik<span class="tab-count" data-count="diff" hidden></span></button>
+            <button class="tab" data-tab="patch">Yama<span class="tab-count" data-count="patch" hidden></span></button>
             <button class="tab" data-tab="verify">Doğrulama<span class="tab-count" data-count="verify" hidden></span></button>
             <button class="tab" data-tab="notes">Notlar<span class="tab-count" data-count="notes" hidden></span></button>
             <button class="tab" data-tab="history">Geçmiş<span class="tab-count" data-count="history" hidden></span></button>
@@ -1089,6 +1119,16 @@
               <div id="diffFiles"></div>
             </div>
             <div id="diffEmpty" class="section-empty">Gösterilecek değişiklik yok.</div>
+          </div>
+
+          <!-- ----------------------------- Yama ---------------------------- -->
+          <div class="panel" data-panel="patch">
+            <div id="patchBlock" style="display:none"></div>
+            <div id="patchEmpty" class="section-empty">
+              Henüz yama yok. Review'deki <b>blocking</b> ve <b>major</b> bulgular için
+              yukarıdaki <b>Düzelt…</b> ile yama üretebilirsin — hiçbir dosyan değişmez,
+              yamayı sonra kendi seçtiğin dizine uygularsın.
+            </div>
           </div>
 
           <!-- ---------------------------- Verify --------------------------- -->
@@ -1304,6 +1344,29 @@
     <div class="modal-foot">
       <button id="assignCancel" class="btn">Vazgeç</button>
       <button id="assignConfirm" class="btn btn-primary" disabled>Ata</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="fixModal">
+  <div class="modal">
+    <div class="modal-head">
+      <h3>Düzelt</h3>
+      <button id="fixClose" class="btn btn-ghost btn-icon" style="margin-left:auto" title="Kapat">✕</button>
+    </div>
+    <div class="modal-body">
+      <p class="card-hint">
+        Seçtiğin bulgular için kod değişikliği üretilir ve <b>yama</b> olarak Yama sekmesinde
+        bekler. Repo'nun ayrı bir kopyasında çalışılır: ne senin çalışma kopyan değişir, ne de
+        bir şey commitlenir. Yamayı sonra istediğin dizine uygularsın.
+      </p>
+      <h4>Bulgular</h4>
+      <div id="fixFindings"></div>
+      <div id="fixResult" class="card-hint"></div>
+    </div>
+    <div class="modal-foot">
+      <button id="fixCancel" class="btn">Vazgeç</button>
+      <button id="fixConfirm" class="btn btn-primary" disabled>Yama üret</button>
     </div>
   </div>
 </div>
@@ -1892,6 +1955,14 @@
     pollTimer = null;
   }
 
+  /** (Re)starts the once-a-second detail poll. Needed on its own because a
+   * settled review stops polling, and a fix asked for afterwards has
+   * progress of its own to report. */
+  function startPolling(issueKey) {
+    stopPolling();
+    startPolling(issueKey);
+  }
+
   /** Once a review reaches one of these, nothing changes until you act, so
    * there is nothing to poll for — and polling would keep rebuilding the
    * DOM under your cursor. */
@@ -1904,7 +1975,9 @@
       connStateEl.textContent = '';
       connStateEl.classList.remove('error');
       renderDetail(detail);
-      if (SETTLED.includes(detail.status)) stopPolling();
+      // A settled review has nothing left to poll for — unless a fix is
+      // running against it, which has its own steps and its own ending.
+      if (SETTLED.includes(detail.status) && !FIX_BUSY.includes(detail.fix?.status)) stopPolling();
     } catch (err) {
       connStateEl.textContent = 'bağlantı hatası, yeniden deneniyor…';
       connStateEl.classList.add('error');
@@ -2160,6 +2233,284 @@
       .join('');
   }
 
+
+  /* ------------------------------- yama -------------------------------- */
+
+  /**
+   * The review's findings turned into a patch.
+   *
+   * Nothing on this tab changes anyone's code by itself. The run produces a
+   * patch in a throwaway copy of the repo; applying it is a separate click
+   * against a directory you name, and even then it lands uncommitted so you
+   * read it before it becomes yours.
+   */
+  const FIX_BUSY = ['queued', 'running'];
+  const FIX_STATUS_TR = {
+    queued: 'kuyrukta', running: 'çalışıyor', ready: 'hazır',
+    failed: 'hata', cancelled: 'durduruldu',
+  };
+  const FIX_BADGE = {
+    queued: 'queued', running: 'running', ready: 'approved',
+    failed: 'failed', cancelled: 'cancelled',
+  };
+
+  // The findings the modal offers, the directories each project was last
+  // applied to, and any patch text already fetched — the last one so a
+  // re-render doesn't lose a diff the reader opened.
+  let fixFindings = [];
+  let fixTargets = {};
+  let fixAvailable = false;
+  const patchBodies = {};
+
+  function fixBadgeHtml(status) {
+    return '<span class="badge badge-' + (FIX_BADGE[status] || 'queued') + '">' +
+      escapeHtml(FIX_STATUS_TR[status] || status) + '</span>';
+  }
+
+  function renderPatch(detail) {
+    fixFindings = detail.findings ?? [];
+    fixTargets = detail.fixTargets ?? {};
+    fixAvailable = !!detail.fixAvailable;
+
+    const fixable = fixFindings.filter((f) => f.severity === 'blocking' || f.severity === 'major');
+    const fixBtn = document.getElementById('fixBtn');
+    // Offered whenever there is something it could fix. Disabled rather
+    // than hidden when this machine cannot run it: a button that vanishes
+    // teaches nothing, and the reason is worth reading.
+    show(fixBtn, !!detail.review && fixable.length > 0, 'inline-flex');
+    fixBtn.disabled = !fixAvailable || FIX_BUSY.includes(detail.fix?.status);
+    fixBtn.title = fixAvailable
+      ? 'Blocking ve major bulgular için yama üret'
+      : 'Bu makinede düzeltme çalıştırılamıyor: LLM sağlayıcısı dosya düzenleyemiyor ya da review yerel checkout olmadan üretilmiş.';
+
+    if (!changed('fix', detail.fix)) return;
+
+    const fix = detail.fix;
+    const blockEl = document.getElementById('patchBlock');
+    show(blockEl, !!fix);
+    show(document.getElementById('patchEmpty'), !fix);
+    setTabCount('patch', fix ? fix.patches.reduce((n, p) => n + (p.stats?.files || 0), 0) : 0);
+    if (!fix) {
+      blockEl.innerHTML = '';
+      return;
+    }
+
+    const asked = (fix.findings ?? [])
+      .map((f) => '<div class="patchFiles"><span class="sev sev-' + escapeHtml(f.severity) + '">' +
+        escapeHtml(f.severity) + '</span> ' + escapeHtml(f.heading) + '</div>')
+      .join('');
+
+    const report = (fix.report ?? []).length
+      ? '<ul class="fixReport">' + fix.report.map((line) =>
+          '<li class="' + line.outcome + '"><span class="mark">' +
+          (line.outcome === 'fixed' ? 'DÜZELTİLDİ' : 'ATLANDI') + '</span>' +
+          '<span>' + escapeHtml(line.text) + '</span></li>').join('') + '</ul>'
+      : '';
+
+    blockEl.innerHTML =
+      '<div class="card patchCard">' +
+        '<div class="diff-toolbar">' +
+          '<h3 class="repoHeading">Yama ' + fixBadgeHtml(fix.status) +
+          (fix.status === 'queued' && fix.queuePosition ? ' <span class="muted">' + fix.queuePosition + '. sırada</span>' : '') +
+          '</h3>' +
+          '<span class="spacer"></span>' +
+          (FIX_BUSY.includes(fix.status)
+            ? '<button class="btn btn-reject" data-act="stop">Durdur</button>'
+            : '<button class="btn btn-ghost" data-act="clear" title="Bu yamayı sil">Temizle</button>') +
+        '</div>' +
+        '<p class="card-hint">İstenen bulgular:</p>' + asked +
+        (fix.error ? '<p class="card-hint" style="color:var(--red)">' + escapeHtml(fix.error) + '</p>' : '') +
+        (FIX_BUSY.includes(fix.status)
+          ? '<p class="card-hint">Çalışıyor — ilerleme <b>Adımlar</b> sekmesinde.</p>'
+          : report) +
+      '</div>' +
+      fix.patches.map(patchCardHtml).join('');
+  }
+
+  function patchCardHtml(entry) {
+    const key = entry.projectPath;
+    if (entry.error) {
+      return '<div class="card patchCard">' +
+        '<h3 class="repoHeading">' + escapeHtml(key) + '</h3>' +
+        '<p class="card-hint" style="color:var(--red)">' + escapeHtml(entry.error) + '</p></div>';
+    }
+    if (!entry.size) {
+      return '<div class="card patchCard">' +
+        '<h3 class="repoHeading">' + escapeHtml(key) + '</h3>' +
+        '<p class="card-hint">Bu repoda hiçbir dosya değişmedi.</p></div>';
+    }
+
+    const target = fixTargets[key] ?? entry.appliedTo ?? '';
+    const body = patchBodies[key];
+    const url = '/api/reviews/' + encodeURIComponent(currentIssue) + '/fix/patch?projectPath=' + encodeURIComponent(key);
+
+    return '<div class="card patchCard" data-project="' + escapeHtml(key) + '">' +
+      '<div class="diff-toolbar">' +
+        '<h3 class="repoHeading">' + escapeHtml(key) +
+        ' <span class="repoBranch">' + escapeHtml(entry.branchName) + '</span></h3>' +
+        '<span class="spacer"></span>' +
+        '<span class="patchStat">' + entry.stats.files + ' dosya ' +
+          '<span class="add">+' + entry.stats.insertions + '</span> ' +
+          '<span class="del">-' + entry.stats.deletions + '</span></span>' +
+      '</div>' +
+      '<div class="patchFiles">' + entry.files.map((f) => '<div>' + escapeHtml(f) + '</div>').join('') + '</div>' +
+      (entry.appliedAt
+        ? '<p class="card-hint">' + escapeHtml(entry.appliedTo) + ' dizinine uygulandı · ' +
+          formatDate(entry.appliedAt) +
+          (entry.appliedWithMerge ? ' · birleştirilerek — sonucu okumadan commitleme' : '') +
+          ' · commitlenmedi</p>'
+        : '') +
+      '<div class="applyRow">' +
+        '<input class="input" data-role="path" type="text" placeholder="~/projects/' +
+          escapeHtml(key.split("/").pop()) + ' — yamanın uygulanacağı dizin" value="' + escapeHtml(target) + '" />' +
+        '<button class="btn btn-primary" data-act="apply">Uygula</button>' +
+        '<button class="btn" data-act="show">' + (body ? 'Yamayı gizle' : 'Yamayı gör') + '</button>' +
+        '<button class="btn" data-act="copy">Kopyala</button>' +
+        '<a class="btn" href="' + url + '&download=1">İndir</a>' +
+      '</div>' +
+      '<div class="card-hint" data-role="result"></div>' +
+      (body ? '<pre class="patchText">' + escapeHtml(body) + '</pre>' : '') +
+      '</div>';
+  }
+
+  /** One listener for the whole panel: the cards are rebuilt on every fix
+   * change, and listeners bound to them would go with them. */
+  document.getElementById('patchBlock').addEventListener('click', async (e) => {
+    const button = e.target.closest('[data-act]');
+    if (!button) return;
+    const card = button.closest('[data-project]');
+    const project = card?.dataset.project;
+    const act = button.dataset.act;
+
+    if (act === 'stop' || act === 'clear') {
+      await fetch(
+        '/api/reviews/' + encodeURIComponent(currentIssue) + '/fix' + (act === 'stop' ? '/stop' : ''),
+        { method: act === 'stop' ? 'POST' : 'DELETE' },
+      );
+      if (act === 'clear') for (const k of Object.keys(patchBodies)) delete patchBodies[k];
+      startPolling(currentIssue);
+      return;
+    }
+
+    const resultEl = card?.querySelector('[data-role="result"]');
+    const url = '/api/reviews/' + encodeURIComponent(currentIssue) + '/fix/patch?projectPath=' + encodeURIComponent(project);
+
+    if (act === 'show') {
+      if (patchBodies[project]) delete patchBodies[project];
+      else patchBodies[project] = await (await fetch(url)).text();
+      // The signature is unchanged, so ask for the render explicitly.
+      rendered.fix = null;
+      renderPatch(lastDetail);
+      return;
+    }
+
+    if (act === 'copy') {
+      const text = patchBodies[project] ?? (await (await fetch(url)).text());
+      await navigator.clipboard.writeText(text);
+      if (resultEl) resultEl.textContent = 'Yama kopyalandı.';
+      return;
+    }
+
+    if (act === 'apply') {
+      const path = card.querySelector('[data-role="path"]').value.trim();
+      if (!path) {
+        resultEl.textContent = 'Önce yamanın uygulanacağı dizini yaz.';
+        return;
+      }
+      button.disabled = true;
+      resultEl.textContent = 'uygulanıyor…';
+      try {
+        const res = await fetch('/api/reviews/' + encodeURIComponent(currentIssue) + '/fix/apply', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ projectPath: project, path }),
+        });
+        const data = await res.json();
+        if (data.error) {
+          resultEl.textContent = data.error;
+          button.disabled = false;
+          return;
+        }
+        resultEl.textContent =
+          data.files.length + ' dosya ' + data.root + ' içinde değişti — commitlenmedi.';
+        // Re-render so the card shows where it landed.
+        startPolling(currentIssue);
+      } catch (err) {
+        resultEl.textContent = 'Uygulanamadı: ' + err;
+        button.disabled = false;
+      }
+    }
+  });
+
+  /* --------------------------- fix modal ------------------------------- */
+
+  const fixModal = document.getElementById('fixModal');
+
+  document.getElementById('fixBtn').addEventListener('click', () => {
+    const listEl = document.getElementById('fixFindings');
+    document.getElementById('fixResult').textContent = '';
+
+    listEl.innerHTML = fixFindings.length
+      ? fixFindings.map((f) => {
+          // Minors are listed but unchecked: a nit is not what a patch is
+          // for, and quietly including it would put unasked-for edits in
+          // someone's working copy.
+          const on = f.severity === 'blocking' || f.severity === 'major';
+          return '<label class="findingRow">' +
+            '<input type="checkbox" value="' + escapeHtml(f.id) + '"' + (on ? ' checked' : '') + ' />' +
+            '<span><span class="sev sev-' + escapeHtml(f.severity) + '">' + escapeHtml(f.severity) + '</span> ' +
+            escapeHtml(f.heading) + '</span></label>';
+        }).join('')
+      : '<div class="section-empty">Bu review\'da düzeltilecek bulgu yok.</div>';
+
+    const sync = () => {
+      const picked = listEl.querySelectorAll('input:checked').length;
+      const confirm = document.getElementById('fixConfirm');
+      confirm.disabled = picked === 0;
+      confirm.textContent = picked ? 'Yama üret (' + picked + ')' : 'Yama üret';
+    };
+    listEl.querySelectorAll('input').forEach((box) => box.addEventListener('change', sync));
+    sync();
+
+    fixModal.classList.add('open');
+  });
+
+  for (const id of ['fixClose', 'fixCancel']) {
+    document.getElementById(id).addEventListener('click', () => fixModal.classList.remove('open'));
+  }
+  fixModal.addEventListener('click', (e) => {
+    if (e.target === fixModal) fixModal.classList.remove('open');
+  });
+
+  document.getElementById('fixConfirm').addEventListener('click', async () => {
+    const resultEl = document.getElementById('fixResult');
+    const picked = [...document.getElementById('fixFindings').querySelectorAll('input:checked')]
+      .map((box) => box.value);
+    if (!picked.length) return;
+
+    resultEl.textContent = 'başlatılıyor…';
+    try {
+      const res = await fetch('/api/reviews/' + encodeURIComponent(currentIssue) + '/fix', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ findings: picked }),
+      });
+      const data = await res.json();
+      if (data.error) {
+        resultEl.textContent = data.error;
+        return;
+      }
+      for (const k of Object.keys(patchBodies)) delete patchBodies[k];
+      fixModal.classList.remove('open');
+      showTab('patch');
+      // The review itself is settled, so the detail poll has stopped —
+      // start it again or the run would look like it never began.
+      startPolling(currentIssue);
+    } catch (err) {
+      resultEl.textContent = 'Başlatılamadı: ' + err;
+    }
+  });
+
   /* -------------------------- verify: questions ------------------------ */
 
   function renderClarifications(openQuestions, clarifications) {
@@ -2400,7 +2751,12 @@
   // tab badge is the sum of two independently-rendered sections.
   const verifyCounts = { questions: 0, disputes: 0 };
 
+  // The last payload rendered, so a lazy fetch (a patch body) can re-render
+  // the panel it belongs to without waiting for the next poll.
+  let lastDetail = null;
+
   function renderDetail(detail) {
+    lastDetail = detail;
     // The position is part of the signature: while a task waits its status
     // stays "queued" but its place in line moves, and that movement is the
     // only sign the queue is alive.
@@ -2434,6 +2790,7 @@
     renderRevision(detail.revisionRequest);
     renderAppliedNotes(detail.appliedNotes);
     renderDiff(detail.repoChanges);
+    renderPatch(detail);
     renderHistory(detail.history);
 
     const openCount =

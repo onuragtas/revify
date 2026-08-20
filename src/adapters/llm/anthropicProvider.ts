@@ -2,6 +2,10 @@ import Anthropic from '@anthropic-ai/sdk';
 import type { LlmProvider } from '../../core/types.js';
 
 export class AnthropicProvider implements LlmProvider {
+  /** Plain messages, no tools: this provider can describe a fix but never
+   * make one. The fix path checks this and says so instead of running. */
+  readonly canEditFiles = false;
+
   private readonly client: Anthropic;
 
   constructor(

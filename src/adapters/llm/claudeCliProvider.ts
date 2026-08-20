@@ -162,6 +162,18 @@ export function runCli(
  */
 const READ_ONLY_TOOLS = ['Read', 'Glob', 'Grep', 'WebFetch'];
 
+/**
+ * The fixer's set: the read tools plus the two that change files.
+ *
+ * No Bash and no WebFetch, deliberately. A fix that can run commands can
+ * commit, push, install and delete, and the one thing this feature
+ * promises is that nothing leaves the working copy uncommitted. A fix that
+ * can fetch pages is a fix taking instructions from whatever a page says.
+ * Everything it needs — the findings, the diff — is already in the prompt,
+ * and the repository it may edit is one throwaway clone.
+ */
+const WRITE_TOOLS = ['Read', 'Glob', 'Grep', 'Edit', 'Write'];
+
 /** No news for this long and the run gets a "still going" line, so a long
  * silent stretch of reasoning cannot be mistaken for a dead process. */
 const HEARTBEAT_MS = 15000;
@@ -210,12 +222,17 @@ export function describeCliEvent(event: any, workdir?: string): string | null {
  * Claude Code).
  */
 export class ClaudeCliProvider implements LlmProvider {
+  /** The CLI has real file tools, which is what makes the fix path
+   * possible at all. */
+  readonly canEditFiles = true;
+
   constructor(private readonly model?: string) {}
 
   async generate({
     system,
     prompt,
     workdir,
+    write = false,
     extraDirs = [],
     signal,
     onProgress,
@@ -223,10 +240,14 @@ export class ClaudeCliProvider implements LlmProvider {
     system: string;
     prompt: string;
     workdir?: string;
+    write?: boolean;
     extraDirs?: string[];
     signal?: AbortSignal;
     onProgress?: (message: string) => void;
   }): Promise<string> {
+    if (write && !workdir) {
+      throw new Error('Yazma modu bir çalışma dizini olmadan kullanılamaz.');
+    }
     const args = [
       '-p',
       prompt,
@@ -254,8 +275,14 @@ export class ClaudeCliProvider implements LlmProvider {
     // in -p mode would just fail). Both are needed: with `--allowed-tools`
     // alone, Bash/Write/Edit/Agent stay available to the reviewer.
     if (workdir) {
-      args.push('--tools', READ_ONLY_TOOLS.join(','), '--allowed-tools', ...READ_ONLY_TOOLS);
-      args.push('--add-dir', workdir, ...extraDirs);
+      const tools = write ? WRITE_TOOLS : READ_ONLY_TOOLS;
+      args.push('--tools', tools.join(','), '--allowed-tools', ...tools);
+      // Extra directories are dropped in write mode. `--add-dir` grants the
+      // same access to every directory it names, so a context repo mounted
+      // for reading would be editable too — and an edit left in the repo
+      // cache is read as the current state of that service by every later
+      // review, silently. The fixer sees one repository: its own.
+      args.push('--add-dir', workdir, ...(write ? [] : extraDirs));
     } else {
       args.push('--tools', '');
     }

@@ -50,6 +50,14 @@ export interface AiTask {
 }
 
 export interface LlmProvider {
+  /**
+   * Whether this provider can give the model tools that change files on
+   * disk. False (or absent) means it can only ever answer in text — which
+   * is fine for a review and useless for a fix, so the fix path checks
+   * this rather than running for minutes and producing an empty patch.
+   */
+  readonly canEditFiles?: boolean;
+
   generate(input: {
     system: string;
     prompt: string;
@@ -58,6 +66,15 @@ export interface LlmProvider {
      * CLI) expose read-only tools scoped to this directory; providers that
      * can't simply ignore it. */
     workdir?: string;
+    /**
+     * Let the model edit files under `workdir`.
+     *
+     * Only ever true for a throwaway fix workspace — see fixWorkspace.ts
+     * for why a fix is never run in the repo cache. Providers that cannot
+     * grant write tools must reject the call rather than quietly answer in
+     * text, or the caller would take "no changes" for "nothing to fix".
+     */
+    write?: boolean;
     /** Additional read-only directories (e.g. other services' repos) the
      * model may read to verify cross-service claims. */
     extraDirs?: string[];

@@ -27,6 +27,50 @@ export interface ReviewHistoryEntry {
   archivedAt: string;
 }
 
+/** One repository's worth of fix: what the fixer changed, as a patch that
+ * has not been applied anywhere yet. */
+export interface FixPatch {
+  projectPath: string;
+  branchName: string;
+  patch: string;
+  stats: { files: number; insertions: number; deletions: number };
+  /** Files the patch touches, for a list the UI can show without parsing
+   * the diff again. */
+  files: string[];
+  /** Where a human last applied it, if they did. Kept so the UI can say
+   * "already applied to ~/projects/api" rather than inviting a second,
+   * conflicting apply. */
+  appliedTo?: string;
+  appliedAt?: string;
+  /** True when git had to three-way merge it in — the working copy had
+   * moved, and the result deserves reading before it is committed. */
+  appliedWithMerge?: boolean;
+  /** Set when this repository's run failed while others succeeded. */
+  error?: string;
+}
+
+/**
+ * A fix run: the review's findings turned into patches.
+ *
+ * Kept on the review record rather than in a store of its own because it is
+ * meaningless without the review it came from — the findings it acted on
+ * are that review's findings, and a re-review replaces both together.
+ */
+export interface FixRecord {
+  status: 'queued' | 'running' | 'ready' | 'failed' | 'cancelled';
+  /** The findings a human picked, by heading — what the fixer was asked to
+   * do, kept verbatim so the report can be read against it. */
+  findings: Array<{ severity: string; heading: string }>;
+  patches: FixPatch[];
+  /** The fixer's own account, one line per finding: what it changed, and
+   * what it refused to guess at. */
+  report?: Array<{ outcome: 'fixed' | 'skipped'; text: string }>;
+  requestedAt: string;
+  finishedAt?: string;
+  queuePosition?: number;
+  error?: string;
+}
+
 export interface ReviewRecord {
   issueKey: string;
   summary?: string;
@@ -75,6 +119,10 @@ export interface ReviewRecord {
   /** Previous reviews, newest first. Capped — the point is to compare
    * against the last run or two, not to keep an audit log forever. */
   history?: ReviewHistoryEntry[];
+  /** The patch produced from this review's findings, if anyone asked for
+   * one. Cleared when the review is re-run: a patch built against findings
+   * that no longer exist is a patch nobody can check. */
+  fix?: FixRecord;
   updatedAt: string;
 }
 

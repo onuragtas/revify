@@ -1,10 +1,31 @@
 import type { TriggerEvent } from './types.js';
 
-export type QueueRunner = (event: TriggerEvent, signal: AbortSignal) => Promise<void>;
+/**
+ * What a slot in the queue is for.
+ *
+ * Both kinds contend for the same thing — the repo cache — so they share
+ * one line rather than getting a queue each. A fix clones its workspace out
+ * of a cached checkout, and a review moves that checkout to another branch;
+ * running them at once would copy a repo mid-`checkout -f`.
+ */
+export type QueueKind = 'review' | 'fix';
+
+export type QueueRunner = (event: TriggerEvent, signal: AbortSignal, kind: QueueKind) => Promise<void>;
 
 /** Called whenever an issue's place in line changes. `position` is 0 while
  * it is the one running, 1 for next up, and so on. */
-export type QueueObserver = (issueKey: string, position: number) => void;
+export type QueueObserver = (issueKey: string, position: number, kind: QueueKind) => void;
+
+interface QueueItem {
+  event: TriggerEvent;
+  kind: QueueKind;
+}
+
+/** An issue can have a review and a fix in the line at once — they are
+ * different work on the same key, so the key alone cannot identify a slot. */
+function slotOf(kind: QueueKind, issueKey: string): string {
+  return `${kind}:${issueKey}`;
+}
 
 /**
  * Runs reviews strictly one at a time.
@@ -21,8 +42,8 @@ export type QueueObserver = (issueKey: string, position: number) => void;
  * the caller learns where in line it landed.
  */
 export class ReviewQueue {
-  private readonly waiting: TriggerEvent[] = [];
-  private active: string | null = null;
+  private readonly waiting: QueueItem[] = [];
+  private active: QueueItem | null = null;
   /** Aborts the run currently holding the slot. */
   private activeAbort: AbortController | null = null;
 
@@ -34,30 +55,36 @@ export class ReviewQueue {
   /** Adds an issue to the line and returns its position (0 = starting now).
    * Re-queueing something already in line refreshes its event without
    * moving it, so a double click doesn't cost it its place. */
-  enqueue(event: TriggerEvent): number {
-    if (this.active === event.id) return 0;
+  enqueue(event: TriggerEvent, kind: QueueKind = 'review'): number {
+    const slot = slotOf(kind, event.id);
+    if (this.activeSlot === slot) return 0;
 
-    const queued = this.waiting.findIndex((e) => e.id === event.id);
+    const queued = this.waiting.findIndex((item) => slotOf(item.kind, item.event.id) === slot);
     if (queued >= 0) {
-      this.waiting[queued] = event;
+      this.waiting[queued] = { event, kind };
       return queued + 1;
     }
 
-    this.waiting.push(event);
+    this.waiting.push({ event, kind });
     // Computed before pumping, which may start this very item.
     const position = this.active ? this.waiting.length : 0;
     // Announced here rather than left to pump(): pump() returns immediately
     // while another review holds the slot, so nothing would ever tell this
     // one it is waiting, and it would sit looking untouched.
-    if (position > 0) this.observe(event.id, position);
+    if (position > 0) this.observe(event.id, position, kind);
     void this.pump();
     return position;
   }
 
+  private get activeSlot(): string | null {
+    return this.active ? slotOf(this.active.kind, this.active.event.id) : null;
+  }
+
   /** 0 while running, 1+ while waiting, null when not in the queue. */
-  positionOf(issueKey: string): number | null {
-    if (this.active === issueKey) return 0;
-    const index = this.waiting.findIndex((e) => e.id === issueKey);
+  positionOf(issueKey: string, kind: QueueKind = 'review'): number | null {
+    const slot = slotOf(kind, issueKey);
+    if (this.activeSlot === slot) return 0;
+    const index = this.waiting.findIndex((item) => slotOf(item.kind, item.event.id) === slot);
     return index >= 0 ? index + 1 : null;
   }
 
@@ -71,12 +98,13 @@ export class ReviewQueue {
    *
    * Returns true if there was something to stop.
    */
-  cancel(issueKey: string): boolean {
-    if (this.active === issueKey) {
+  cancel(issueKey: string, kind: QueueKind = 'review'): boolean {
+    const slot = slotOf(kind, issueKey);
+    if (this.activeSlot === slot) {
       this.activeAbort?.abort();
       return true;
     }
-    const index = this.waiting.findIndex((e) => e.id === issueKey);
+    const index = this.waiting.findIndex((item) => slotOf(item.kind, item.event.id) === slot);
     if (index < 0) return false;
     this.waiting.splice(index, 1);
     this.announce();
@@ -92,8 +120,8 @@ export class ReviewQueue {
   }
 
   /** True while this issue is the one holding the slot. */
-  isRunning(issueKey: string): boolean {
-    return this.active === issueKey;
+  isRunning(issueKey: string, kind: QueueKind = 'review'): boolean {
+    return this.activeSlot === slotOf(kind, issueKey);
   }
 
   private async pump(): Promise<void> {
@@ -102,11 +130,11 @@ export class ReviewQueue {
     const next = this.waiting.shift();
     if (!next) return;
 
-    this.active = next.id;
+    this.active = next;
     this.activeAbort = new AbortController();
     this.announce();
     try {
-      await this.run(next, this.activeAbort.signal);
+      await this.run(next.event, this.activeAbort.signal, next.kind);
     } catch {
       // The runner records its own failures; the queue's only job here is
       // to keep going rather than stall the rest of the line.
@@ -120,7 +148,7 @@ export class ReviewQueue {
   }
 
   private announce(): void {
-    if (this.active) this.observe(this.active, 0);
-    this.waiting.forEach((event, index) => this.observe(event.id, index + 1));
+    if (this.active) this.observe(this.active.event.id, 0, this.active.kind);
+    this.waiting.forEach((item, index) => this.observe(item.event.id, index + 1, item.kind));
   }
 }

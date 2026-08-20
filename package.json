@@ -5,7 +5,7 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "build": "tsc -p tsconfig.json && mkdir -p dist/adapters/tasks/prompts dist/web/public && cp src/adapters/tasks/prompts/codeReview.md dist/adapters/tasks/prompts/ && cp -r src/web/public/. dist/web/public/",
+    "build": "tsc -p tsconfig.json && mkdir -p dist/adapters/tasks/prompts dist/web/public && cp src/adapters/tasks/prompts/*.md dist/adapters/tasks/prompts/ && cp -r src/web/public/. dist/web/public/",
     "check:deps": "node scripts/checkRuntimeDeps.mjs",
     "dev": "tsx watch src/index.ts",
     "ui": "tsx watch src/web/index.ts",

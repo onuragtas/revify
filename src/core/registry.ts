@@ -11,6 +11,7 @@ import { LocalRepoDiffContext } from '../adapters/context/localRepoDiffContext.j
 import { AnthropicProvider } from '../adapters/llm/anthropicProvider.js';
 import { ClaudeCliProvider } from '../adapters/llm/claudeCliProvider.js';
 import { CodeReviewTask } from '../adapters/tasks/codeReviewTask.js';
+import { CodeFixTask } from '../adapters/tasks/codeFixTask.js';
 import { SlackApprovalChannel } from '../adapters/approval/slackApprovalChannel.js';
 import { ConsoleApprovalChannel } from '../adapters/approval/consoleApprovalChannel.js';
 import { WebApprovalChannel } from '../adapters/approval/webApprovalChannel.js';
@@ -42,6 +43,16 @@ export interface Wired {
   stateStore: StateStore;
   /** Standing project notes the review honors — managed from the web UI. */
   notesStore: NotesStore;
+  /**
+   * Turns selected findings into a patch. Not part of the pipeline: a fix
+   * is asked for after a review exists, by a human who read it, and it
+   * produces a file on disk rather than something to approve.
+   */
+  fixTask: CodeFixTask;
+  /** Where fix workspaces are made — beside the repo cache, never inside
+   * it: RepoCache adopts every directory it finds under its root, and a
+   * throwaway clone is not a cached repo. */
+  fixWorkspaceRoot: string;
   /** Exposed so the UI can list projects to clone and inspect the cache. */
   gitlabClient: GitlabClient;
   jiraClient: JiraClient;
@@ -104,6 +115,9 @@ export function buildPipeline(config: AppConfig, keep?: Stores): Wired {
     resolve(contextCollectors, name, 'contextCollector'),
   );
 
+  const fixTask = new CodeFixTask(llm, config.review.language);
+  const fixWorkspaceRoot = join(dirname(config.review.repoCacheDir), 'fix-work');
+
   const tasks: Record<string, () => AiTask> = {
     codeReview: () => new CodeReviewTask(llm, config.review.language, notesStore, reviewStore),
   };
@@ -145,6 +159,8 @@ export function buildPipeline(config: AppConfig, keep?: Stores): Wired {
     reviewStore,
     stateStore,
     notesStore,
+    fixTask,
+    fixWorkspaceRoot,
     gitlabClient,
     jiraClient,
     repoCache,

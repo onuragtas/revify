@@ -7,6 +7,7 @@ import { createServer } from './server.js';
 import { ReviewStore } from '../core/reviewStore.js';
 import { StateStore } from '../core/stateStore.js';
 import { NotesStore } from '../core/notesStore.js';
+import { CodeFixTask } from '../adapters/tasks/codeFixTask.js';
 import type { Wired } from '../core/registry.js';
 import type { AppConfig } from '../config/loadConfig.js';
 import type { TaskResult, TriggerEvent } from '../core/types.js';
@@ -84,6 +85,10 @@ function makeWired(options: { fail?: boolean } = {}): Wired {
     reviewStore,
     stateStore: new StateStore(join(dir, 'state.json')),
     notesStore: new NotesStore(join(dir, 'notes.json')),
+    // Wired but never runnable: this fixture has no model and no checkout,
+    // so the fix path can only ever report that it is unavailable.
+    fixTask: new CodeFixTask({ canEditFiles: false, generate: async () => '' }),
+    fixWorkspaceRoot: join(dir, 'fix-work'),
     gitlabClient: { listProjects: async () => [] } as unknown as Wired['gitlabClient'],
     jiraClient: {
       // Only what reviewing by key needs: BUY-9 exists, nothing else does.

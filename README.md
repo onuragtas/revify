@@ -326,6 +326,41 @@ plus `--strict-mcp-config`. Without both, the reviewer would keep
 Each run also passes `--no-session-persistence` so a review is a standalone
 answer rather than an addendum to a previous one.
 
+### Fixing what the review found
+
+The review says what is wrong; **Düzelt…** turns the findings you pick into
+a patch. It is a separate run with a separate prompt
+(`src/adapters/tasks/prompts/codeFix.md`), and it deliberately stops at a
+patch:
+
+1. Pick the findings — blocking and major are checked by default, minors are
+   listed but off. A patch nobody asked for is noise in someone's working
+   copy.
+2. For each repository the change touches, a **throwaway clone** is made
+   from the reviewed checkout (`src/core/fixWorkspace.ts`) and committed as
+   a baseline, so the diff afterwards means *the fix* and nothing else. For
+   a directory review the uncommitted work travels into the clone too —
+   that half is what was reviewed.
+3. The fixer runs there with `--tools "Read,Glob,Grep,Edit,Write"` — no
+   `Bash`, no `WebFetch`, and no `--add-dir` beyond its own repository, so a
+   stray edit cannot land in the repo cache and poison later reviews.
+4. `git diff` becomes the patch, the workspace is deleted, and the patch
+   waits on the **Yama** tab with the fixer's line-per-finding report of
+   what it changed and what it refused to guess at.
+5. **Uygula** applies it with `git apply --3way` to a directory *you* name —
+   your own working copy, never the repo cache — and leaves it
+   **uncommitted**. The path is remembered per project for next time.
+
+The fix never runs in the repo cache: every review hard-resets the repos it
+touches, so an edit left there is destroyed by the next run. It never writes
+to your working copy on its own either — applying is always a separate
+click. Re-reviewing an issue drops its patch, since a patch built from
+findings that no longer exist would undo work that was just done.
+
+Requires the `claudeCli` provider (`config.yaml` → `wiring.llm`): the
+Anthropic API provider has no file tools, and the button says so rather than
+running for minutes and producing an empty patch.
+
 ### Review language
 
 `config/config.yaml` → `review.language` sets the language the AI writes

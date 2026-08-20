@@ -397,6 +397,20 @@ if (!app.requestSingleInstanceLock()) {
       notify('Review başarısız', `${issueKey}\n${error.slice(0, 140)}`, () => openIssue(issueKey));
     });
 
+    // A fix takes minutes and is asked for and then walked away from —
+    // which is precisely when a notification earns its place.
+    server.events.on('fix:ready', ({ issueKey, files }) => {
+      notify(
+        'Yama hazır',
+        `${issueKey}\n${files} dosya değişti — okuyup kendi dizinine uygulayabilirsin.`,
+        () => openIssue(issueKey),
+      );
+    });
+
+    server.events.on('fix:failed', ({ issueKey, error }) => {
+      notify('Yama üretilemedi', `${issueKey}\n${error.slice(0, 140)}`, () => openIssue(issueKey));
+    });
+
     server.events.on('review:auto-queued', ({ issueKey, summary, position }) => {
       notify(
         position === 0 ? 'Yeni iş inceleniyor' : 'Yeni iş sıraya alındı',

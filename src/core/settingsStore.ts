@@ -33,6 +33,12 @@ export interface Settings {
   autoPreparePollMs?: number;
   useRepoCheckout?: boolean;
   repoCacheDir?: string;
+  /** Where each GitLab project is checked out on *this* machine, keyed by
+   * `group/name`. Remembered from the last time a fix patch was applied, so
+   * the second patch for a repo doesn't ask again. Never guessed from the
+   * repo cache: applying into the cache would look like it worked and be
+   * erased by the next review. */
+  fixTargets?: Record<string, string>;
 
   /* ---- team-wide, mirrored from the backend ---- */
   /** The last team policy this machine fetched. Cached rather than fetched
