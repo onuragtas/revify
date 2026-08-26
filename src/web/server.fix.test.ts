@@ -276,6 +276,98 @@ describe('fix', () => {
     expect(reviewStore.get('BUY-1')!.fix!.patches[0].appliedAt).toBeTruthy();
   });
 
+  it('carries a per-finding decision through to the fixer', async () => {
+    // "The finding gives two options and I picked the first" has no other
+    // way to reach the patch: an objection and a revision request both land
+    // on the next review instead.
+    let seen = '';
+    const app = createServer(
+      makeConfig(),
+      makeWired({
+        canEditFiles: true,
+        generate: async ({ prompt, workdir }) => {
+          seen = prompt;
+          writeFileSync(join(workdir!, 'app.ts'), 'export const rate = 2;\n');
+          return '[fixed] blocking — app.ts:1 — düzeltildi';
+        },
+      }),
+    );
+    seedReview();
+
+    await request(app)
+      .post('/api/reviews/BUY-1/fix')
+      .send({ findings: ['f0'], instructions: { f0: '1. seçenek yapılmalı.' } });
+    await waitForFix('ready');
+
+    expect(seen).toContain('1. seçenek yapılmalı.');
+    expect(seen).toContain('karardır');
+    // And it is kept, so the patch can be read next to what was asked for.
+    expect(reviewStore.get('BUY-1')!.fix!.findings[0].instruction).toBe('1. seçenek yapılmalı.');
+  });
+
+  it('ignores an instruction for a finding nobody selected', async () => {
+    let seen = '';
+    const app = createServer(
+      makeConfig(),
+      makeWired({
+        canEditFiles: true,
+        generate: async ({ prompt, workdir }) => {
+          seen = prompt;
+          writeFileSync(join(workdir!, 'app.ts'), 'export const rate = 2;\n');
+          return '[fixed] blocking — düzeltildi';
+        },
+      }),
+    );
+    seedReview();
+
+    await request(app)
+      .post('/api/reviews/BUY-1/fix')
+      .send({ findings: ['f0'], instructions: { f1: 'bunu da şöyle yap' } });
+    await waitForFix('ready');
+
+    expect(seen).not.toContain('bunu da şöyle yap');
+  });
+
+  it('leaves a disputed finding out of the default selection', async () => {
+    // An objection is a human saying the finding is wrong. It only lands on
+    // the next review — until then, writing code to satisfy the finding
+    // would be the tool arguing with the person using it.
+    const app = createServer(
+      makeConfig(),
+      makeWired(fixingProvider((workdir) => writeFileSync(join(workdir, 'app.ts'), 'export const rate = 2;\n'))),
+    );
+    seedReview();
+    reviewStore.upsert('BUY-1', {
+      challenges: [
+        { finding: 'blocking — app.ts:1', objection: 'Oran zaten config\'ten geliyor.', raisedAt: '2026-08-16T09:00:00.000Z' },
+      ],
+    });
+
+    const res = await request(app).post('/api/reviews/BUY-1/fix').send({});
+    // Nothing left to fix by default: the only non-minor finding is disputed.
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('seçilmedi');
+    expect(reviewStore.get('BUY-1')!.fix).toBeUndefined();
+  });
+
+  it('still fixes a disputed finding when a human names it anyway', async () => {
+    // The choice stays theirs — the default is a default, not a veto.
+    const app = createServer(
+      makeConfig(),
+      makeWired(fixingProvider((workdir) => writeFileSync(join(workdir, 'app.ts'), 'export const rate = 2;\n'))),
+    );
+    seedReview();
+    reviewStore.upsert('BUY-1', {
+      challenges: [
+        { finding: 'blocking — app.ts:1', objection: 'Bence yanlış.', raisedAt: '2026-08-16T09:00:00.000Z' },
+      ],
+    });
+
+    await request(app).post('/api/reviews/BUY-1/fix').send({ findings: ['f0'] });
+    await waitForFix('ready');
+    expect(reviewStore.get('BUY-1')!.fix!.patches[0].files).toEqual(['app.ts']);
+  });
+
   it('refuses when the provider cannot edit files, instead of running for nothing', async () => {
     const app = createServer(
       makeConfig(),

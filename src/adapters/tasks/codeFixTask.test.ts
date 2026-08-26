@@ -50,6 +50,54 @@ describe('buildFixPrompt', () => {
   });
 });
 
+describe('buildFixPrompt — the human\'s decision', () => {
+  it('puts the instruction under the finding it settles, as a decision', () => {
+    // The reviewer is told to give options rather than invent an answer when
+    // the right fix turns on something it cannot see. Somebody then has to
+    // choose, and this is the only channel that reaches the patch.
+    const prompt = buildFixPrompt({
+      issueKey: 'BUY-1',
+      summary: '',
+      projectPath: 'team/orders',
+      branchName: 'b',
+      diff: '',
+      findings: [{ ...FINDINGS[0], instruction: '1. seçenek yapılmalı — kuyruk sırası garanti değil.' }],
+    });
+
+    expect(prompt).toContain('1. seçenek yapılmalı');
+    expect(prompt).toContain('Nasıl düzeltilecek');
+    // It has to read as binding, or the fixer weighs it against its own
+    // reading and picks the branch that looks better from inside the diff.
+    expect(prompt).toContain('bunu bir insan söyledi, karardır');
+    expect(prompt).toContain('Do not weigh it against your own reading');
+    expect(prompt.indexOf('1. seçenek')).toBeGreaterThan(prompt.indexOf(FINDINGS[0].heading));
+  });
+
+  it('says nothing about instructions for a finding that has none', () => {
+    expect(promptFor([FINDINGS[0]])).not.toContain('Nasıl düzeltilecek —');
+  });
+
+  it('keeps each decision with its own finding', () => {
+    const prompt = buildFixPrompt({
+      issueKey: 'BUY-1',
+      summary: '',
+      projectPath: 'team/orders',
+      branchName: 'b',
+      diff: '',
+      findings: [
+        { ...FINDINGS[0], instruction: 'transaction içine al' },
+        { ...FINDINGS[1] },
+      ],
+    });
+
+    const first = prompt.indexOf(FINDINGS[0].heading);
+    const second = prompt.indexOf(FINDINGS[1].heading);
+    const decision = prompt.indexOf('transaction içine al');
+    expect(decision).toBeGreaterThan(first);
+    expect(decision).toBeLessThan(second);
+  });
+});
+
 describe('buildFixPrompt — the ask', () => {
   it('carries what the issue wanted, so an unmet requirement can be met', () => {
     // The review calls an unimplemented requirement `blocking`. A fixer that

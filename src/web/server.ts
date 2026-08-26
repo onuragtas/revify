@@ -297,7 +297,10 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired) {
       return;
     }
 
-    const findings = parseFindings(record.review.markdown).filter((f) => wanted.has(f.id));
+    const instructions = (event.data.fixInstructions as Record<string, string> | undefined) ?? {};
+    const findings = parseFindings(record.review.markdown)
+      .filter((f) => wanted.has(f.id))
+      .map((f) => ({ ...f, instruction: instructions[f.id] || undefined }));
     const changes = record.repoChanges ?? [];
     const patches: FixPatch[] = [];
     const report: Array<{ outcome: 'fixed' | 'skipped'; text: string }> = [];
@@ -1683,26 +1686,61 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired) {
 
     const all = parseFindings(record.review.markdown);
     const asked: string[] = Array.isArray(req.body?.findings) ? req.body.findings.map(String) : [];
+
+    /*
+     * A disputed finding is not fixed by default.
+     *
+     * An objection is a human saying "this finding is wrong". It only takes
+     * effect on the next review — until then the finding is still sitting in
+     * the review text, and offering to write code that satisfies it would be
+     * the tool contradicting the person using it. Naming it explicitly still
+     * works: the modal shows the objection and lets them choose anyway.
+     *
+     * Matched on the heading, which is what the dispute is keyed by.
+     */
+    const disputed = new Set(
+      (record.challenges ?? []).filter((c) => c.objection.trim()).map((c) => c.finding),
+    );
     const selected = asked.length
       ? all.filter((f) => asked.includes(f.id))
-      : all.filter((f) => FIXABLE_SEVERITIES.includes(f.severity));
+      : all.filter((f) => FIXABLE_SEVERITIES.includes(f.severity) && !disputed.has(f.heading));
 
     if (!selected.length) {
       res.status(400).json({ error: 'Düzeltilecek bulgu seçilmedi.' });
       return;
     }
 
+    // Per-finding decisions, keyed by the same ids as the selection. A
+    // finding that offered options is settled here or not at all — see
+    // SelectedFinding in codeFixTask.
+    const body = req.body?.instructions;
+    const instructions: Record<string, string> =
+      body && typeof body === 'object' && !Array.isArray(body)
+        ? Object.fromEntries(Object.entries(body).map(([id, text]) => [id, String(text ?? '').trim()]))
+        : {};
+
     wired.reviewStore.upsert(issueKey, {
       fix: {
         status: 'queued',
-        findings: selected.map((f) => ({ severity: f.severity, heading: f.heading })),
+        findings: selected.map((f) => ({
+          severity: f.severity,
+          heading: f.heading,
+          instruction: instructions[f.id] || undefined,
+        })),
         patches: [],
         requestedAt: new Date().toISOString(),
       },
     });
 
     const position = queue.enqueue(
-      { id: issueKey, data: { summary: record.summary, fixFindingIds: selected.map((f) => f.id) } },
+      {
+        id: issueKey,
+        data: {
+          summary: record.summary,
+          fixFindingIds: selected.map((f) => f.id),
+          fixInstructions: instructions,
+        },
+      },
       'fix',
     );
     res.json({ ok: true, position, findings: selected.length });

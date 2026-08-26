@@ -11,6 +11,10 @@ committed, and nothing is pushed.
 
 These are the findings a human selected. Fix these and nothing else.
 
+Some carry a **Nasıl düzeltilecek** line. That is the human's decision about how the
+finding is to be settled — most often because the finding itself offered options and
+somebody had to choose. It outranks your own judgement about which way is better.
+
 {{findingsSection}}
 
 ## The change that was reviewed

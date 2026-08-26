@@ -520,13 +520,21 @@
 
   /* fix / patch */
   .findingRow {
-    display: flex; align-items: flex-start; gap: 0.55rem; padding: 0.5rem 0.6rem;
+    padding: 0.5rem 0.6rem;
     border: 1px solid var(--border); border-radius: var(--radius-sm);
-    margin-bottom: 0.35rem; font-size: 0.85rem; cursor: pointer;
+    margin-bottom: 0.35rem; font-size: 0.85rem;
   }
+  .findingPick { display: flex; align-items: flex-start; gap: 0.55rem; cursor: pointer; }
   .findingRow:hover { background: var(--surface-2); }
-  .findingRow input { margin-top: 0.15rem; accent-color: var(--accent); }
+  .findingRow input[type="checkbox"] { margin-top: 0.15rem; accent-color: var(--accent); }
+  .findingRow textarea {
+    width: 100%; margin-top: 0.4rem; min-height: 2rem; font-size: 0.8rem;
+  }
   .findingRow .sev-loc { display: block; margin-top: 0.15rem; }
+  .findingRow.disputed { border-color: var(--amber); background: var(--amber-soft); }
+  .findingRow .objection {
+    display: block; margin-top: 0.3rem; font-size: 0.8rem; color: var(--text-muted);
+  }
   .patchCard { margin-bottom: 0.9rem; }
   .patchStat { font-family: var(--mono); font-size: 0.78rem; color: var(--text-muted); }
   .patchStat .add { color: var(--green); }
@@ -1360,6 +1368,7 @@
         bekler. Repo'nun ayrı bir kopyasında çalışılır: ne senin çalışma kopyan değişir, ne de
         bir şey commitlenir. Yamayı sonra istediğin dizine uygularsın.
       </p>
+      <div id="fixPending" class="card-hint" hidden></div>
       <h4>Bulgular</h4>
       <div id="fixFindings"></div>
       <div id="fixResult" class="card-hint"></div>
@@ -2277,6 +2286,12 @@
   let fixFindings = [];
   let fixTargets = {};
   let fixAvailable = false;
+  // Objections by finding heading, and whether a revision was asked for.
+  // Both are inputs to the *next review*, not to a fix — but they are how a
+  // human said "this review is not right yet", and the fix screen is where
+  // that has to be visible.
+  let fixDisputes = new Map();
+  let fixRevisionPending = false;
   const patchBodies = {};
 
   function fixBadgeHtml(status) {
@@ -2288,6 +2303,10 @@
     fixFindings = detail.findings ?? [];
     fixTargets = detail.fixTargets ?? {};
     fixAvailable = !!detail.fixAvailable;
+    fixDisputes = new Map(
+      (detail.challenges ?? []).filter((c) => (c.objection || '').trim()).map((c) => [c.finding, c.objection]),
+    );
+    fixRevisionPending = !!(detail.revisionRequest || '').trim();
 
     const fixable = fixFindings.filter((f) => f.severity === 'blocking' || f.severity === 'major');
     const fixBtn = document.getElementById('fixBtn');
@@ -2314,7 +2333,9 @@
 
     const asked = (fix.findings ?? [])
       .map((f) => '<div class="patchFiles"><span class="sev sev-' + escapeHtml(f.severity) + '">' +
-        escapeHtml(f.severity) + '</span> ' + escapeHtml(f.heading) + '</div>')
+        escapeHtml(f.severity) + '</span> ' + escapeHtml(f.heading) +
+        (f.instruction ? '<span class="objection"><b>Talimatın:</b> ' + escapeHtml(f.instruction) + '</span>' : '') +
+        '</div>')
       .join('');
 
     const report = (fix.report ?? []).length
@@ -2481,16 +2502,57 @@
     const listEl = document.getElementById('fixFindings');
     document.getElementById('fixResult').textContent = '';
 
+    // What the reader has already said about this review but not yet acted
+    // on. Both only take effect on a re-review, so a patch made now is made
+    // from findings they have themselves called into question.
+    const pending = document.getElementById('fixPending');
+    const disputeCount = fixFindings.filter((f) => fixDisputes.has(f.heading)).length;
+    const notes = [];
+    if (disputeCount) notes.push(disputeCount + ' bulguya itiraz ettin');
+    if (fixRevisionPending) notes.push('bekleyen bir "Review\'i düzelt" talebin var');
+    pending.hidden = notes.length === 0;
+    pending.innerHTML = notes.length
+      ? escapeHtml(notes.join(', ')) +
+        ' — bunlar ancak <b>Yeniden incele</b> ile işlenir. İtiraz ettiğin bulgular aşağıda ' +
+        'işaretsiz geliyor; yine de düzeltilmesini istiyorsan kendin işaretle.'
+      : '';
+
     listEl.innerHTML = fixFindings.length
       ? fixFindings.map((f) => {
           // Minors are listed but unchecked: a nit is not what a patch is
           // for, and quietly including it would put unasked-for edits in
-          // someone's working copy.
-          const on = f.severity === 'blocking' || f.severity === 'major';
-          return '<label class="findingRow">' +
+          // someone's working copy. A disputed finding is unchecked for a
+          // stronger reason — you said it was wrong, and the tool writing
+          // code to satisfy it anyway would be arguing with you.
+          const objection = fixDisputes.get(f.heading) ?? '';
+          const on = !objection && (f.severity === 'blocking' || f.severity === 'major');
+          /*
+           * A box for the decision, under the finding it settles.
+           *
+           * A finding that offers two options leaves a question open, and
+           * this is the only place a human is looking at that finding while
+           * deciding to fix it. Anything written elsewhere — an objection, a
+           * revision request — reaches the *next review*, not this patch.
+           *
+           * Prefilled from an objection when there is one: people write
+           * "1. seçenek yapılmalı" in that box, which is a decision rather
+           * than a rejection, and losing it here is how a human's call
+           * silently fails to reach the code.
+           */
+          return '<div class="findingRow' + (objection ? ' disputed' : '') + '">' +
+            '<label class="findingPick">' +
             '<input type="checkbox" value="' + escapeHtml(f.id) + '"' + (on ? ' checked' : '') + ' />' +
             '<span><span class="sev sev-' + escapeHtml(f.severity) + '">' + escapeHtml(f.severity) + '</span> ' +
-            escapeHtml(f.heading) + '</span></label>';
+            escapeHtml(f.heading) +
+            (objection
+              ? '<span class="objection"><b>İtirazın:</b> ' + escapeHtml(objection) +
+                ' — bunu düzeltme talimatı olarak kullanmak istiyorsan aşağıda duruyor.</span>'
+              : '') +
+            '</span></label>' +
+            '<textarea data-instruction="' + escapeHtml(f.id) + '" rows="1" ' +
+            'placeholder="Nasıl düzeltilsin? Bulgu seçenek sunuyorsa hangisi — opsiyonel">' +
+            escapeHtml(objection) + '</textarea>' +
+            '</div>';
         }).join('')
       : '<div class="section-empty">Bu review\'da düzeltilecek bulgu yok.</div>';
 
@@ -2515,9 +2577,17 @@
 
   document.getElementById('fixConfirm').addEventListener('click', async () => {
     const resultEl = document.getElementById('fixResult');
-    const picked = [...document.getElementById('fixFindings').querySelectorAll('input:checked')]
-      .map((box) => box.value);
+    const listEl = document.getElementById('fixFindings');
+    const picked = [...listEl.querySelectorAll('input:checked')].map((box) => box.value);
     if (!picked.length) return;
+
+    // Only for findings actually being fixed — an instruction on an
+    // unchecked one is a note to nobody.
+    const instructions = {};
+    for (const box of listEl.querySelectorAll('[data-instruction]')) {
+      const text = box.value.trim();
+      if (text && picked.includes(box.dataset.instruction)) instructions[box.dataset.instruction] = text;
+    }
 
     resultEl.textContent = 'başlatılıyor…';
 
@@ -2529,7 +2599,7 @@
       const res = await fetch('/api/reviews/' + encodeURIComponent(currentIssue) + '/fix', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ findings: picked }),
+        body: JSON.stringify({ findings: picked, instructions }),
       });
       data = await res.json();
     } catch (err) {

@@ -60,8 +60,9 @@ export interface FixPatch {
 export interface FixRecord {
   status: 'queued' | 'running' | 'ready' | 'failed' | 'cancelled';
   /** The findings a human picked, by heading — what the fixer was asked to
-   * do, kept verbatim so the report can be read against it. */
-  findings: Array<{ severity: string; heading: string }>;
+   * do, kept verbatim so the report can be read against it. `instruction` is
+   * the call they made on a finding that offered options. */
+  findings: Array<{ severity: string; heading: string; instruction?: string }>;
   patches: FixPatch[];
   /** The fixer's own account, one line per finding: what it changed, and
    * what it refused to guess at. */

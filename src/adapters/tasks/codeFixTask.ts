@@ -31,6 +31,21 @@ export function buildFixSystemPrompt(language: string): string {
   );
 }
 
+/**
+ * A finding chosen for fixing, plus what the human said about how.
+ *
+ * The reviewer is instructed to give options rather than invent an answer
+ * when the right fix turns on something it cannot see ("kuyruk sırası
+ * garanti ediliyorsa X; edilmiyorsa Y"). That leaves a decision outstanding,
+ * and the person picking findings to fix is exactly the person who can make
+ * it — so this is where they make it. Without it the fixer picks an option
+ * on its own and the human's call never reaches the code.
+ */
+export interface SelectedFinding extends Finding {
+  /** Free text: which option, or how. Empty when they had nothing to add. */
+  instruction?: string;
+}
+
 export interface FixPromptInput {
   issueKey: string;
   summary: string;
@@ -39,7 +54,7 @@ export interface FixPromptInput {
   /** The reviewed diff for this repository, so the fixer sees the change it
    * is correcting rather than only the finding's quoted lines. */
   diff: string;
-  findings: Finding[];
+  findings: SelectedFinding[];
   language?: string;
   /**
    * What the issue asked for, as the review read it.
@@ -126,13 +141,31 @@ export function buildFixPrompt(input: FixPromptInput): string {
       '\n'
     : '';
 
+  /*
+   * The human's call, immediately under the finding it settles.
+   *
+   * Stated as a decision, not a hint. A finding that offers two options has
+   * an open question in it, and an instruction here is the answer — a fixer
+   * that weighs it against its own reading has thrown away the one piece of
+   * information it could not have worked out for itself.
+   */
   const findingsSection = input.findings
-    .map(
-      (f) =>
+    .map((f) => {
+      const instruction = (f.instruction ?? '').trim();
+      return (
         `### ${f.heading}\n\n` +
         `_(${f.severity}${f.location ? ` — ${f.location}` : ''})_\n\n` +
-        `${f.body || '(gövde yok)'}\n`,
-    )
+        `${f.body || '(gövde yok)'}\n` +
+        (instruction
+          ? `\n**Nasıl düzeltilecek — bunu bir insan söyledi, karardır:**\n\n> ${instruction.split('\n').join('\n> ')}\n\n` +
+            'This settles the finding above. Where it names an option, take that option; where\n' +
+            'it names an approach, take that approach. Do not weigh it against your own reading\n' +
+            'and do not pick the other branch because it looks better from here — the person who\n' +
+            'wrote it knows something about this system that is not in the diff. If it turns out\n' +
+            'to be impossible, change nothing and say why in your report.\n'
+          : '')
+      );
+    })
     .join('\n');
 
   return TEMPLATE.replace('{{issueKey}}', input.issueKey)

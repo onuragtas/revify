@@ -335,13 +335,28 @@ patch:
 
 1. Pick the findings — blocking and major are checked by default, minors are
    listed but off. A patch nobody asked for is noise in someone's working
-   copy.
-2. For each repository the change touches, a **throwaway clone** is made
+   copy. A finding you have **disputed** (Doğrulama → itiraz) is also off, and
+   shown with your objection: an objection only takes effect on the next
+   review, and until then writing code to satisfy a finding you called wrong
+   would be the tool arguing with you. Naming it explicitly still fixes it —
+   the default is a default, not a veto. A pending "Review'i düzelt" request
+   is flagged the same way; neither is sent to the fixer, because both argue
+   with the review's wording rather than with the code.
+2. Say how, where it matters. Each finding gets an optional **"nasıl
+   düzeltilsin?"** box. The reviewer is told to give options rather than
+   invent an answer when the right fix turns on something it cannot see
+   ("kuyruk sırası garanti ediliyorsa X; edilmiyorsa Y") — that leaves a
+   decision outstanding, and this box is the only channel that reaches the
+   patch. It goes into the prompt directly under the finding it settles, as a
+   decision the fixer may not weigh against its own reading. An objection
+   prefills it, because people write "1. seçenek yapılmalı" in that box and
+   losing it is how a human's call silently fails to reach the code.
+3. For each repository the change touches, a **throwaway clone** is made
    from the reviewed checkout (`src/core/fixWorkspace.ts`) and committed as
    a baseline, so the diff afterwards means *the fix* and nothing else. For
    a directory review the uncommitted work travels into the clone too —
    that half is what was reviewed.
-3. The fixer runs there with `--tools "Read,Glob,Grep,Edit,Write"` — no
+4. The fixer runs there with `--tools "Read,Glob,Grep,Edit,Write"` — no
    `Bash`, no `WebFetch`, and no `--add-dir` beyond its own repository, so a
    stray edit cannot land in the repo cache and poison later reviews.
    Its prompt carries the selected findings, that repo's diff, **the ask as
@@ -350,10 +365,10 @@ patch:
    on the code it writes, not merely on what gets reported. It is told the
    other services are *not* readable, so a cross-service fix is skipped
    rather than guessed at.
-4. `git diff` becomes the patch, the workspace is deleted, and the patch
+5. `git diff` becomes the patch, the workspace is deleted, and the patch
    waits on the **Yama** tab with the fixer's line-per-finding report of
    what it changed and what it refused to guess at.
-5. **Uygula** applies it with `git apply --3way` to a directory *you* name —
+6. **Uygula** applies it with `git apply --3way` to a directory *you* name —
    your own working copy, never the repo cache — and leaves it
    **uncommitted**. The path is remembered per project for next time.
 
