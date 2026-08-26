@@ -1352,6 +1352,7 @@
       <h4>Sürüm</h4>
       <div class="teamCreateRow">
         <span class="card-hint" id="updateCheckState" style="flex:1">Sürüm bilgisi yükleniyor…</span>
+        <button type="button" class="btn small" id="updateActionBtn" hidden></button>
         <button type="button" class="btn small" id="updateCheckBtn">Şimdi kontrol et</button>
       </div>
 
@@ -3648,15 +3649,9 @@
 
     await loadTeamPolicy();
 
-    try {
-      const info = await (await fetch('/api/update')).json();
-      document.getElementById('updateCheckState').textContent = info.supported
-        ? 'Sürüm ' + (info.current ?? '?') + (info.status === 'ready' || info.status === 'manual'
-            ? ' — ' + info.version + ' hazır.' : '.')
-        : 'Geliştirme sürümü — güncelleme kontrolü yok.';
-    } catch {
-      /* the version line is not worth failing the settings screen over */
-    }
+    // Same source as the banner. Opening Settings used to fetch its own
+    // copy and format it its own way, which is how the two came to disagree.
+    await pollUpdate();
   }
 
   /**
@@ -4272,6 +4267,57 @@
   // Dismissal is per version, not permanent: hiding today's banner should
   // not hide the next release's.
   let dismissedUpdate = localStorage.getItem('ar-dismissed-update') ?? '';
+  /** The faster poll that runs only while a download is in flight. */
+  let downloadPoll = null;
+
+  /**
+   * What the update is doing, said once.
+   *
+   * Two surfaces show it: the banner across the top, and the row in
+   * Settings. They were separate, and it showed — Settings said "yeni sürüm
+   * var: 0.1.27" and then went quiet, because the download progress and the
+   * install button only ever existed in a banner the settings modal covers.
+   * One description, rendered twice, is what stops them drifting again.
+   */
+  function describeUpdate(info) {
+    // The browser build has no updater, and there is nothing useful to say
+    // about a version nobody can replace from here.
+    if (!info.supported) {
+      return { live: false, text: 'Geliştirme sürümü — güncelleme kontrolü yok.', action: null };
+    }
+    if (info.status === 'downloading') {
+      return {
+        live: true,
+        text: 'Revify ' + (info.version ?? '') + ' indiriliyor… %' + (info.percent ?? 0),
+        action: null,
+      };
+    }
+    if (info.status === 'installing') {
+      return { live: true, text: 'Kuruluyor, uygulama birazdan yeniden başlayacak…', action: null };
+    }
+    if (info.status === 'manual') {
+      // Only reached when the swap itself failed — the reason travels with
+      // it, because "open the download page" without one reads like the
+      // update was never possible.
+      return {
+        live: true,
+        text: 'Revify ' + (info.version ?? '') + ' kurulamadı' + (info.error ? ' (' + info.error + ')' : '') + '.',
+        action: 'İndirme sayfasını aç',
+      };
+    }
+    if (info.status === 'ready') {
+      // It installs itself once nothing is running; the button is for
+      // "now", not for "at all". Saying so stops it reading like a demand.
+      return {
+        live: true,
+        text: 'Revify ' + info.version + ' indirildi — çalışan review kalmayınca kendiliğinden kurulacak.',
+        action: 'Şimdi kur',
+      };
+    }
+    // Nothing in flight: only Settings has room to say so, and "you are up
+    // to date" is the answer somebody opening it came for.
+    return { live: false, text: 'Sürüm ' + (info.current ?? '?') + ' — güncel.', action: null };
+  }
 
   async function pollUpdate() {
     let info;
@@ -4280,46 +4326,58 @@
     } catch {
       return;
     }
+    const state = describeUpdate(info);
 
+    // The banner is for interrupting; it appears only while something is
+    // actually happening, and only until it is dismissed.
     const banner = document.getElementById('updateBanner');
-    const textEl = document.getElementById('updateText');
-    const btn = document.getElementById('updateBtn');
+    const worthInterrupting = state.live && info.version !== dismissedUpdate;
+    banner.hidden = !worthInterrupting;
+    if (worthInterrupting) {
+      document.getElementById('updateText').textContent = state.text;
+      const btn = document.getElementById('updateBtn');
+      btn.hidden = !state.action;
+      if (state.action) btn.textContent = state.action;
+    }
 
-    // The browser build has no updater, and there is nothing useful to say
-    // about a version nobody can replace from here.
-    const worthShowing = info.supported &&
-      ['downloading', 'ready', 'manual', 'installing'].includes(info.status) &&
-      info.version !== dismissedUpdate;
-    banner.hidden = !worthShowing;
-    if (!worthShowing) return;
+    // Settings says the same thing, including the part the banner is
+    // hidden behind — and it says it whether or not anything is happening.
+    document.getElementById('updateCheckState').textContent = state.text;
+    const settingsBtn = document.getElementById('updateActionBtn');
+    settingsBtn.hidden = !state.action;
+    if (state.action) settingsBtn.textContent = state.action;
 
-    if (info.status === 'downloading') {
-      textEl.textContent = 'Revify ' + (info.version ?? '') + ' indiriliyor… %' + (info.percent ?? 0);
-      btn.hidden = true;
-      return;
+    // A percentage that moves every thirty seconds is not progress. While
+    // bytes are actually arriving, ask more often — and only one chain at a
+    // time, or every poll would start another.
+    if (info.status === 'downloading' && !downloadPoll) {
+      downloadPoll = setTimeout(() => {
+        downloadPoll = null;
+        void pollUpdate();
+      }, 2000);
     }
-    if (info.status === 'installing') {
-      textEl.textContent = 'Kuruluyor, uygulama birazdan yeniden başlayacak…';
-      btn.hidden = true;
-      return;
+  }
+
+  /** Install, or open the download page when the swap itself failed. Shared
+   * by the banner's button and the one in Settings — the same act, and it
+   * must not behave differently depending on which one you can see. */
+  async function runUpdateAction(button) {
+    button.disabled = true;
+    try {
+      const res = await fetch('/api/update/install', { method: 'POST' });
+      const data = await res.json();
+      if (data.error) {
+        // The most likely refusal is a running review: restarting would
+        // kill it and lose work that cannot be resumed.
+        alert(data.error);
+        return;
+      }
+      await pollUpdate();
+    } catch (err) {
+      alert('Güncelleme başlatılamadı: ' + err);
+    } finally {
+      button.disabled = false;
     }
-    if (info.status === 'manual') {
-      // Only reached when the swap itself failed — the reason travels with
-      // it, because "open the download page" without one reads like the
-      // update was never possible.
-      textEl.textContent = 'Revify ' + (info.version ?? '') + ' kurulamadı' +
-        (info.error ? ' (' + info.error + ')' : '') + '.';
-      btn.hidden = false;
-      btn.textContent = 'İndirme sayfasını aç';
-      return;
-    }
-    // It installs itself once nothing is running; the button is for
-    // "now", not for "at all". Saying so stops the banner reading like a
-    // demand.
-    textEl.textContent = 'Revify ' + info.version + ' indirildi — ' +
-      'çalışan review kalmayınca kendiliğinden kurulacak.';
-    btn.hidden = false;
-    btn.textContent = 'Şimdi kur';
   }
 
   /** Asking should get an answer, including "you are up to date" — that
@@ -4332,10 +4390,11 @@
     try {
       const res = await fetch('/api/update/check', { method: 'POST' });
       const data = await res.json();
+      // An error is the one thing the shared description cannot know about;
+      // everything else — downloading, ready, up to date — it says better,
+      // and it keeps saying it as the download progresses.
       if (data.error) stateEl.textContent = data.error;
-      else if (data.available) stateEl.textContent = 'Yeni sürüm var: ' + data.version;
-      else stateEl.textContent = 'Güncel (' + (data.version ?? '') + ').';
-      await pollUpdate();
+      else await pollUpdate();
     } catch (err) {
       stateEl.textContent = 'Kontrol edilemedi: ' + err;
     } finally {
@@ -4343,25 +4402,9 @@
     }
   });
 
-  document.getElementById('updateBtn').addEventListener('click', async () => {
-    const btn = document.getElementById('updateBtn');
-    btn.disabled = true;
-    try {
-      const res = await fetch('/api/update/install', { method: 'POST' });
-      const data = await res.json();
-      if (data.error) {
-        // The most likely refusal is a running review: restarting would
-        // kill it and lose work that cannot be resumed.
-        alert(data.error);
-        return;
-      }
-      document.getElementById('updateText').textContent = 'Yeniden başlatılıyor…';
-    } catch (err) {
-      alert('Güncelleme başlatılamadı: ' + err);
-    } finally {
-      btn.disabled = false;
-    }
-  });
+  for (const id of ['updateBtn', 'updateActionBtn']) {
+    document.getElementById(id).addEventListener('click', (e) => runUpdateAction(e.currentTarget));
+  }
 
   document.getElementById('updateDismiss').addEventListener('click', async () => {
     try {
