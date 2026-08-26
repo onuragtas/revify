@@ -367,14 +367,26 @@ patch:
    decision the fixer may not weigh against its own reading. An objection
    prefills it, because people write "1. seçenek yapılmalı" in that box and
    losing it is how a human's call silently fails to reach the code.
-3. For each repository the change touches, a **throwaway clone** is made
-   from the reviewed checkout (`src/core/fixWorkspace.ts`) and committed as
-   a baseline, so the diff afterwards means *the fix* and nothing else. For
-   a directory review the uncommitted work travels into the clone too —
-   that half is what was reviewed.
-4. The fixer runs there with `--tools "Read,Glob,Grep,Edit,Write"` — no
-   `Bash`, no `WebFetch`, and no `--add-dir` beyond its own repository, so a
-   stray edit cannot land in the repo cache and poison later reviews.
+3. Every repository the change touches gets a **throwaway clone** of the
+   reviewed checkout (`src/core/fixWorkspace.ts`), committed as a baseline so
+   the diff afterwards means *the fix* and nothing else. For a directory
+   review the uncommitted work travels into the clone too — that half is what
+   was reviewed.
+4. **One run, with all of those workspaces open**, using
+   `--tools "Read,Glob,Grep,Edit,Write"` — no `Bash`, no `WebFetch`, and
+   nothing mounted that is not a throwaway workspace, so a stray edit cannot
+   land in the repo cache and poison later reviews. One run rather than one
+   per repository because a finding can span services: a route on one side
+   and the call to it on the other cannot be written by two agents that
+   cannot see each other's work. It also removes the need to guess which
+   repository a finding belongs to — the fixer has them all and reads the
+   paths itself.
+
+   Only repositories the change already touches are opened. A service it
+   never touched sits on its default branch, so a patch made there would be
+   against `master` while the change lives on a feature branch — and adding
+   code to a service nobody touched is a scope decision for a human, not
+   something to infer.
    Its prompt carries the selected findings, that repo's diff, **the ask as
    the review read it** (description + comments, see below), the team's
    answers to any `[?]` questions, and the project notes — framed as binding

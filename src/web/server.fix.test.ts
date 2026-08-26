@@ -96,6 +96,20 @@ function makeWired(llm: LlmProvider): Wired {
   };
 }
 
+/** A second repository of the same change, the way a multi-repo issue
+ * actually arrives. */
+function makeSecondRepo(): string {
+  const other = join(dir, 'gateway');
+  mkdirSync(other, { recursive: true });
+  git(other, 'init', '-q', '-b', 'feature/rate');
+  git(other, 'config', 'user.email', 'test@example.invalid');
+  git(other, 'config', 'user.name', 'Test');
+  writeFileSync(join(other, 'routes.php'), "<?php\n// routes\n");
+  git(other, 'add', '.');
+  git(other, 'commit', '-qm', 'first');
+  return other;
+}
+
 /** A review of a directory on this machine, sitting at awaiting_approval —
  * exactly the state someone clicks "Düzelt…" from. */
 function seedReview(): void {
@@ -279,6 +293,97 @@ describe('fix', () => {
     expect(reviewStore.get('BUY-1')!.fix!.patches[0].appliedAt).toBeTruthy();
   });
 
+  it('opens every repository of the change in one run, and patches each', async () => {
+    /*
+     * The failure this replaces, from a real run (BUY-1542):
+     *
+     * The fix ran once per repository, so a finding whose fix needed a route
+     * in one service and its caller in another could not be written by
+     * either run — each skipped it for want of the other half. And because
+     * no run could tell which findings were its own, all three findings went
+     * to all three repositories: nine report lines for three findings.
+     */
+    const gateway = makeSecondRepo();
+    let seen = '';
+    const app = createServer(
+      makeConfig(),
+      makeWired({
+        canEditFiles: true,
+        generate: async ({ prompt, workdir, extraDirs }) => {
+          seen = prompt;
+          // Both halves, in one run — which is the whole point.
+          writeFileSync(join(workdir!, 'app.ts'), 'export const rate = config.rate;\n');
+          writeFileSync(join(extraDirs![0], 'routes.php'), "<?php\n// routes\n// + /hgs/rate\n");
+          return '[fixed] blocking — app.ts:1 — iki tarafta da yazıldı';
+        },
+      }),
+    );
+    seedReview();
+    const record = reviewStore.get('BUY-1')!;
+    reviewStore.upsert('BUY-1', {
+      repoChanges: [
+        ...record.repoChanges!,
+        {
+          projectPath: 'team/gateway',
+          baseBranch: 'main',
+          branchName: 'feature/rate',
+          files: [{ path: 'routes.php', diff: '@@\n+// routes\n' }],
+          repoPath: gateway,
+        } as never,
+      ],
+    });
+
+    await request(app).post('/api/reviews/BUY-1/fix').send({});
+    await waitForFix('ready');
+
+    const fix = reviewStore.get('BUY-1')!.fix!;
+    expect(fix.patches.map((p) => p.projectPath).sort()).toEqual(['team/gateway', 'team/orders']);
+    // One line per finding, not one per finding per repository.
+    expect(fix.report).toHaveLength(1);
+    // Both repositories are named, with the paths it may read.
+    expect(seen).toContain('spans 2 repositories');
+    expect(seen).toContain('team/gateway');
+  });
+
+  it('patches the repositories it could prepare and reports the one it could not', async () => {
+    // One unreachable service must not cost the patch for the ready ones.
+    let seen = '';
+    const app = createServer(
+      makeConfig(),
+      makeWired({
+        canEditFiles: true,
+        generate: async ({ prompt, workdir }) => {
+          seen = prompt;
+          writeFileSync(join(workdir!, 'app.ts'), 'export const rate = 2;\n');
+          return '[fixed] blocking — düzeltildi';
+        },
+      }),
+    );
+    seedReview();
+    const record = reviewStore.get('BUY-1')!;
+    reviewStore.upsert('BUY-1', {
+      repoChanges: [
+        ...record.repoChanges!,
+        {
+          projectPath: 'team/missing',
+          baseBranch: 'main',
+          branchName: 'feature/rate',
+          files: [],
+          repoPath: join(dir, 'not-here'),
+        } as never,
+      ],
+    });
+
+    await request(app).post('/api/reviews/BUY-1/fix').send({});
+    await waitForFix('ready');
+
+    const fix = reviewStore.get('BUY-1')!.fix!;
+    expect(fix.patches.find((p) => p.projectPath === 'team/orders')!.stats.files).toBe(1);
+    expect(fix.patches.find((p) => p.projectPath === 'team/missing')!.error).toBeTruthy();
+    // And the run never claimed a repository it does not have.
+    expect(seen).not.toContain('team/missing');
+  });
+
   it('carries a per-finding decision through to the fixer', async () => {
     // "The finding gives two options and I picked the first" has no other
     // way to reach the patch: an objection and a revision request both land
@@ -345,12 +450,14 @@ describe('fix', () => {
     await waitForFix('ready');
 
     const detail = await request(app).get('/api/reviews/BUY-1/detail');
-    expect(detail.body.prompts.map((p: { kind: string }) => p.kind)).toEqual(['fix:team/orders']);
+    // One prompt for the whole change, not one per repository — the run is
+    // one run now.
+    expect(detail.body.prompts.map((p: { kind: string }) => p.kind)).toEqual(['fix']);
     // Listed, never carried: this endpoint is polled once a second.
     expect(detail.body.prompts[0].prompt).toBeUndefined();
     expect(detail.body.prompts[0].size).toBeGreaterThan(0);
 
-    const prompt = await request(app).get('/api/reviews/BUY-1/prompt?kind=fix:team/orders');
+    const prompt = await request(app).get('/api/reviews/BUY-1/prompt?kind=fix');
     expect(prompt.body.prompt).toContain('1. seçenek yapılmalı.');
     expect(prompt.body.system).toContain('senior software engineer');
   });

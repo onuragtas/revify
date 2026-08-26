@@ -123,6 +123,11 @@ For a requirement/flow finding with no single line, put the flow or the
 file that should have changed where `file:line` goes, and skip the diff
 block if there is nothing to quote.
 
+When the change spans more than one repository, **name the repository in the
+heading** — `### blocking — lib/HGS/Model/Payment.php:829 (EPA_API)`. The same
+path can exist in two services, and the reader (and anyone fixing it) has to
+know which one you mean without opening both.
+
 If a finding rests on something you could not verify, add one line in
 exactly this form — the marker is parsed by the UI, so keep it literal:
 

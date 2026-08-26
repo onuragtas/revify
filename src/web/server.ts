@@ -19,7 +19,7 @@ import { ReminderWatcher } from '../core/reminderWatcher.js';
 import type { DueReminder, ReminderItem } from '../core/reminders.js';
 import { progressBus } from '../core/progressBus.js';
 import { splitReview } from '../core/reviewParts.js';
-import { FIXABLE_SEVERITIES, parseFindings, worstSeverity, type Finding } from '../core/findings.js';
+import { FIXABLE_SEVERITIES, parseFindings, worstSeverity } from '../core/findings.js';
 import {
   applyFixPatch,
   createFixWorkspace,
@@ -28,7 +28,7 @@ import {
   removeFixWorkspace,
 } from '../core/fixWorkspace.js';
 import { cacheDirName } from '../clients/repoCache.js';
-import { parseFixReport } from '../adapters/tasks/codeFixTask.js';
+import { parseFixReport, type FixRepo } from '../adapters/tasks/codeFixTask.js';
 import type { FixPatch, FixRecord, ReviewRecord } from '../core/reviewStore.js';
 import type { TriggerEvent } from '../core/types.js';
 
@@ -208,38 +208,6 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired) {
     return dir === root || dir.startsWith(root + sep);
   }
 
-  /** `src/a.ts:42`, `src/a.ts:42-51` and a bare path all name the same
-   * file. Anything else (a flow, a prose description) yields ''. */
-  function fileOfFinding(location: string): string {
-    const cleaned = location.replace(/:\d+(?:-\d+)?\s*$/, '').trim();
-    return /\.[a-zA-Z0-9]+$|\//.test(cleaned) ? cleaned : '';
-  }
-
-  /**
-   * Which findings belong to which repository.
-   *
-   * A change can span services, and each repo's fix runs in its own
-   * workspace — so a finding has to be sent to the repo whose file it
-   * names. One that names no file, or a file no repo in this review
-   * touched, goes to every run: the prompt tells the fixer to skip what
-   * isn't its own, and losing a blocking finding to a path-matching miss
-   * would be far worse than a run that reads one line and skips it.
-   */
-  function findingsForRepo(
-    findings: Finding[],
-    change: NonNullable<ReviewRecord['repoChanges']>[number],
-    all: NonNullable<ReviewRecord['repoChanges']>,
-  ): Finding[] {
-    const belongsTo = (f: Finding, c: typeof change): boolean => {
-      const file = fileOfFinding(f.location);
-      if (!file) return false;
-      return c.files.some(
-        (entry) => entry.path === file || entry.path.endsWith(`/${file}`) || file.endsWith(`/${entry.path}`),
-      );
-    };
-    return findings.filter((f) => belongsTo(f, change) || !all.some((c) => belongsTo(f, c)));
-  }
-
   /** The directory a repository's fix workspace is cloned from, made
    * current first. */
   async function fixSourceFor(
@@ -270,12 +238,18 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired) {
   }
 
   /**
-   * One fix run: every repository the selected findings touch, each in its
-   * own throwaway workspace, each leaving a patch behind.
+   * One fix run for the whole change.
    *
-   * A repository that fails is recorded against that repository and the
-   * others carry on. One unreachable service must not cost the patch for
-   * the one that was ready.
+   * Every repository the change spans gets a throwaway workspace, and all of
+   * them are open to the same run. A finding can span services — a route on
+   * one side and the call to it on the other — and two agents that cannot
+   * see each other's work cannot write both halves. It also means nothing
+   * has to guess which repository a finding belongs to: the fixer has them
+   * all and reads the paths itself.
+   *
+   * A repository whose workspace cannot be prepared is recorded against
+   * itself and the run continues without it. One unreachable service must
+   * not cost the patch for the ones that were ready.
    */
   async function runFix(event: TriggerEvent, signal: AbortSignal): Promise<void> {
     const issueKey = event.id;
@@ -303,76 +277,39 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired) {
       .map((f) => ({ ...f, instruction: instructions[f.id] || undefined }));
     const changes = record.repoChanges ?? [];
     const patches: FixPatch[] = [];
-    const report: Array<{ outcome: 'fixed' | 'skipped'; text: string }> = [];
-    let ran = 0;
+    const workspaces: string[] = [];
 
     try {
-      if (!findings.length) throw new Error('Seçilen bulgular bu review\'da bulunamadı.');
-      if (!changes.length) throw new Error('Bu review\'a bağlı bir repo yok.');
+      if (!findings.length) throw new Error("Seçilen bulgular bu review'da bulunamadı.");
+      if (!changes.length) throw new Error("Bu review'a bağlı bir repo yok.");
 
+      // Every repository of the change, prepared before the model is asked
+      // anything — it is told where each one is, and a half-prepared set
+      // would have it reading a path that is not there yet.
+      const repos: FixRepo[] = [];
       for (const change of changes) {
         signal.throwIfAborted();
-        const mine = findingsForRepo(findings, change, changes);
-        if (!mine.length) continue;
-
         const workspace = join(
           wired.fixWorkspaceRoot,
           `${issueKey.replace(/[^a-zA-Z0-9._-]+/g, '_')}__${cacheDirName(change.projectPath)}`,
         );
-
         try {
           const source = await fixSourceFor(change, issueKey, signal);
-          progressBus.log(
-            issueKey,
-            `fix: ${change.projectPath} — ${mine.length} bulgu, çalışma kopyası hazırlanıyor…`,
-          );
+          progressBus.log(issueKey, `fix: ${change.projectPath} çalışma kopyası hazırlanıyor…`);
           await createFixWorkspace(source, workspace, signal);
-
-          const answer = await wired.fixTask.run({
-            issueKey,
-            summary: record.summary ?? '',
+          workspaces.push(workspace);
+          repos.push({
             projectPath: change.projectPath,
             branchName: change.branchName,
+            path: workspace,
             // The diff as it was reviewed, reassembled from the per-file
             // chunks the record keeps.
             diff: change.files.map((f) => f.diff).join('\n\n'),
-            findings: mine,
-            // The same reading of the ask that produced the findings — not a
-            // fresh one. See core/requirement.ts.
-            requirement: record.requirement,
-            // Scoped per repository, like the review's: with a multi-repo
-            // change each run gets the notes for the code it is editing.
-            notes: wired.notesStore.listApplicable(change.projectPath).map((n) => n.text),
-            clarifications: record.clarifications,
-            workdir: workspace,
-            signal,
-            onProgress: (message) => progressBus.log(issueKey, `fix: ${message}`),
           });
-
-          signal.throwIfAborted();
-          const { patch, stats } = await extractFixPatch(workspace, signal);
-          report.push(...parseFixReport(answer));
-          ran++;
-
-          if (patch.trim()) {
-            patches.push({
-              projectPath: change.projectPath,
-              branchName: change.branchName,
-              patch,
-              stats,
-              files: filesInPatch(patch),
-            });
-            progressBus.log(
-              issueKey,
-              `fix: ${change.projectPath} — ${stats.files} dosya, +${stats.insertions}/-${stats.deletions}`,
-            );
-          } else {
-            progressBus.log(issueKey, `fix: ${change.projectPath} — hiçbir dosya değişmedi`);
-          }
         } catch (err) {
           if (signal.aborted) throw err;
           const message = err instanceof Error ? err.message : String(err);
-          progressBus.log(issueKey, `fix: ${change.projectPath} BAŞARISIZ: ${message}`);
+          progressBus.log(issueKey, `fix: ${change.projectPath} hazırlanamadı: ${message}`);
           patches.push({
             projectPath: change.projectPath,
             branchName: change.branchName,
@@ -381,23 +318,63 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired) {
             files: [],
             error: message,
           });
-        } finally {
-          // The workspace is scratch space; its only lasting output is the
-          // patch that has already been taken out of it.
-          removeFixWorkspace(workspace);
         }
       }
 
-      if (!ran) {
-        throw new Error(
-          patches.find((p) => p.error)?.error ?? 'Seçilen bulguların dosyaları hiçbir repoda bulunamadı.',
+      if (!repos.length) {
+        throw new Error(patches.find((p) => p.error)?.error ?? 'Hiçbir repo hazırlanamadı.');
+      }
+
+      signal.throwIfAborted();
+      progressBus.log(
+        issueKey,
+        `fix: ${findings.length} bulgu, ${repos.length} repo açık — model çalışıyor…`,
+      );
+
+      const answer = await wired.fixTask.run({
+        issueKey,
+        summary: record.summary ?? '',
+        repos,
+        findings,
+        // The same reading of the ask that produced the findings — not a
+        // fresh one. See core/requirement.ts.
+        requirement: record.requirement,
+        // Every touched project's notes apply, exactly as they do to a
+        // multi-repo review.
+        notes: [
+          ...new Set(
+            repos.flatMap((r) => wired.notesStore.listApplicable(r.projectPath).map((n) => n.text)),
+          ),
+        ],
+        clarifications: record.clarifications,
+        signal,
+        onProgress: (message) => progressBus.log(issueKey, `fix: ${message}`),
+      });
+
+      signal.throwIfAborted();
+      for (const repo of repos) {
+        const { patch, stats } = await extractFixPatch(repo.path, signal);
+        if (!patch.trim()) {
+          progressBus.log(issueKey, `fix: ${repo.projectPath} — hiçbir dosya değişmedi`);
+          continue;
+        }
+        patches.push({
+          projectPath: repo.projectPath,
+          branchName: repo.branchName,
+          patch,
+          stats,
+          files: filesInPatch(patch),
+        });
+        progressBus.log(
+          issueKey,
+          `fix: ${repo.projectPath} — ${stats.files} dosya, +${stats.insertions}/-${stats.deletions}`,
         );
       }
 
       patchFix(issueKey, {
         status: 'ready',
         patches,
-        report,
+        report: parseFixReport(answer),
         queuePosition: undefined,
         error: undefined,
         finishedAt: new Date().toISOString(),
@@ -415,13 +392,16 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired) {
       patchFix(issueKey, {
         status: 'failed',
         patches,
-        report,
         queuePosition: undefined,
         error: message,
         finishedAt: new Date().toISOString(),
       });
       progressBus.log(issueKey, `fix: BAŞARISIZ: ${message}`);
       emit('fix:failed', { issueKey, error: message });
+    } finally {
+      // Scratch space; its only lasting output is the patch already taken
+      // out of it.
+      for (const workspace of workspaces) removeFixWorkspace(workspace);
     }
   }
 

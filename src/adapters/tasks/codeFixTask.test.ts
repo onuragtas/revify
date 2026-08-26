@@ -19,9 +19,14 @@ function promptFor(findings = FINDINGS) {
   return buildFixPrompt({
     issueKey: 'BUY-1',
     summary: 'İade akışı',
-    projectPath: 'team/orders',
-    branchName: 'feature/refund',
-    diff: '-  refund(order);\n+  tx.run(() => refund(order));',
+    repos: [
+      {
+        projectPath: 'team/orders',
+        branchName: 'feature/refund',
+        path: '/tmp/ws/orders',
+        diff: '-  refund(order);\n+  tx.run(() => refund(order));',
+      },
+    ],
     findings,
   });
 }
@@ -40,9 +45,12 @@ describe('buildFixPrompt', () => {
     expect(prompt).not.toContain('Mesaj yanıltıcı');
   });
 
-  it('names the repository and branch the workspace is at', () => {
+  it('names the repository, its branch and where it is on disk', () => {
+    // A fixer that knows a service exists but not where to read it falls
+    // back to assuming what it returns.
     expect(promptFor()).toContain('team/orders');
     expect(promptFor()).toContain('feature/refund');
+    expect(promptFor()).toContain('/tmp/ws/orders');
   });
 
   it('includes the change under review, so the fix sees what it corrects', () => {
@@ -58,9 +66,7 @@ describe('buildFixPrompt — the human\'s decision', () => {
     const prompt = buildFixPrompt({
       issueKey: 'BUY-1',
       summary: '',
-      projectPath: 'team/orders',
-      branchName: 'b',
-      diff: '',
+      repos: [{ projectPath: 'team/orders', branchName: 'b', path: '/tmp/ws/orders', diff: '' }],
       findings: [{ ...FINDINGS[0], instruction: '1. seçenek yapılmalı — kuyruk sırası garanti değil.' }],
     });
 
@@ -81,9 +87,7 @@ describe('buildFixPrompt — the human\'s decision', () => {
     const prompt = buildFixPrompt({
       issueKey: 'BUY-1',
       summary: '',
-      projectPath: 'team/orders',
-      branchName: 'b',
-      diff: '',
+      repos: [{ projectPath: 'team/orders', branchName: 'b', path: '/tmp/ws/orders', diff: '' }],
       findings: [
         { ...FINDINGS[0], instruction: 'transaction içine al' },
         { ...FINDINGS[1] },
@@ -105,9 +109,7 @@ describe('buildFixPrompt — the ask', () => {
     const prompt = buildFixPrompt({
       issueKey: 'BUY-1',
       summary: 'İade',
-      projectPath: 'team/orders',
-      branchName: 'b',
-      diff: '',
+      repos: [{ projectPath: 'team/orders', branchName: 'b', path: '/tmp/ws/orders', diff: '' }],
       findings: FINDINGS,
       requirement: {
         description: 'İptal edilen siparişte iade kaydı açılmalı.',
@@ -127,9 +129,7 @@ describe('buildFixPrompt — the ask', () => {
     const withAsk = buildFixPrompt({
       issueKey: 'BUY-1',
       summary: '',
-      projectPath: 'team/orders',
-      branchName: 'b',
-      diff: '',
+      repos: [{ projectPath: 'team/orders', branchName: 'b', path: '/tmp/ws/orders', diff: '' }],
       findings: FINDINGS,
       requirement: { description: 'Uzun bir ticket açıklaması.', comments: [] },
     });
@@ -141,9 +141,7 @@ describe('buildFixPrompt — the ask', () => {
     const prompt = buildFixPrompt({
       issueKey: 'BUY-1',
       summary: '',
-      projectPath: 'team/orders',
-      branchName: 'b',
-      diff: '',
+      repos: [{ projectPath: 'team/orders', branchName: 'b', path: '/tmp/ws/orders', diff: '' }],
       findings: FINDINGS,
       clarifications: [{ question: 'Kuyruk sırası garanti mi?', answer: 'Hayır, garanti değil.' }],
     });
@@ -157,9 +155,7 @@ describe('buildFixPrompt — the ask', () => {
     const prompt = buildFixPrompt({
       issueKey: 'BUY-1',
       summary: '',
-      projectPath: 'team/orders',
-      branchName: 'b',
-      diff: '',
+      repos: [{ projectPath: 'team/orders', branchName: 'b', path: '/tmp/ws/orders', diff: '' }],
       findings: FINDINGS,
       notes: ['Bu repoda log için yalnızca AppLogger kullanılır.'],
     });
@@ -170,10 +166,11 @@ describe('buildFixPrompt — the ask', () => {
     expect(prompt).toContain('skip the finding and say which note stands in the way');
   });
 
-  it('says the other services are not readable, so it skips instead of guessing', () => {
-    // Context repos are deliberately not mounted: --add-dir would make them
-    // writable too. The prompt has to say so, or the fixer infers.
-    expect(promptFor()).toContain('The other services are not here.');
+  it('says a service outside the change is not readable, so it skips instead of guessing', () => {
+    // Only the repositories the change touches are mounted. A service it
+    // never touched is on its default branch, and a patch made there would
+    // be against master while the change lives on a feature branch.
+    expect(promptFor()).toContain('A service outside the list is not here.');
   });
 
   it('leaves the sections out entirely when there is nothing to say', () => {
@@ -197,15 +194,13 @@ describe('CodeFixTask', () => {
     await new CodeFixTask(llm, 'Turkish').run({
       issueKey: 'BUY-1',
       summary: '',
-      projectPath: 'team/orders',
-      branchName: 'feature/refund',
-      diff: '',
+      repos: [{ projectPath: 'team/orders', branchName: 'feature/refund', path: '/tmp/ws', diff: '' }],
       findings: FINDINGS,
-      workdir: '/tmp/ws',
     });
 
     expect(seen.write).toBe(true);
     expect(seen.workdir).toBe('/tmp/ws');
+    expect(seen.extraDirs).toEqual([]);
     expect(String(seen.system)).toContain('Turkish');
   });
 
@@ -220,11 +215,8 @@ describe('CodeFixTask', () => {
       task.run({
         issueKey: 'BUY-1',
         summary: '',
-        projectPath: 'team/orders',
-        branchName: 'b',
-        diff: '',
+        repos: [{ projectPath: 'team/orders', branchName: 'b', path: '/tmp/ws', diff: '' }],
         findings: FINDINGS,
-        workdir: '/tmp/ws',
       }),
     ).rejects.toThrow(/claudeCli/);
   });
@@ -247,5 +239,64 @@ describe('parseFixReport', () => {
 
   it('is empty rather than wrong when the model ignored the format', () => {
     expect(parseFixReport('Her şeyi düzelttim.')).toEqual([]);
+  });
+});
+
+describe('buildFixPrompt — a change that spans repositories', () => {
+  const repos = [
+    { projectPath: 'team/hgs-api', branchName: 'feature/x', path: '/tmp/ws/hgs', diff: 'a' },
+    { projectPath: 'team/EPA_API', branchName: 'feature/x', path: '/tmp/ws/epa', diff: 'b' },
+  ];
+
+  it('opens every repository of the change at once', () => {
+    const prompt = buildFixPrompt({ issueKey: 'BUY-1', summary: '', repos, findings: FINDINGS });
+
+    expect(prompt).toContain('spans 2 repositories');
+    expect(prompt).toContain('/tmp/ws/hgs');
+    expect(prompt).toContain('/tmp/ws/epa');
+  });
+
+  it('labels each diff, so a hunk is never read against the wrong service', () => {
+    const prompt = buildFixPrompt({ issueKey: 'BUY-1', summary: '', repos, findings: FINDINGS });
+    expect(prompt).toContain('### team/hgs-api');
+    expect(prompt).toContain('### team/EPA_API');
+  });
+
+  it('tells it to finish both halves rather than skip the finding', () => {
+    // The failure this replaces: an endpoint missing on one side made the
+    // whole finding unfixable, because only one repo was ever on disk.
+    const prompt = buildFixPrompt({ issueKey: 'BUY-1', summary: '', repos, findings: FINDINGS });
+    expect(prompt).toContain('yours\nto finish, not to skip');
+    expect(prompt).toContain('A finding may span repositories, and you can finish it.');
+    expect(prompt).toContain('Keep the two halves consistent.');
+  });
+
+  it('still says a service outside the list is not readable', () => {
+    const prompt = buildFixPrompt({ issueKey: 'BUY-1', summary: '', repos, findings: FINDINGS });
+    expect(prompt).toContain('A service outside the list is not here.');
+  });
+
+  it('mounts the rest beside the first and makes them all writable', async () => {
+    let seen: Record<string, unknown> = {};
+    const llm: LlmProvider = {
+      canEditFiles: true,
+      generate: async (input) => {
+        seen = input as unknown as Record<string, unknown>;
+        return '[fixed] blocking — düzeltildi';
+      },
+    };
+
+    await new CodeFixTask(llm).run({ issueKey: 'BUY-1', summary: '', repos, findings: FINDINGS });
+
+    expect(seen.workdir).toBe('/tmp/ws/hgs');
+    expect(seen.extraDirs).toEqual(['/tmp/ws/epa']);
+    expect(seen.write).toBe(true);
+  });
+
+  it('refuses a run with no repository rather than editing nothing', async () => {
+    const llm: LlmProvider = { canEditFiles: true, generate: async () => '' };
+    await expect(
+      new CodeFixTask(llm).run({ issueKey: 'BUY-1', summary: '', repos: [], findings: FINDINGS }),
+    ).rejects.toThrow(/repo yok/);
   });
 });

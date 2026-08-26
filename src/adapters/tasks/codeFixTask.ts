@@ -47,14 +47,37 @@ export interface SelectedFinding extends Finding {
   instruction?: string;
 }
 
-export interface FixPromptInput {
-  issueKey: string;
-  summary: string;
+/** One repository of the change, open for editing. */
+export interface FixRepo {
   projectPath: string;
   branchName: string;
+  /** Absolute path of the throwaway workspace. Named in the prompt because
+   * a fixer that knows a service exists but not where to read it falls back
+   * to assuming what it returns. */
+  path: string;
   /** The reviewed diff for this repository, so the fixer sees the change it
    * is correcting rather than only the finding's quoted lines. */
   diff: string;
+}
+
+export interface FixPromptInput {
+  issueKey: string;
+  summary: string;
+  /**
+   * Every repository the change spans, all at once.
+   *
+   * One run rather than one per repository, because a finding can span them:
+   * a route on one side and the call to it on the other cannot be written by
+   * two agents that cannot see each other's work. It also removes the need
+   * to guess which repository a finding belongs to — the fixer has them all
+   * and reads the paths for itself.
+   *
+   * Only repositories the change already touches. A service it never touched
+   * is on its default branch, so a patch made there would be against `master`
+   * while the change lives on a feature branch — and adding code to a service
+   * nobody touched is a scope decision for a human, not an inference.
+   */
+  repos: FixRepo[];
   findings: SelectedFinding[];
   language?: string;
   /**
@@ -150,6 +173,29 @@ export function buildFixPrompt(input: FixPromptInput): string {
    * that weighs it against its own reading has thrown away the one piece of
    * information it could not have worked out for itself.
    */
+  const repos = input.repos;
+  const reposSection =
+    repos.length === 1
+      ? `You are working in **${repos[0].projectPath}** at branch \`${repos[0].branchName}\`:\n\n` +
+        `- \`${repos[0].projectPath}\` (${repos[0].branchName}) → ${repos[0].path}\n`
+      : `This change spans ${repos.length} repositories, and all of them are open:\n\n` +
+        repos.map((r) => `- \`${r.projectPath}\` (${r.branchName}) → ${r.path}`).join('\n') +
+        '\n\nA finding that needs both sides — an endpoint here and its caller there — is yours\n' +
+        'to finish, not to skip.\n';
+
+  const diffSection =
+    repos.length === 1
+      ? '```diff\n' + (repos[0].diff.trim() || '(diff yok)') + '\n```\n'
+      : repos
+          .map(
+            (r) =>
+              `### ${r.projectPath} — \`${r.branchName}\`\n\n` +
+              '```diff\n' +
+              (r.diff.trim() || '(diff yok)') +
+              '\n```\n',
+          )
+          .join('\n');
+
   const findingsSection = input.findings
     .map((f) => {
       const instruction = (f.instruction ?? '').trim();
@@ -171,20 +217,16 @@ export function buildFixPrompt(input: FixPromptInput): string {
 
   return TEMPLATE.replace('{{issueKey}}', input.issueKey)
     .replace('{{summary}}', input.summary || '(özet yok)')
-    .replace(/\{\{projectPath\}\}/g, input.projectPath)
-    .replace(/\{\{branchName\}\}/g, input.branchName)
+    .replace('{{reposSection}}', reposSection)
+    .replace('{{diffSection}}', diffSection)
     .replace('{{findingsSection}}', findingsSection)
     .replace('{{requirementSection}}', requirementSection)
     .replace('{{clarificationsSection}}', clarificationsSection)
     .replace('{{notesSection}}', notesSection)
-    .replace('{{diff}}', input.diff.trim() || '(diff yok)')
     .replace('{{languageInstruction}}', languageInstruction);
 }
 
 export interface FixRun extends FixPromptInput {
-  /** The throwaway workspace the fixer may edit — never the repo cache and
-   * never the reviewer's own checkout. See core/fixWorkspace.ts. */
-  workdir: string;
   signal?: AbortSignal;
   onProgress?: (message: string) => void;
 }
@@ -219,15 +261,20 @@ export class CodeFixTask {
           '(config.yaml → wiring.llm).',
       );
     }
+    if (!run.repos.length) throw new Error('Düzeltilecek repo yok.');
 
     const system = buildFixSystemPrompt(this.language);
     const prompt = buildFixPrompt({ ...run, language: this.language });
-    this.promptStore?.save(run.issueKey, `fix:${run.projectPath}`, { system, prompt });
+    this.promptStore?.save(run.issueKey, 'fix', { system, prompt });
 
     return this.llm.generate({
       system,
       prompt,
-      workdir: run.workdir,
+      // The first workspace is the working directory; the rest are mounted
+      // beside it. All of them are writable — see the write-mode note in
+      // ClaudeCliProvider for why that is safe here and nowhere else.
+      workdir: run.repos[0].path,
+      extraDirs: run.repos.slice(1).map((r) => r.path),
       write: true,
       signal: run.signal,
       onProgress: run.onProgress,

@@ -67,12 +67,13 @@ export interface LlmProvider {
      * can't simply ignore it. */
     workdir?: string;
     /**
-     * Let the model edit files under `workdir`.
+     * Let the model edit files under `workdir` **and every `extraDirs`
+     * entry** — a mount grants one level of access, not two.
      *
-     * Only ever true for a throwaway fix workspace — see fixWorkspace.ts
-     * for why a fix is never run in the repo cache. Providers that cannot
-     * grant write tools must reject the call rather than quietly answer in
-     * text, or the caller would take "no changes" for "nothing to fix".
+     * Only ever true for throwaway fix workspaces; see fixWorkspace.ts for
+     * why a fix is never run in the repo cache. Providers that cannot grant
+     * write tools must reject the call rather than quietly answer in text,
+     * or the caller would take "no changes" for "nothing to fix".
      */
     write?: boolean;
     /** Additional read-only directories (e.g. other services' repos) the

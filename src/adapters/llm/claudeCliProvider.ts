@@ -277,12 +277,18 @@ export class ClaudeCliProvider implements LlmProvider {
     if (workdir) {
       const tools = write ? WRITE_TOOLS : READ_ONLY_TOOLS;
       args.push('--tools', tools.join(','), '--allowed-tools', ...tools);
-      // Extra directories are dropped in write mode. `--add-dir` grants the
-      // same access to every directory it names, so a context repo mounted
-      // for reading would be editable too — and an edit left in the repo
-      // cache is read as the current state of that service by every later
-      // review, silently. The fixer sees one repository: its own.
-      args.push('--add-dir', workdir, ...(write ? [] : extraDirs));
+      /*
+       * `--add-dir` grants one level of access to every directory it names,
+       * so in write mode **everything mounted here is editable**. That is a
+       * contract on the caller, not something this provider can check: in
+       * write mode it may only ever be handed throwaway workspaces.
+       *
+       * What it must never be handed is the repo cache. A review hard-resets
+       * the repos it touches and leaves the others alone, so an edit left in
+       * a cached repo is read as the current state of that service by every
+       * later review — silently, and for as long as it sits there.
+       */
+      args.push('--add-dir', workdir, ...extraDirs);
     } else {
       args.push('--tools', '');
     }
