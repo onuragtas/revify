@@ -71,7 +71,19 @@ export interface ServerEvents {
   'update:installing': { version: string };
 }
 
-export function createServer(initialConfig: AppConfig, initialWired: Wired) {
+export interface ServerOptions {
+  /**
+   * Where this server keeps the machine's settings.
+   *
+   * Injectable because the default is a real file in the real home
+   * directory: a test that posts to `/api/settings` without this writes to
+   * whoever is running it. That is not a hypothetical — it happened, and
+   * the settings it overwrote were a live install's.
+   */
+  settingsStore?: SettingsStore;
+}
+
+export function createServer(initialConfig: AppConfig, initialWired: Wired, options: ServerOptions = {}) {
   /*
    * Rebindable on purpose.
    *
@@ -101,7 +113,7 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired) {
   // The one instance, shared with the pipeline — see Wired.stateStore.
   const state = wired.stateStore;
 
-  const settings = new SettingsStore();
+  const settings = options.settingsStore ?? new SettingsStore();
   const backend = new BackendClient(settings);
 
   // Reviews run strictly one at a time — see ReviewQueue for why that is a
@@ -962,7 +974,7 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired) {
       'anthropicApiKey', 'anthropicModel', 'repoCacheDir', 'apiUrl',
     ] as const;
     const boolFields = ['applyChanges', 'autoPrepareEnabled', 'useRepoCheckout'] as const;
-    const numberFields = ['autoPreparePollMs'] as const;
+    const numberFields = ['autoPreparePollMs', 'idleTimeoutMs', 'runTimeoutMs'] as const;
 
     const patch: Record<string, unknown> = {};
     for (const key of textFields) {

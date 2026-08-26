@@ -1330,6 +1330,14 @@
         <span>Repoyu klonla (model çevre kodu okuyabilsin)</span></label>
       <label class="field"><span>Otomatik hazırlık aralığı (sn)</span><input id="setAutoPreparePollMs" class="input" type="number" min="10" /></label>
       <label class="field"><span>Repo cache dizini</span><input id="setRepoCacheDir" class="input" placeholder="~/.revify/repos" /></label>
+      <label class="field"><span>Sessizlik sınırı (dk)</span><input id="setIdleTimeoutMin" class="input" type="number" min="1" placeholder="10" /></label>
+      <label class="field"><span>Azami çalışma süresi (dk)</span><input id="setRunTimeoutMin" class="input" type="number" min="1" placeholder="45" /></label>
+      <p class="card-hint">
+        Model hiçbir şey yazmadan <b>sessizlik sınırı</b> kadar geçerse takıldı sayılır ve durdurulur.
+        Araç çağrılarını anlatmaya devam ettiği sürece ne kadar uzun sürerse sürsün çalışmaya devam eder —
+        <b>azami süre</b> yalnızca sonsuz döngüye karşı bir tavandır. Büyük repolarda ikisini de artırabilirsin;
+        takılan bir çalışmayı zaten <b>Durdur</b> ile kesebiliyorsun.
+      </p>
 
       <h4>Takım politikası</h4>
       <p class="card-hint" id="teamPolicyHint">
@@ -3631,6 +3639,12 @@
     }
     document.getElementById('setAutoPreparePollMs').value =
       data.settings.autoPreparePollMs ? Math.round(data.settings.autoPreparePollMs / 1000) : '';
+    // Milliseconds are what the pipeline wants and minutes are what a person
+    // thinks in; the conversion lives here rather than in anyone's head.
+    document.getElementById('setIdleTimeoutMin').value =
+      data.settings.idleTimeoutMs ? Math.round(data.settings.idleTimeoutMs / 60000) : '';
+    document.getElementById('setRunTimeoutMin').value =
+      data.settings.runTimeoutMs ? Math.round(data.settings.runTimeoutMs / 60000) : '';
 
     await loadTeamPolicy();
 
@@ -3767,6 +3781,14 @@
     }
     const pollSeconds = Number(document.getElementById('setAutoPreparePollMs').value);
     if (Number.isFinite(pollSeconds) && pollSeconds > 0) patch.autoPreparePollMs = pollSeconds * 1000;
+
+    // Left blank means "use the built-in default", so a blank field must not
+    // be sent as a zero — the server would reject it and the save would look
+    // broken for a field nobody touched.
+    for (const [id, key] of [['setIdleTimeoutMin', 'idleTimeoutMs'], ['setRunTimeoutMin', 'runTimeoutMs']]) {
+      const minutes = Number(document.getElementById(id).value);
+      if (Number.isFinite(minutes) && minutes > 0) patch[key] = minutes * 60000;
+    }
 
     try {
       const res = await fetch('/api/settings', {

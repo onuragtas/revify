@@ -33,6 +33,17 @@ export interface Settings {
   autoPreparePollMs?: number;
   useRepoCheckout?: boolean;
   repoCacheDir?: string;
+  /**
+   * How long a model run may say nothing before it is treated as wedged,
+   * and the absolute ceiling behind it — both in milliseconds.
+   *
+   * Per machine rather than team-wide, and deliberately: the honest length
+   * of a run depends on how much code *this* machine has to read, and one
+   * person's monorepo is another's microservice. Settable here because the
+   * packaged app has no config.yaml to edit.
+   */
+  idleTimeoutMs?: number;
+  runTimeoutMs?: number;
   /** Where each GitLab project is checked out on *this* machine, keyed by
    * `group/name`. Remembered from the last time a fix patch was applied, so
    * the second patch for a repo doesn't ask again. Never guessed from the
@@ -192,6 +203,8 @@ export function configOverrides(store: SettingsStore): Record<string, unknown> {
   if (typeof s.autoPreparePollMs === 'number') out['autoPrepare.pollIntervalMs'] = s.autoPreparePollMs;
   if (typeof s.useRepoCheckout === 'boolean') out['review.useRepoCheckout'] = s.useRepoCheckout;
   if (s.repoCacheDir) out['review.repoCacheDir'] = s.repoCacheDir;
+  if (s.idleTimeoutMs) out['review.idleTimeoutMs'] = s.idleTimeoutMs;
+  if (s.runTimeoutMs) out['review.runTimeoutMs'] = s.runTimeoutMs;
 
   // Team-wide, and therefore last: two reviewers looking at different
   // queues is not a preference, it is a disagreement nobody noticed.

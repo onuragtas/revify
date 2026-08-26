@@ -7,6 +7,7 @@ import { createServer } from './server.js';
 import { ReviewStore } from '../core/reviewStore.js';
 import { StateStore } from '../core/stateStore.js';
 import { NotesStore } from '../core/notesStore.js';
+import { SettingsStore } from '../core/settingsStore.js';
 import { PromptStore } from '../core/promptStore.js';
 import { CodeFixTask } from '../adapters/tasks/codeFixTask.js';
 import type { Wired } from '../core/registry.js';
@@ -107,12 +108,22 @@ function makeWired(options: { fail?: boolean } = {}): Wired {
   };
 }
 
+/**
+ * Never the real settings file.
+ *
+ * `createServer`'s default is `~/.revify/settings.json` — the running
+ * developer's own. A test that saves a setting, or applies a fix patch
+ * (which remembers where it landed), writes into a live install without
+ * anything saying so. It happened; hence this.
+ */
+const isolated = () => ({ settingsStore: new SettingsStore(join(dir, 'settings.json')) });
+
 beforeEach(() => (dir = mkdtempSync(join(tmpdir(), 'srv-'))));
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 describe('server notification events', () => {
   it('announces a review only once it is actually waiting on a human', async () => {
-    const server = createServer(makeConfig(), makeWired());
+    const server = createServer(makeConfig(), makeWired(), isolated());
     const ready = vi.fn();
     server.events.on('review:ready', ready);
 
@@ -126,7 +137,7 @@ describe('server notification events', () => {
   });
 
   it('announces a failure instead of a ready review when the run breaks', async () => {
-    const server = createServer(makeConfig(), makeWired({ fail: true }));
+    const server = createServer(makeConfig(), makeWired({ fail: true }), isolated());
     const ready = vi.fn();
     const failed = vi.fn();
     server.events.on('review:ready', ready);
@@ -158,7 +169,7 @@ describe('server notification events', () => {
         }),
     };
 
-    const server = createServer(makeConfig(), wired);
+    const server = createServer(makeConfig(), wired, isolated());
     const ready = vi.fn();
     const failed = vi.fn();
     server.events.on('review:ready', ready);
@@ -190,7 +201,7 @@ describe('update install', () => {
         }),
     };
 
-    const server = createServer(makeConfig(), wired);
+    const server = createServer(makeConfig(), wired, isolated());
     let installed = false;
     server.setUpdateState({ supported: true, status: 'ready' }, () => {
       installed = true;
@@ -212,7 +223,7 @@ describe('update install', () => {
   });
 
   it('installs once nothing is in flight', async () => {
-    const server = createServer(makeConfig(), makeWired());
+    const server = createServer(makeConfig(), makeWired(), isolated());
     let installed = false;
     server.setUpdateState({ supported: true, status: 'ready' }, () => {
       installed = true;
@@ -225,7 +236,7 @@ describe('update install', () => {
   });
 
   it('says so plainly when the build has no updater', async () => {
-    const server = createServer(makeConfig(), makeWired());
+    const server = createServer(makeConfig(), makeWired(), isolated());
 
     const state = await request(server).get('/api/update');
     expect(state.body).toEqual({ supported: false });
@@ -240,7 +251,7 @@ describe('automatic update install', () => {
     vi.useFakeTimers();
     try {
       const wired = makeWired();
-      const app = createServer(makeConfig(), wired);
+      const app = createServer(makeConfig(), wired, isolated());
 
       let installed = false;
       app.setUpdateState({ status: 'ready', version: '1.2.3' }, () => {
@@ -269,7 +280,7 @@ describe('automatic update install', () => {
 
 describe('reviewing by issue key', () => {
   it('starts an issue the query never returned', async () => {
-    const server = createServer(makeConfig(), makeWired());
+    const server = createServer(makeConfig(), makeWired(), isolated());
     const ready = vi.fn();
     server.events.on('review:ready', ready);
 
@@ -286,14 +297,14 @@ describe('reviewing by issue key', () => {
   });
 
   it('accepts a key however it was typed', async () => {
-    const server = createServer(makeConfig(), makeWired());
+    const server = createServer(makeConfig(), makeWired(), isolated());
     const res = await request(server).post('/api/reviews/buy-9/start').send({ contextRepos: [] });
     expect(res.status).toBe(200);
     server.shutdown();
   });
 
   it('answers a typo with a sentence, not a Jira error', async () => {
-    const server = createServer(makeConfig(), makeWired());
+    const server = createServer(makeConfig(), makeWired(), isolated());
 
     const typo = await request(server).post('/api/reviews/not-a-key!/start').send({});
     expect(typo.status).toBe(400);
@@ -311,7 +322,7 @@ describe('reviewing by issue key', () => {
 
   it('keeps a hand-typed issue in the list instead of losing it on refresh', async () => {
     const wired = makeWired();
-    const server = createServer(makeConfig(), wired);
+    const server = createServer(makeConfig(), wired, isolated());
     await request(server).post('/api/reviews/BUY-9/start').send({ contextRepos: [] });
 
     // The queue answers a different question and will never mention BUY-9.
@@ -326,7 +337,7 @@ describe('reviewing by issue key', () => {
 
 describe('reviewing a local directory', () => {
   it('refuses a path that is not a repository, and one with nothing to review', async () => {
-    const server = createServer(makeConfig(), makeWired());
+    const server = createServer(makeConfig(), makeWired(), isolated());
 
     const notRepo = await request(server).post('/api/reviews/local').send({ path: dir });
     expect(notRepo.status).toBe(400);
@@ -338,3 +349,4 @@ describe('reviewing a local directory', () => {
     server.shutdown();
   });
 });
+

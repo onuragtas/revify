@@ -441,7 +441,10 @@ buy scope creep instead of correctness.
 
 ### How long a run may take
 
-Two timers, not one (`config.yaml` → `review`):
+Two timers, not one — set them in **⚙ Ayarlar** (they are per machine, so
+they live in `~/.revify/settings.json`, which is the only place the packaged
+app can reach; `config.yaml` → `review` holds the defaults for a source
+checkout):
 
 - **`idleTimeoutMs`** (default 10 min) — no output at all for this long and
   the process is treated as wedged and killed.

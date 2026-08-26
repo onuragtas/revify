@@ -10,6 +10,7 @@ import { StateStore } from '../core/stateStore.js';
 import { NotesStore } from '../core/notesStore.js';
 import { PromptStore } from '../core/promptStore.js';
 import { CodeFixTask } from '../adapters/tasks/codeFixTask.js';
+import { SettingsStore } from '../core/settingsStore.js';
 import type { Wired } from '../core/registry.js';
 import type { AppConfig } from '../config/loadConfig.js';
 import type { LlmProvider } from '../core/types.js';
@@ -139,6 +140,12 @@ function seedReview(): void {
   });
 }
 
+/**
+ * Never the real settings file — applying a patch remembers where it landed,
+ * and the default store is the running developer's own.
+ */
+const isolated = () => ({ settingsStore: new SettingsStore(join(dir, 'settings.json')) });
+
 /** The fix runs on the queue, so the response returns before it finishes. */
 async function waitForFix(status: string): Promise<void> {
   for (let i = 0; i < 200; i++) {
@@ -168,6 +175,7 @@ describe('fix', () => {
     const app = createServer(
       makeConfig(),
       makeWired(fixingProvider((workdir) => writeFileSync(join(workdir, 'app.ts'), 'export const rate = config.rate;\n'))),
+      isolated(),
     );
     seedReview();
 
@@ -196,6 +204,7 @@ describe('fix', () => {
           return '[fixed] blocking — app.ts:1 — düzeltildi';
         },
       }),
+      isolated(),
     );
     seedReview();
 
@@ -221,6 +230,7 @@ describe('fix', () => {
           return '[fixed] blocking — app.ts:1 — düzeltildi';
         },
       }),
+      isolated(),
     );
     seedReview();
 
@@ -247,7 +257,7 @@ describe('fix', () => {
       },
     });
     wired.notesStore.add({ scope: 'repo', projectPath: 'team/orders', text: 'Log için yalnızca AppLogger.' });
-    const app = createServer(makeConfig(), wired);
+    const app = createServer(makeConfig(), wired, isolated());
     seedReview();
 
     await request(app).post('/api/reviews/BUY-1/fix').send({});
@@ -260,6 +270,7 @@ describe('fix', () => {
     const app = createServer(
       makeConfig(),
       makeWired(fixingProvider((workdir) => writeFileSync(join(workdir, 'app.ts'), 'export const rate = 2;\n'))),
+      isolated(),
     );
     seedReview();
     await request(app).post('/api/reviews/BUY-1/fix').send({});
@@ -278,6 +289,7 @@ describe('fix', () => {
     const app = createServer(
       makeConfig(),
       makeWired(fixingProvider((workdir) => writeFileSync(join(workdir, 'app.ts'), 'export const rate = 2;\n'))),
+      isolated(),
     );
     seedReview();
     await request(app).post('/api/reviews/BUY-1/fix').send({});
@@ -317,6 +329,7 @@ describe('fix', () => {
           return '[fixed] blocking — app.ts:1 — iki tarafta da yazıldı';
         },
       }),
+      isolated(),
     );
     seedReview();
     const record = reviewStore.get('BUY-1')!;
@@ -358,6 +371,7 @@ describe('fix', () => {
           return '[fixed] blocking — düzeltildi';
         },
       }),
+      isolated(),
     );
     seedReview();
     const record = reviewStore.get('BUY-1')!;
@@ -399,6 +413,7 @@ describe('fix', () => {
           return '[fixed] blocking — app.ts:1 — düzeltildi';
         },
       }),
+      isolated(),
     );
     seedReview();
 
@@ -425,6 +440,7 @@ describe('fix', () => {
           return '[fixed] blocking — düzeltildi';
         },
       }),
+      isolated(),
     );
     seedReview();
 
@@ -442,6 +458,7 @@ describe('fix', () => {
     const app = createServer(
       makeConfig(),
       makeWired(fixingProvider((workdir) => writeFileSync(join(workdir, 'app.ts'), 'export const rate = 2;\n'))),
+      isolated(),
     );
     seedReview();
     await request(app)
@@ -463,7 +480,7 @@ describe('fix', () => {
   });
 
   it('says so rather than guessing when a prompt was never kept', async () => {
-    const app = createServer(makeConfig(), makeWired(fixingProvider(() => {})));
+    const app = createServer(makeConfig(), makeWired(fixingProvider(() => {})), isolated());
     seedReview();
     const res = await request(app).get('/api/reviews/BUY-1/prompt?kind=review');
     expect(res.status).toBe(404);
@@ -473,6 +490,7 @@ describe('fix', () => {
     const app = createServer(
       makeConfig(),
       makeWired(fixingProvider((workdir) => writeFileSync(join(workdir, 'app.ts'), 'export const rate = 2;\n'))),
+      isolated(),
     );
     seedReview();
     await request(app).post('/api/reviews/BUY-1/fix').send({});
@@ -491,6 +509,7 @@ describe('fix', () => {
     const app = createServer(
       makeConfig(),
       makeWired(fixingProvider((workdir) => writeFileSync(join(workdir, 'app.ts'), 'export const rate = 2;\n'))),
+      isolated(),
     );
     seedReview();
     reviewStore.upsert('BUY-1', {
@@ -511,6 +530,7 @@ describe('fix', () => {
     const app = createServer(
       makeConfig(),
       makeWired(fixingProvider((workdir) => writeFileSync(join(workdir, 'app.ts'), 'export const rate = 2;\n'))),
+      isolated(),
     );
     seedReview();
     reviewStore.upsert('BUY-1', {
@@ -528,6 +548,7 @@ describe('fix', () => {
     const app = createServer(
       makeConfig(),
       makeWired({ canEditFiles: false, generate: async () => 'bir şey yapamam' }),
+      isolated(),
     );
     seedReview();
 
@@ -538,7 +559,7 @@ describe('fix', () => {
   });
 
   it('refuses when there is no review to take findings from', async () => {
-    const app = createServer(makeConfig(), makeWired(fixingProvider(() => {})));
+    const app = createServer(makeConfig(), makeWired(fixingProvider(() => {})), isolated());
     const res = await request(app).post('/api/reviews/BUY-9/fix').send({});
     expect(res.status).toBe(409);
   });
@@ -552,6 +573,7 @@ describe('fix', () => {
           throw new Error('model patladı');
         },
       }),
+      isolated(),
     );
     seedReview();
 
@@ -566,6 +588,7 @@ describe('fix', () => {
     const app = createServer(
       makeConfig(),
       makeWired(fixingProvider((workdir) => writeFileSync(join(workdir, 'app.ts'), 'export const rate = 2;\n'))),
+      isolated(),
     );
     seedReview();
     await request(app).post('/api/reviews/BUY-1/fix').send({});
