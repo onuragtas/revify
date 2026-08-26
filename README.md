@@ -375,7 +375,18 @@ patch:
 4. **One run, with all of those workspaces open**, using
    `--tools "Read,Glob,Grep,Edit,Write"` — no `Bash`, no `WebFetch`, and
    nothing mounted that is not a throwaway workspace, so a stray edit cannot
-   land in the repo cache and poison later reviews. One run rather than one
+   land in the repo cache and poison later reviews.
+
+   **Commit and push are impossible, not discouraged.** The tool set contains
+   nothing that runs a command, so there is no `git` to invoke — and
+   `assertCannotExecute` refuses to launch the CLI at all if one is ever
+   added to the list, rather than quietly handing a model a shell in
+   somebody's checkout. Two further checks stand behind it: `extractFixPatch`
+   fails loudly if HEAD has moved off the baseline commit (a commit would
+   move the change out of the working tree and the run would report
+   "nothing changed" for work that changed a dozen files), and `applyFixPatch`
+   refuses any patch whose paths are absolute, climb out of the repository,
+   or reach into `.git`. One run rather than one
    per repository because a finding can span services: a route on one side
    and the call to it on the other cannot be written by two agents that
    cannot see each other's work. It also removes the need to guess which

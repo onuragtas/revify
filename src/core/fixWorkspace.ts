@@ -91,7 +91,7 @@ export async function createFixWorkspace(
   source: FixWorkspaceSource,
   workspaceDir: string,
   signal?: AbortSignal,
-): Promise<void> {
+): Promise<string> {
   const from = resolve(source.dir);
   if (!existsSync(join(from, '.git'))) {
     throw new Error(`${from} bir git deposu değil — düzeltme için çalışma kopyası oluşturulamadı.`);
@@ -120,12 +120,19 @@ export async function createFixWorkspace(
       'user.name=Revify',
       'commit',
       '--allow-empty',
+      // The source repository's hooks come along with a local clone, and a
+      // baseline commit is bookkeeping — it must not run somebody's linter,
+      // let alone anything that reaches the network.
       '--no-verify',
       '-m',
       'revify: incelenen hâl',
     ],
     signal,
   );
+
+  // Handed back so the caller can prove afterwards that nothing was
+  // committed on top of it.
+  return (await git(workspaceDir, ['rev-parse', 'HEAD'], signal)).trim();
 }
 
 /**
@@ -173,8 +180,28 @@ async function carryWorkingTree(from: string, workspaceDir: string, signal?: Abo
  */
 export async function extractFixPatch(
   workspaceDir: string,
+  /**
+   * The commit `createFixWorkspace` left HEAD at.
+   *
+   * Checked rather than assumed. The fixer has no way to run git — its tool
+   * set contains nothing that executes — but if that ever stopped being
+   * true, a commit would move the change out of the working tree and this
+   * function would report an empty patch: "nothing to fix", silently, for a
+   * run that changed a dozen files. A wrong answer nobody can see is worse
+   * than a failure, so this is a hard stop.
+   */
+  baseline?: string,
   signal?: AbortSignal,
 ): Promise<{ patch: string; stats: PatchStats }> {
+  if (baseline) {
+    const head = (await git(workspaceDir, ['rev-parse', 'HEAD'], signal)).trim();
+    if (head !== baseline) {
+      throw new Error(
+        'Çalışma kopyasında commit oluşturulmuş — düzeltme koşusu commit yapamaz. ' +
+          `HEAD ${baseline.slice(0, 8)} olmalıydı, ${head.slice(0, 8)} bulundu; yama alınmadı.`,
+      );
+    }
+  }
   await git(workspaceDir, ['add', '-A'], signal);
   const patch = await git(workspaceDir, ['diff', '--cached', '--binary'], signal);
   const numstat = await git(workspaceDir, ['diff', '--cached', '--numstat'], signal);
@@ -228,6 +255,18 @@ export async function applyFixPatch(
 ): Promise<ApplyResult> {
   const dir = resolve(targetDir.replace(/^~(?=\/|$)/, process.env.HOME ?? '~'));
   if (!existsSync(dir)) throw new Error(`${dir} bulunamadı.`);
+
+  // git refuses these itself, but this is the one step that touches somebody
+  // real working copy — a boundary worth owning rather than assuming, and
+  // worth explaining when it trips.
+  const escaping = filesInPatch(patch).filter(
+    (file) => file.startsWith('/') || file === '.git' || file.startsWith('.git/') || file.split('/').includes('..'),
+  );
+  if (escaping.length) {
+    throw new Error(
+      `Yama çalışma alanının dışına çıkıyor (${escaping.slice(0, 3).join(', ')}) — uygulanmadı.`,
+    );
+  }
 
   let root: string;
   try {

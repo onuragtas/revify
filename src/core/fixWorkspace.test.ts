@@ -90,6 +90,33 @@ describe('createFixWorkspace', () => {
   });
 });
 
+describe('extractFixPatch — nothing may be committed', () => {
+  it('refuses to produce a patch if the workspace was committed to', async () => {
+    /*
+     * The fixer has no tool that can run git, so this cannot happen today.
+     * It is checked because of what the failure would look like if it ever
+     * could: a commit moves the change out of the working tree, `git diff`
+     * comes back empty, and the run reports "hiçbir dosya değişmedi" for
+     * work that changed a dozen files. A wrong answer nobody can see is
+     * worse than a loud failure.
+     */
+    const baseline = await createFixWorkspace({ dir: source, includeWorkingTree: false }, workspace);
+    writeFileSync(join(workspace, 'app.ts'), FILE.replace('{{rate}}', '2'));
+    git(workspace, 'add', '-A');
+    git(workspace, '-c', 'user.email=a@b', '-c', 'user.name=t', 'commit', '-qm', 'sneaky');
+
+    await expect(extractFixPatch(workspace, baseline)).rejects.toThrow(/commit yapamaz/);
+  });
+
+  it('is happy when HEAD is exactly where it was left', async () => {
+    const baseline = await createFixWorkspace({ dir: source, includeWorkingTree: false }, workspace);
+    writeFileSync(join(workspace, 'app.ts'), FILE.replace('{{rate}}', '2'));
+
+    const { stats } = await extractFixPatch(workspace, baseline);
+    expect(stats.files).toBe(1);
+  });
+});
+
 describe('extractFixPatch', () => {
   it('reports what the fixer changed', async () => {
     await createFixWorkspace({ dir: source, includeWorkingTree: false }, workspace);
@@ -109,6 +136,31 @@ describe('extractFixPatch', () => {
 
     const { patch } = await extractFixPatch(workspace);
     expect(filesInPatch(patch)).toEqual(['guard.ts']);
+  });
+});
+
+describe('applyFixPatch — the patch may not leave the work tree', () => {
+  it('refuses a patch that writes into .git', async () => {
+    // git refuses this itself, but this is the one step that touches a real
+    // working copy — a boundary worth owning rather than assuming.
+    const evil =
+      'diff --git a/.git/hooks/pre-commit b/.git/hooks/pre-commit\n' +
+      '--- /dev/null\n+++ b/.git/hooks/pre-commit\n@@ -0,0 +1 @@\n+#!/bin/sh\n';
+    await expect(applyFixPatch(source, evil)).rejects.toThrow(/dışına çıkıyor/);
+  });
+
+  it('refuses a patch that climbs out of the repository', async () => {
+    const evil =
+      'diff --git a/../outside.txt b/../outside.txt\n' +
+      '--- /dev/null\n+++ b/../outside.txt\n@@ -0,0 +1 @@\n+escaped\n';
+    await expect(applyFixPatch(source, evil)).rejects.toThrow(/dışına çıkıyor/);
+  });
+
+  it('refuses an absolute path', async () => {
+    const evil =
+      'diff --git a//etc/passwd b//etc/passwd\n' +
+      '--- /dev/null\n+++ b//etc/passwd\n@@ -0,0 +1 @@\n+root\n';
+    await expect(applyFixPatch(source, evil)).rejects.toThrow(/dışına çıkıyor/);
   });
 });
 

@@ -6,8 +6,13 @@
 
 Each of those directories is a throwaway copy, made from exactly the state that was
 reviewed. Your edits are collected as one patch per repository, which a developer reads
-and applies to their own working copies. Nothing you do is committed, and nothing is
-pushed.
+and applies to their own working copies.
+
+**Nothing you do is committed, and nothing is pushed.** You have no way to do either —
+there is no command tool in your hands, by design. Do not try to stage, commit, tag,
+push, or create a branch, and do not write anything into a `.git` directory. Leave the
+files changed; a human turns them into a commit after reading them. That reading is the
+only thing standing between your patch and somebody's main branch.
 
 ## What to fix
 

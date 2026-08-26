@@ -160,7 +160,7 @@ export function runCli(
  * model. `codeReview.md` tells it that fetched pages are evidence, never
  * instructions.
  */
-const READ_ONLY_TOOLS = ['Read', 'Glob', 'Grep', 'WebFetch'];
+export const READ_ONLY_TOOLS = ['Read', 'Glob', 'Grep', 'WebFetch'];
 
 /**
  * The fixer's set: the read tools plus the two that change files.
@@ -172,7 +172,34 @@ const READ_ONLY_TOOLS = ['Read', 'Glob', 'Grep', 'WebFetch'];
  * Everything it needs — the findings, the diff — is already in the prompt,
  * and the repository it may edit is one throwaway clone.
  */
-const WRITE_TOOLS = ['Read', 'Glob', 'Grep', 'Edit', 'Write'];
+export const WRITE_TOOLS = ['Read', 'Glob', 'Grep', 'Edit', 'Write'];
+
+/**
+ * Tools that can run something, in any form. None of these may ever appear
+ * in a tool set, and in write mode that is not a preference.
+ *
+ * The fix feature makes one promise: it changes files and leaves them
+ * **uncommitted**, so a human reads the change before it becomes theirs. A
+ * single command tool voids that — `git commit`, `git push`, a hook, an
+ * install script, `rm -rf`. The promise is kept by the tool set, not by the
+ * prompt: a model that has no way to run a command cannot be talked into
+ * running one.
+ *
+ * Checked at call time rather than trusted, so a careless edit to the lists
+ * above fails loudly instead of silently handing out a shell.
+ */
+const EXECUTING_TOOLS = ['Bash', 'BashOutput', 'KillShell', 'Task', 'Agent', 'SlashCommand', 'Skill'];
+
+/** Throws rather than launching if a tool set could run anything. */
+export function assertCannotExecute(tools: string[]): void {
+  const forbidden = tools.filter((tool) => EXECUTING_TOOLS.includes(tool));
+  if (forbidden.length) {
+    throw new Error(
+      `Bu araç seti komut çalıştırabilir (${forbidden.join(', ')}) — düzeltme koşusu commit ve push ` +
+        'yapamamak zorunda, bu yüzden çalıştırılmadı.',
+    );
+  }
+}
 
 /** No news for this long and the run gets a "still going" line, so a long
  * silent stretch of reasoning cannot be mistaken for a dead process. */
@@ -276,6 +303,9 @@ export class ClaudeCliProvider implements LlmProvider {
     // alone, Bash/Write/Edit/Agent stay available to the reviewer.
     if (workdir) {
       const tools = write ? WRITE_TOOLS : READ_ONLY_TOOLS;
+      // Nothing that can run a command, ever — and in write mode that is
+      // what keeps "nothing is committed, nothing is pushed" true.
+      assertCannotExecute(tools);
       args.push('--tools', tools.join(','), '--allowed-tools', ...tools);
       /*
        * `--add-dir` grants one level of access to every directory it names,

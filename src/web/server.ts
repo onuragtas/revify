@@ -278,6 +278,8 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired) {
     const changes = record.repoChanges ?? [];
     const patches: FixPatch[] = [];
     const workspaces: string[] = [];
+    /** What HEAD was left at, so nothing can have committed over it. */
+    const baselines = new Map<string, string>();
 
     try {
       if (!findings.length) throw new Error("Seçilen bulgular bu review'da bulunamadı.");
@@ -296,8 +298,9 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired) {
         try {
           const source = await fixSourceFor(change, issueKey, signal);
           progressBus.log(issueKey, `fix: ${change.projectPath} çalışma kopyası hazırlanıyor…`);
-          await createFixWorkspace(source, workspace, signal);
+          const baseline = await createFixWorkspace(source, workspace, signal);
           workspaces.push(workspace);
+          baselines.set(workspace, baseline);
           repos.push({
             projectPath: change.projectPath,
             branchName: change.branchName,
@@ -353,7 +356,7 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired) {
 
       signal.throwIfAborted();
       for (const repo of repos) {
-        const { patch, stats } = await extractFixPatch(repo.path, signal);
+        const { patch, stats } = await extractFixPatch(repo.path, baselines.get(repo.path), signal);
         if (!patch.trim()) {
           progressBus.log(issueKey, `fix: ${repo.projectPath} — hiçbir dosya değişmedi`);
           continue;
