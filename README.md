@@ -439,6 +439,28 @@ background for the findings, not a list of work — implement nothing from it
 that no selected finding names."* Without that line, adding this context would
 buy scope creep instead of correctness.
 
+### How long a run may take
+
+Two timers, not one (`config.yaml` → `review`):
+
+- **`idleTimeoutMs`** (default 10 min) — no output at all for this long and
+  the process is treated as wedged and killed.
+- **`runTimeoutMs`** (default 45 min) — an absolute ceiling behind it.
+
+"Stuck" and "slow" are different things, and a single cap on total duration
+gets both wrong. A fix that reads across three repositories and writes both
+halves of a cross-service change is legitimately long; killing it at ten
+minutes throws away the work *and* the subscription usage it cost. Meanwhile a
+genuinely wedged process — one that hangs at minute two — is not detected any
+sooner for having a short cap, it just sits there until the cap expires.
+
+What separates them is silence: the CLI narrates every tool call on stdout, so
+a run that is working says so continuously. The idle timer is reset by any
+byte of output, stderr included. The absolute ceiling stays because silence
+cannot catch the other failure — a model looping over tool calls forever,
+chattering the whole way. A run can always be stopped by hand from the UI, so
+raise `runTimeoutMs` freely for a large monorepo.
+
 ### Review language
 
 `config/config.yaml` → `review.language` sets the language the AI writes

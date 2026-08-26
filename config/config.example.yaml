@@ -52,6 +52,16 @@ review:
   # project's search, indexing and source control. `~` is expanded.
   repoCacheDir: ~/.revify/repos
   notesFilePath: ./data/reviewNotes.json
+  # Two timers, because "stuck" and "slow" are different things. A run that
+  # narrates tool calls is working, however long it has been at it; one that
+  # has said nothing for a long stretch is the one worth killing.
+  #
+  # idleTimeoutMs: no output at all for this long -> treated as wedged.
+  # runTimeoutMs: absolute ceiling, against a model looping over tool calls
+  # forever. Raise it for a large monorepo — a stuck run can always be
+  # stopped from the UI. Defaults: 10 minutes idle, 45 minutes total.
+  idleTimeoutMs: 600000
+  runTimeoutMs: 2700000
   # Every repo already in repoCacheDir is mounted read-only as context on
   # its default branch. The UI's project picker only decides what gets
   # cloned — once on disk, a repo stays available to every later review.

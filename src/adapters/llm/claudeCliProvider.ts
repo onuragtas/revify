@@ -3,7 +3,30 @@ import { claudeNotFoundMessage, resolveClaudeCli } from './resolveClaudeCli.js';
 import type { LlmProvider } from '../../core/types.js';
 
 const MAX_OUTPUT_BYTES = 20 * 1024 * 1024;
-const RUN_TIMEOUT_MS = 10 * 60 * 1000;
+
+/*
+ * Two timers, because "stuck" and "slow" are different things.
+ *
+ * A single cap on total duration gets both wrong. A fix that reads across
+ * three repositories and writes both halves of a cross-service change is
+ * *legitimately* long, and killing it at ten minutes throws away the work
+ * and the usage it cost. Meanwhile a genuinely wedged process — one that
+ * hangs at minute two — is not detected any sooner for having a short cap;
+ * it just sits there until the cap expires.
+ *
+ * What actually separates the two is silence. The CLI narrates every tool
+ * call on stdout, so a run that is working says so continuously, and one
+ * that has said nothing for a long stretch is the one worth killing.
+ */
+
+/** No output at all for this long and the process is treated as wedged.
+ * Generous, because a hard problem can buy a long silent stretch of
+ * reasoning before the next tool call. */
+const DEFAULT_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
+
+/** Backstop against the failure silence cannot catch: a model looping over
+ * tool calls forever, chattering the whole time. */
+const DEFAULT_MAX_RUN_MS = 45 * 60 * 1000;
 /** How long a stopped review's process gets to exit on its own before it
  * is killed outright. */
 const SIGKILL_GRACE_MS = 5000;
@@ -29,8 +52,16 @@ export interface CliRunResult {
 export function runCli(
   command: string,
   args: string[],
-  options: { cwd?: string; signal?: AbortSignal; onLine?: (line: string) => void } = {},
+  options: {
+    cwd?: string;
+    signal?: AbortSignal;
+    onLine?: (line: string) => void;
+    idleTimeoutMs?: number;
+    maxRunMs?: number;
+  } = {},
 ): Promise<CliRunResult> {
+  const idleTimeoutMs = options.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
+  const maxRunMs = options.maxRunMs ?? DEFAULT_MAX_RUN_MS;
   return new Promise<CliRunResult>((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: options.cwd,
@@ -47,7 +78,11 @@ export function runCli(
 
     const collect = (stream: NodeJS.ReadableStream, onChunk: (text: string) => void) => {
       stream.setEncoding('utf-8');
-      stream.on('data', (chunk: string) => onChunk(chunk));
+      stream.on('data', (chunk: string) => {
+        // Any byte at all counts as a sign of life, stderr included.
+        heard();
+        onChunk(chunk);
+      });
     };
 
     // stdout is newline-delimited JSON, and a chunk boundary lands wherever
@@ -97,9 +132,26 @@ export function runCli(
       reject(reason);
     };
 
-    const timeoutTimer = setTimeout(
-      () => stop(new Error(`claude timed out after ${RUN_TIMEOUT_MS / 1000}s`)),
-      RUN_TIMEOUT_MS,
+    const started = Date.now();
+
+    /** Restarted on every byte of output; fires only if the process really
+     * has gone quiet. */
+    let idleTimer: NodeJS.Timeout | undefined;
+    const heard = () => {
+      if (settled) return;
+      clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        const quiet = Math.round(idleTimeoutMs / 1000);
+        const total = Math.round((Date.now() - started) / 1000);
+        stop(new Error(`claude ${quiet} sn boyunca hiçbir şey yazmadı (toplam ${total} sn) — takıldı sayıldı`));
+      }, idleTimeoutMs);
+      idleTimer.unref?.();
+    };
+    heard();
+
+    const maxRunTimer = setTimeout(
+      () => stop(new Error(`claude ${Math.round(maxRunMs / 60000)} dakikayı aştı — durduruldu`)),
+      maxRunMs,
     );
 
     const onAbort = () => {
@@ -109,7 +161,8 @@ export function runCli(
     };
 
     function cleanup() {
-      clearTimeout(timeoutTimer);
+      clearTimeout(maxRunTimer);
+      clearTimeout(idleTimer);
       options.signal?.removeEventListener('abort', onAbort);
     }
 
@@ -253,7 +306,13 @@ export class ClaudeCliProvider implements LlmProvider {
    * possible at all. */
   readonly canEditFiles = true;
 
-  constructor(private readonly model?: string) {}
+  constructor(
+    private readonly model?: string,
+    /** How long the CLI may say nothing before it is treated as wedged, and
+     * the absolute ceiling behind it. Configurable because the honest length
+     * of a run depends on how much code it has to read. */
+    private readonly timeouts: { idleTimeoutMs?: number; maxRunMs?: number } = {},
+  ) {}
 
   async generate({
     system,
@@ -340,6 +399,8 @@ export class ClaudeCliProvider implements LlmProvider {
 
     try {
       const { stderr } = await runCli(resolveClaudeCli(), args, {
+        idleTimeoutMs: this.timeouts.idleTimeoutMs,
+        maxRunMs: this.timeouts.maxRunMs,
         // Run inside the checkout so relative paths the model uses resolve
         // against the repo rather than this project.
         cwd: workdir,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { describeCliEvent, assertCannotExecute, WRITE_TOOLS, READ_ONLY_TOOLS } from './claudeCliProvider.js';
+import { describeCliEvent, assertCannotExecute, WRITE_TOOLS, READ_ONLY_TOOLS, runCli } from './claudeCliProvider.js';
 
 describe('describeCliEvent', () => {
   const workdir = '/cache/backend-team__EPA_API';
@@ -74,5 +74,52 @@ describe('the fixer cannot commit or push', () => {
 
   it('names what it objected to, so the fix is obvious', () => {
     expect(() => assertCannotExecute(['Read', 'Bash'])).toThrow(/Bash/);
+  });
+});
+
+describe('runCli — stuck and slow are different things', () => {
+  /** A fake CLI that prints a line every `every` ms, `count` times, and then
+   * exits — a run that is working and then finishes. */
+  const chatter = (count: number, every: number) => [
+    '-e',
+    `let n=0;const t=setInterval(()=>{if(n++>=${count}){clearInterval(t);return;}` +
+      `process.stdout.write(JSON.stringify({type:'x',n})+'\\n');},${every});`,
+  ];
+
+  /** A fake CLI that starts and then says nothing, ever — a wedged run. */
+  const silent = () => ['-e', 'setInterval(()=>{},1000)'];
+
+  it('kills a process that has gone quiet', async () => {
+    // Silent from the start: nothing to say, and nobody waiting for it.
+    await expect(
+      runCli(process.execPath, silent(), { idleTimeoutMs: 150, maxRunMs: 60000 }),
+    ).rejects.toThrow(/hiçbir şey yazmadı/);
+  });
+
+  it('lets a talkative run continue well past the idle window', async () => {
+    // Eight lines, 100ms apart: about 800ms of work under a 400ms idle
+    // window. A timer measuring total duration would have killed this at
+    // 400ms; one measuring silence must not. The window is comfortably
+    // wider than node's own startup, or the test would be measuring that.
+    const { stdout } = await runCli(process.execPath, chatter(8, 100), {
+      idleTimeoutMs: 400,
+      maxRunMs: 60000,
+      onLine: () => {},
+    });
+    expect(stdout.split('\n').filter(Boolean)).toHaveLength(8);
+  });
+
+  it('still stops a run that chatters forever', async () => {
+    // The failure silence cannot catch: a model looping over tool calls,
+    // narrating the whole way.
+    await expect(
+      runCli(process.execPath, chatter(10000, 5), { idleTimeoutMs: 60000, maxRunMs: 200 }),
+    ).rejects.toThrow(/dakikayı aştı/);
+  });
+
+  it('says how long it waited, so the number can be raised knowingly', async () => {
+    await expect(
+      runCli(process.execPath, silent(), { idleTimeoutMs: 120, maxRunMs: 60000 }),
+    ).rejects.toThrow(/takıldı sayıldı/);
   });
 });

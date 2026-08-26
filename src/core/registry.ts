@@ -89,7 +89,11 @@ export function buildPipeline(config: AppConfig, keep?: Stores): Wired {
   const llmProviders: Record<string, () => LlmProvider> = {
     // Shells out to the `claude` CLI — uses your Claude Code subscription's
     // included usage, not pay-per-token API credits. Default.
-    claudeCli: () => new ClaudeCliProvider(config.anthropic.model),
+    claudeCli: () =>
+      new ClaudeCliProvider(config.anthropic.model, {
+        idleTimeoutMs: config.review.idleTimeoutMs,
+        maxRunMs: config.review.runTimeoutMs,
+      }),
     // Calls the Anthropic API directly via SDK — needs a funded API key
     // (separate billing from any Claude.ai/Claude Code subscription).
     anthropic: () => new AnthropicProvider(config.anthropic.model, config.anthropic.apiKey),

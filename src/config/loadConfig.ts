@@ -102,12 +102,23 @@ const yamlConfigSchema = z.object({
        * is expanded so the default works without knowing the home path. */
       repoCacheDir: z.string().default('~/.revify/repos'),
       notesFilePath: z.string().default('./data/reviewNotes.json'),
+      /** How long the model may produce no output at all before the run is
+       * treated as wedged. Not a cap on how long a run may take — see
+       * runTimeoutMs — because a run that is narrating tool calls is
+       * working, however long it has been at it. */
+      idleTimeoutMs: z.number().int().positive().default(10 * 60 * 1000),
+      /** The absolute ceiling, against a model looping over tool calls
+       * forever. Raise it for a large monorepo; a stuck run can always be
+       * stopped from the UI. */
+      runTimeoutMs: z.number().int().positive().default(45 * 60 * 1000),
     })
     .default({
       language: 'English',
       useRepoCheckout: true,
       repoCacheDir: '~/.revify/repos',
       notesFilePath: './data/reviewNotes.json',
+      idleTimeoutMs: 10 * 60 * 1000,
+      runTimeoutMs: 45 * 60 * 1000,
     }),
   /** Reviewing new arrivals before anyone asks. Only ever *prepares* a
    * review — approving and rejecting stay manual. */
@@ -166,6 +177,8 @@ export interface AppConfig {
     useRepoCheckout: boolean;
     repoCacheDir: string;
     notesFilePath: string;
+    idleTimeoutMs: number;
+    runTimeoutMs: number;
   };
   autoPrepare: { enabled: boolean; pollIntervalMs: number };
   reminders: { enabled: boolean; pollIntervalMs: number };
