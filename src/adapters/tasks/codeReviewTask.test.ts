@@ -473,6 +473,35 @@ describe('CodeReviewTask — what travels with the review', () => {
     expect(JSON.stringify(result.meta?.requirement)).not.toContain('Gökçe');
   });
 
+  it('keeps the prompt it sent, before the call rather than after', async () => {
+    // A run that fails or is stopped is exactly the one somebody wants to
+    // read the prompt of, so it is written before the model is asked.
+    const saved: Array<{ issueKey: string; kind: string; system: string; prompt: string }> = [];
+    const exploding: LlmProvider = {
+      canEditFiles: false,
+      generate: async () => {
+        throw new Error('model patladı');
+      },
+    };
+    const promptStore = {
+      save: (issueKey: string, kind: string, input: { system: string; prompt: string }) =>
+        saved.push({ issueKey, kind, ...input }),
+    } as unknown as ConstructorParameters<typeof CodeReviewTask>[4];
+
+    await expect(
+      new CodeReviewTask(exploding, 'English', undefined, undefined, promptStore).run(event, {
+        repoChanges: [
+          { projectPath: 'p', branchName: 'b', baseBranch: 'm', diff: 'd', files: [], repoPath: '/tmp/x' },
+        ],
+      } as unknown as Record<string, unknown>),
+    ).rejects.toThrow('model patladı');
+
+    expect(saved).toHaveLength(1);
+    expect(saved[0]).toMatchObject({ issueKey: 'BUY-1', kind: 'review' });
+    expect(saved[0].system).toContain('senior software engineer');
+    expect(saved[0].prompt).toContain('BUY-1');
+  });
+
   it('records an empty ask rather than nothing when the issue has none', async () => {
     const result = await new CodeReviewTask(llm).run(event, {
       repoChanges: [

@@ -326,6 +326,22 @@ plus `--strict-mcp-config`. Without both, the reviewer would keep
 Each run also passes `--no-session-persistence` so a review is a standalone
 answer rather than an addendum to a previous one.
 
+### Reading what the model was told
+
+Every run writes the exact text it sent — the system prompt and the user turn
+— to `<data>/prompts/`, and the **Adımlar** tab shows one collapsed card per
+run (the review's, and one per repository the fix touched). A review is an
+argument, and a strange one is only judgeable against what the model was
+actually given: which note was in force, whether the diff arrived whole,
+whether a finding's instruction really went in.
+
+It lives beside `reviews.json` rather than inside it because a prompt carries
+the whole diff again plus the issue and its comments; folding it into the
+record would roughly double a file that is rewritten in full every time a
+queue position moves. `/api/reviews/:key/detail` therefore lists only the kinds
+and sizes — the text has its own endpoint and is fetched when a card is
+opened. Clearing a task deletes its prompts with it.
+
 ### Fixing what the review found
 
 The review says what is wrong; **Düzelt…** turns the findings you pick into

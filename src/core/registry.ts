@@ -20,6 +20,7 @@ import { JiraReviewOutcomeAction } from '../adapters/actions/jiraReviewOutcomeAc
 import { ReviewStore } from './reviewStore.js';
 import { StateStore } from './stateStore.js';
 import { NotesStore } from './notesStore.js';
+import { PromptStore } from './promptStore.js';
 
 export interface Wired {
   trigger: Trigger;
@@ -43,6 +44,10 @@ export interface Wired {
   stateStore: StateStore;
   /** Standing project notes the review honors — managed from the web UI. */
   notesStore: NotesStore;
+  /** The exact text each run was given. Kept beside the other data files
+   * rather than inside the review record — a prompt carries the whole diff
+   * again, and the record is rewritten in full on every status change. */
+  promptStore: PromptStore;
   /**
    * Turns selected findings into a patch. Not part of the pipeline: a fix
    * is asked for after a review exists, by a human who read it, and it
@@ -115,11 +120,12 @@ export function buildPipeline(config: AppConfig, keep?: Stores): Wired {
     resolve(contextCollectors, name, 'contextCollector'),
   );
 
-  const fixTask = new CodeFixTask(llm, config.review.language);
+  const promptStore = new PromptStore(join(dirname(config.reviewsFilePath), 'prompts'));
+  const fixTask = new CodeFixTask(llm, config.review.language, promptStore);
   const fixWorkspaceRoot = join(dirname(config.review.repoCacheDir), 'fix-work');
 
   const tasks: Record<string, () => AiTask> = {
-    codeReview: () => new CodeReviewTask(llm, config.review.language, notesStore, reviewStore),
+    codeReview: () => new CodeReviewTask(llm, config.review.language, notesStore, reviewStore, promptStore),
   };
   const task = resolve(tasks, config.wiring.task, 'task');
 
@@ -159,6 +165,7 @@ export function buildPipeline(config: AppConfig, keep?: Stores): Wired {
     reviewStore,
     stateStore,
     notesStore,
+    promptStore,
     fixTask,
     fixWorkspaceRoot,
     gitlabClient,

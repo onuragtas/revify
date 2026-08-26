@@ -730,6 +730,26 @@
   .repoHeading:first-child { margin-top: 0; }
   .repoBranch { font-weight: 400; color: var(--text-faint); font-size: 0.75rem; font-family: var(--mono); }
 
+  /* ------------------------------ prompts ----------------------------- */
+
+  #promptCards details {
+    border: 1px solid var(--border); border-radius: var(--radius);
+    margin-top: 0.6rem; overflow: hidden; background: var(--surface);
+  }
+  #promptCards summary {
+    cursor: pointer; padding: 0.55rem 0.8rem; list-style: none;
+    font-size: 0.8rem; background: var(--surface-2);
+    display: flex; align-items: center; gap: 0.6rem;
+  }
+  #promptCards summary::-webkit-details-marker { display: none; }
+  #promptCards summary .spacer { margin-left: auto; }
+  #promptCards summary time { font-family: var(--mono); color: var(--text-muted); }
+  .promptText {
+    margin: 0; padding: 0.85rem 1rem; border-top: 1px solid var(--border);
+    max-height: 32rem; overflow: auto; white-space: pre-wrap; word-break: break-word;
+    font-family: var(--mono); font-size: 0.76rem; line-height: 1.5;
+  }
+
   /* ------------------------------ history ----------------------------- */
 
   #historyList details {
@@ -1111,6 +1131,7 @@
               <p class="card-hint">Review sürecinin canlı kaydı — hangi repo klonlandı, hangi diff alındı, model ne zaman çağrıldı.</p>
               <div id="steps"></div>
             </div>
+            <div id="promptCards"></div>
           </div>
 
           <!-- ----------------------------- Diff ---------------------------- -->
@@ -1476,6 +1497,11 @@
    * just because the new issue happens to have the same data. */
   function resetRenderCache() {
     for (const k of Object.keys(rendered)) delete rendered[k];
+    // Lazily-fetched bodies are keyed by kind and project, not by issue —
+    // carrying them across would show one issue's text under another's card.
+    for (const k of Object.keys(promptBodies)) delete promptBodies[k];
+    for (const k of Object.keys(patchBodies)) delete patchBodies[k];
+    openPrompts.clear();
   }
 
   const emptyEl = document.getElementById('empty');
@@ -2260,6 +2286,113 @@
   }
 
 
+
+  /* ------------------------------ prompts ------------------------------ */
+
+  /**
+   * What the model was actually told, on demand.
+   *
+   * A review is an argument, and a strange one is only judgeable against the
+   * text that produced it — which note was in force, whether the diff arrived
+   * whole, whether the finding's instruction really went in. The card starts
+   * closed because a prompt is tens of kilobytes and nobody needs it most of
+   * the time; it is fetched the first time it is opened and not again.
+   */
+  const promptBodies = {};
+  const openPrompts = new Set();
+
+  function promptLabel(kind) {
+    if (kind === 'review') return 'Review prompt';
+    if (kind.indexOf('fix:') === 0) return 'Yama prompt — ' + kind.slice(4);
+    return kind;
+  }
+
+  function renderPrompts(prompts) {
+    const list = prompts ?? [];
+    // The open state is kept outside the markup: a fix run adds a card, and
+    // re-rendering would otherwise close the one being read.
+    if (!changed('prompts', list)) return;
+
+    const el = document.getElementById('promptCards');
+    el.innerHTML = list
+      .map((p) => {
+        const body = promptBodies[p.kind];
+        return '<details data-prompt="' + escapeHtml(p.kind) + '"' + (openPrompts.has(p.kind) ? ' open' : '') + '>' +
+          '<summary>' +
+          '<span>' + escapeHtml(promptLabel(p.kind)) + '</span>' +
+          '<span class="muted">' + Math.max(1, Math.round(p.size / 1000)) + ' KB</span>' +
+          '<span class="spacer"></span>' +
+          '<time>' + escapeHtml(formatDate(p.savedAt)) + '</time>' +
+          '<button class="btn btn-ghost" data-copy-prompt>Kopyala</button>' +
+          '</summary>' +
+          '<pre class="promptText">' + (body === undefined ? 'aç ve yükle…' : escapeHtml(body)) + '</pre>' +
+          '</details>';
+      })
+      .join('');
+  }
+
+  /** Fetches a prompt's text the first time its card is opened. */
+  async function loadPrompt(kind) {
+    if (promptBodies[kind] !== undefined) return promptBodies[kind];
+    const res = await fetch(
+      '/api/reviews/' + encodeURIComponent(currentIssue) + '/prompt?kind=' + encodeURIComponent(kind),
+    );
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    // System prompt and user turn are two different things and read as one
+    // wall of text without a marker between them.
+    promptBodies[kind] =
+      (data.system ? '───────── SYSTEM ─────────\n' + data.system + '\n\n───────── PROMPT ─────────\n' : '') +
+      data.prompt;
+    return promptBodies[kind];
+  }
+
+  // `toggle` does not bubble, so this listens in the capture phase — the
+  // cards are rebuilt whenever the list changes and per-card listeners would
+  // go with them.
+  document.getElementById('promptCards').addEventListener(
+    'toggle',
+    async (e) => {
+      const card = e.target.closest ? e.target.closest('[data-prompt]') : null;
+      if (!card) return;
+      const kind = card.dataset.prompt;
+
+      if (!card.open) {
+        openPrompts.delete(kind);
+        return;
+      }
+      openPrompts.add(kind);
+
+      const pre = card.querySelector('pre');
+      if (promptBodies[kind] !== undefined) return;
+      pre.textContent = 'yükleniyor…';
+      try {
+        pre.textContent = await loadPrompt(kind);
+      } catch (err) {
+        pre.textContent = 'Okunamadı: ' + err.message;
+      }
+    },
+    true,
+  );
+
+  document.getElementById('promptCards').addEventListener('click', async (e) => {
+    const button = e.target.closest('[data-copy-prompt]');
+    if (!button) return;
+    // Inside a <summary>: without this, copying would also toggle the card.
+    e.preventDefault();
+    e.stopPropagation();
+
+    const kind = button.closest('[data-prompt]').dataset.prompt;
+    const previous = button.textContent;
+    try {
+      await navigator.clipboard.writeText(await loadPrompt(kind));
+      button.textContent = 'kopyalandı';
+    } catch (err) {
+      button.textContent = 'kopyalanamadı';
+    }
+    setTimeout(() => (button.textContent = previous), 1500);
+  });
+
   /* ------------------------------- yama -------------------------------- */
 
   /**
@@ -2899,6 +3032,7 @@
     renderRevision(detail.revisionRequest);
     renderAppliedNotes(detail.appliedNotes);
     renderDiff(detail.repoChanges);
+    renderPrompts(detail.prompts);
     renderPatch(detail);
     renderHistory(detail.history);
 

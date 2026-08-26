@@ -6,6 +6,7 @@ import type { JiraIssueDetail } from '../../clients/jiraClient.js';
 import type { ContextRepo, RepoChange } from '../context/gitlabBranchDiffContext.js';
 import type { NotesStore } from '../../core/notesStore.js';
 import type { ReviewStore } from '../../core/reviewStore.js';
+import type { PromptStore } from '../../core/promptStore.js';
 import { progressBus } from '../../core/progressBus.js';
 import {
   extractPlainText,
@@ -356,6 +357,9 @@ export class CodeReviewTask implements AiTask {
     private readonly language: string = 'English',
     private readonly notesStore?: NotesStore,
     private readonly reviewStore?: ReviewStore,
+    /** Keeps the exact text this run was given, so a reader can check the
+     * review against what the model was actually told. */
+    private readonly promptStore?: PromptStore,
   ) {}
 
   async run(
@@ -403,11 +407,16 @@ export class CodeReviewTask implements AiTask {
       attachments: context.attachments as CodeReviewPromptInput['attachments'],
     });
 
+    // Written before the call, not after: a run that fails or is stopped is
+    // exactly the one somebody wants to read the prompt of.
+    const system = buildSystemPrompt(this.language);
+    this.promptStore?.save(issueKey, 'review', { system, prompt });
+
     // The first changed repo is the working directory; everything else the
     // model may read is mounted alongside it.
     const changedPaths = repoChanges.map((c) => c.repoPath).filter((p): p is string => Boolean(p));
     const markdown = await this.llm.generate({
-      system: buildSystemPrompt(this.language),
+      system,
       prompt,
       workdir: changedPaths[0],
       extraDirs: [

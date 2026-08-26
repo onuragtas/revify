@@ -8,6 +8,7 @@ import { createServer } from './server.js';
 import { ReviewStore } from '../core/reviewStore.js';
 import { StateStore } from '../core/stateStore.js';
 import { NotesStore } from '../core/notesStore.js';
+import { PromptStore } from '../core/promptStore.js';
 import { CodeFixTask } from '../adapters/tasks/codeFixTask.js';
 import type { Wired } from '../core/registry.js';
 import type { AppConfig } from '../config/loadConfig.js';
@@ -77,6 +78,7 @@ function makeConfig(): AppConfig {
 }
 
 function makeWired(llm: LlmProvider): Wired {
+  const promptStore = new PromptStore(join(dir, 'prompts'));
   return {
     trigger: { poll: async () => [] },
     contextCollectors: [],
@@ -86,7 +88,8 @@ function makeWired(llm: LlmProvider): Wired {
     reviewStore,
     stateStore: new StateStore(join(dir, 'state.json')),
     notesStore: new NotesStore(join(dir, 'notes.json')),
-    fixTask: new CodeFixTask(llm),
+    promptStore,
+    fixTask: new CodeFixTask(llm, 'English', promptStore),
     fixWorkspaceRoot: join(dir, 'fix-work'),
     gitlabClient: { listProjects: async () => [] } as unknown as Wired['gitlabClient'],
     jiraClient: { searchIssues: async () => [] } as unknown as Wired['jiraClient'],
@@ -326,6 +329,52 @@ describe('fix', () => {
     await waitForFix('ready');
 
     expect(seen).not.toContain('bunu da şöyle yap');
+  });
+
+  it('keeps the text the fixer was given, and serves it on request', async () => {
+    // A patch nobody expected is only judgeable against what the fixer was
+    // actually told — which instruction went in, which note was in force.
+    const app = createServer(
+      makeConfig(),
+      makeWired(fixingProvider((workdir) => writeFileSync(join(workdir, 'app.ts'), 'export const rate = 2;\n'))),
+    );
+    seedReview();
+    await request(app)
+      .post('/api/reviews/BUY-1/fix')
+      .send({ findings: ['f0'], instructions: { f0: '1. seçenek yapılmalı.' } });
+    await waitForFix('ready');
+
+    const detail = await request(app).get('/api/reviews/BUY-1/detail');
+    expect(detail.body.prompts.map((p: { kind: string }) => p.kind)).toEqual(['fix:team/orders']);
+    // Listed, never carried: this endpoint is polled once a second.
+    expect(detail.body.prompts[0].prompt).toBeUndefined();
+    expect(detail.body.prompts[0].size).toBeGreaterThan(0);
+
+    const prompt = await request(app).get('/api/reviews/BUY-1/prompt?kind=fix:team/orders');
+    expect(prompt.body.prompt).toContain('1. seçenek yapılmalı.');
+    expect(prompt.body.system).toContain('senior software engineer');
+  });
+
+  it('says so rather than guessing when a prompt was never kept', async () => {
+    const app = createServer(makeConfig(), makeWired(fixingProvider(() => {})));
+    seedReview();
+    const res = await request(app).get('/api/reviews/BUY-1/prompt?kind=review');
+    expect(res.status).toBe(404);
+  });
+
+  it('forgets the prompts when the task is cleared', async () => {
+    const app = createServer(
+      makeConfig(),
+      makeWired(fixingProvider((workdir) => writeFileSync(join(workdir, 'app.ts'), 'export const rate = 2;\n'))),
+    );
+    seedReview();
+    await request(app).post('/api/reviews/BUY-1/fix').send({});
+    await waitForFix('ready');
+
+    await request(app).delete('/api/reviews/BUY-1');
+
+    const detail = await request(app).get('/api/reviews/BUY-1/detail');
+    expect(detail.body.prompts).toEqual([]);
   });
 
   it('leaves a disputed finding out of the default selection', async () => {

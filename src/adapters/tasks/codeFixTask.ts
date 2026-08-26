@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import type { LlmProvider } from '../../core/types.js';
 import type { Finding } from '../../core/findings.js';
 import { isEmptyRequirement, renderComments, type Requirement } from '../../core/requirement.js';
+import type { PromptStore } from '../../core/promptStore.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const TEMPLATE = readFileSync(join(here, 'prompts/codeFix.md'), 'utf-8');
@@ -200,6 +201,9 @@ export class CodeFixTask {
   constructor(
     private readonly llm: LlmProvider,
     private readonly language: string = 'English',
+    /** Same reason as the review's: a patch nobody expected is read against
+     * what the fixer was actually told. */
+    private readonly promptStore?: PromptStore,
   ) {}
 
   /** False when the wired provider has no file tools — the UI asks first so
@@ -216,9 +220,13 @@ export class CodeFixTask {
       );
     }
 
+    const system = buildFixSystemPrompt(this.language);
+    const prompt = buildFixPrompt({ ...run, language: this.language });
+    this.promptStore?.save(run.issueKey, `fix:${run.projectPath}`, { system, prompt });
+
     return this.llm.generate({
-      system: buildFixSystemPrompt(this.language),
-      prompt: buildFixPrompt({ ...run, language: this.language }),
+      system,
+      prompt,
       workdir: run.workdir,
       write: true,
       signal: run.signal,

@@ -601,6 +601,14 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired) {
       withdrawn: parts?.withdrawn ?? [],
       error: record?.error ?? null,
       steps: progressBus.getBuffered(issueKey),
+      /*
+       * Which prompts exist, and how big — never the text.
+       *
+       * This endpoint is polled once a second and a prompt carries the whole
+       * diff again. The UI shows a closed card per entry and fetches the
+       * text only when somebody opens it.
+       */
+      prompts: wired.promptStore.list(issueKey),
       // The notes that were (or would be) in force for this issue, so the
       // UI can show what the reviewer was told to ignore.
       notes: [
@@ -611,6 +619,23 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired) {
         ).values(),
       ],
     });
+  });
+
+  /**
+   * The exact text a run was given.
+   *
+   * Its own endpoint rather than part of /detail: this is opened
+   * deliberately, once, by someone checking why a review said what it said —
+   * and it is far too big to ride along with a poll.
+   */
+  app.get('/api/reviews/:issueKey/prompt', (req, res) => {
+    const kind = String(req.query.kind ?? 'review');
+    const stored = wired.promptStore.read(req.params.issueKey, kind);
+    if (!stored) {
+      res.status(404).json({ error: 'Bu çalışmanın prompt kaydı yok.' });
+      return;
+    }
+    res.json(stored);
   });
 
   /** Answers to the `[?]` questions the reviewer raised. Stored per issue
@@ -1473,6 +1498,7 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired) {
     queue.cancel(issueKey);
     queue.cancel(issueKey, 'fix');
     progressBus.clear(issueKey);
+    wired.promptStore.forget(issueKey);
     wired.reviewStore.reset(issueKey);
     pipeline.forget(issueKey);
     // Otherwise a cleared issue would stay on the watcher's seen list and
