@@ -334,6 +334,13 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired) {
             // chunks the record keeps.
             diff: change.files.map((f) => f.diff).join('\n\n'),
             findings: mine,
+            // The same reading of the ask that produced the findings — not a
+            // fresh one. See core/requirement.ts.
+            requirement: record.requirement,
+            // Scoped per repository, like the review's: with a multi-repo
+            // change each run gets the notes for the code it is editing.
+            notes: wired.notesStore.listApplicable(change.projectPath).map((n) => n.text),
+            clarifications: record.clarifications,
             workdir: workspace,
             signal,
             onProgress: (message) => progressBus.log(issueKey, `fix: ${message}`),

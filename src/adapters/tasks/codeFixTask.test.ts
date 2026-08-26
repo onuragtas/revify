@@ -50,6 +50,91 @@ describe('buildFixPrompt', () => {
   });
 });
 
+describe('buildFixPrompt — the ask', () => {
+  it('carries what the issue wanted, so an unmet requirement can be met', () => {
+    // The review calls an unimplemented requirement `blocking`. A fixer that
+    // is only told "the requirement is not met" has not been told what it was.
+    const prompt = buildFixPrompt({
+      issueKey: 'BUY-1',
+      summary: 'İade',
+      projectPath: 'team/orders',
+      branchName: 'b',
+      diff: '',
+      findings: FINDINGS,
+      requirement: {
+        description: 'İptal edilen siparişte iade kaydı açılmalı.',
+        comments: [{ created: '2026-08-14T10:00:00.000+0000', text: 'Kabul kriteri: iade tutarı brüt olmalı.' }],
+      },
+    });
+
+    expect(prompt).toContain('İptal edilen siparişte iade kaydı açılmalı.');
+    expect(prompt).toContain('Yorum 1 — 2026-08-14');
+    expect(prompt).toContain('Kabul kriteri: iade tutarı brüt olmalı.');
+  });
+
+  it('fences the ask off, or the fixer implements the whole ticket', () => {
+    const prompt = promptFor();
+    expect(prompt).not.toContain('What the issue asked for');
+
+    const withAsk = buildFixPrompt({
+      issueKey: 'BUY-1',
+      summary: '',
+      projectPath: 'team/orders',
+      branchName: 'b',
+      diff: '',
+      findings: FINDINGS,
+      requirement: { description: 'Uzun bir ticket açıklaması.', comments: [] },
+    });
+    expect(withAsk).toContain('not a list of work');
+    expect(withAsk).toContain('Implement nothing from it that no selected finding names');
+  });
+
+  it('passes the team\'s answers on as fact', () => {
+    const prompt = buildFixPrompt({
+      issueKey: 'BUY-1',
+      summary: '',
+      projectPath: 'team/orders',
+      branchName: 'b',
+      diff: '',
+      findings: FINDINGS,
+      clarifications: [{ question: 'Kuyruk sırası garanti mi?', answer: 'Hayır, garanti değil.' }],
+    });
+
+    expect(prompt).toContain('Kuyruk sırası garanti mi?');
+    expect(prompt).toContain('Hayır, garanti değil.');
+    expect(prompt).toContain('established fact');
+  });
+
+  it('makes project notes binding on the code, not just on the reporting', () => {
+    const prompt = buildFixPrompt({
+      issueKey: 'BUY-1',
+      summary: '',
+      projectPath: 'team/orders',
+      branchName: 'b',
+      diff: '',
+      findings: FINDINGS,
+      notes: ['Bu repoda log için yalnızca AppLogger kullanılır.'],
+    });
+
+    expect(prompt).toContain('yalnızca AppLogger');
+    expect(prompt).toContain('Your change must');
+    // A fix that solves the finding by breaking a settled decision is not a fix.
+    expect(prompt).toContain('skip the finding and say which note stands in the way');
+  });
+
+  it('says the other services are not readable, so it skips instead of guessing', () => {
+    // Context repos are deliberately not mounted: --add-dir would make them
+    // writable too. The prompt has to say so, or the fixer infers.
+    expect(promptFor()).toContain('The other services are not here.');
+  });
+
+  it('leaves the sections out entirely when there is nothing to say', () => {
+    const prompt = promptFor();
+    expect(prompt).not.toContain('Answers from the team');
+    expect(prompt).not.toContain('Project notes');
+  });
+});
+
 describe('CodeFixTask', () => {
   it('asks for write access to the workspace and nowhere else', async () => {
     let seen: Record<string, unknown> = {};

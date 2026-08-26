@@ -1,6 +1,7 @@
 import { readFileSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { writeFileAtomic } from './atomicWrite.js';
+import type { Requirement } from './requirement.js';
 
 export type ReviewStatus =
   | 'idle'
@@ -89,6 +90,9 @@ export interface ReviewRecord {
   }> | null;
   /** Projects this change touches — used to scope repo-level notes. */
   projectPaths?: string[];
+  /** What the issue asked for, as this review read it. Kept so a fix built
+   * from these findings works from the same text — see core/requirement.ts. */
+  requirement?: Requirement;
   /** Places ahead of this one in the queue. Only meaningful while status
    * is `queued`; the UI shows it so a wait doesn't look like a hang. */
   queuePosition?: number;

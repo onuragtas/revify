@@ -7,6 +7,12 @@ import type { ContextRepo, RepoChange } from '../context/gitlabBranchDiffContext
 import type { NotesStore } from '../../core/notesStore.js';
 import type { ReviewStore } from '../../core/reviewStore.js';
 import { progressBus } from '../../core/progressBus.js';
+import {
+  extractPlainText,
+  renderComments,
+  toRequirement,
+  type Requirement,
+} from '../../core/requirement.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const TEMPLATE = readFileSync(join(here, 'prompts/codeReview.md'), 'utf-8');
@@ -40,22 +46,6 @@ export function buildSystemPrompt(language: string): string {
 
 /** Kept for backwards compatibility / tests — the English default. */
 export const SYSTEM_PROMPT = BASE_SYSTEM_PROMPT;
-
-/** Jira descriptions are Atlassian Document Format (a nested JSON tree).
- * Walk it for `text` nodes; if it's already a plain string, use it as-is. */
-function extractPlainText(description: unknown): string {
-  if (!description) return '(no description)';
-  if (typeof description === 'string') return description;
-  const chunks: string[] = [];
-  const walk = (node: unknown): void => {
-    if (!node || typeof node !== 'object') return;
-    const obj = node as Record<string, unknown>;
-    if (typeof obj.text === 'string') chunks.push(obj.text);
-    if (Array.isArray(obj.content)) obj.content.forEach(walk);
-  };
-  walk(description);
-  return chunks.join(' ').trim() || '(no description)';
-}
 
 export interface CodeReviewPromptInput {
   issueKey: string;
@@ -271,20 +261,10 @@ export function buildPrompt(input: CodeReviewPromptInput): string {
       '  it: "yorumda istenen", "ekibin kararı", "14.08 tarihli yorum" — never a person\'s\n' +
       '  name, even if the description or a comment contains one. The review is about the\n' +
       '  code, and it is posted where the whole team reads it.\n\n' +
-      comments
-        .map((c, i) => {
-          // Long comments are usually a pasted log or an old review; the
-          // ask at the top is what carries the meaning.
-          const text = c.text.length > 1500 ? `${c.text.slice(0, 1500)}\n[…kısaltıldı]` : c.text;
-          const when = c.created ? c.created.slice(0, 10) : '';
-          // Authors are deliberately not passed through. A review that says
-          // "X asked for this" reads as an argument with a colleague rather
-          // than an assessment of the code, and it lands on a public issue.
-          // Withholding the names makes that impossible rather than merely
-          // forbidden.
-          return `### Yorum ${i + 1}${when ? ` — ${when}` : ''}\n\n${text}\n`;
-        })
-        .join('\n') +
+      // Bodies rendered by the shared formatter — it is the same text the
+      // fix run is given, and it is where the truncation and the deliberate
+      // absence of author names live.
+      renderComments(comments.map((c) => ({ created: c.created, text: c.text }))) +
       '\n'
     : '';
 
@@ -354,7 +334,7 @@ export function buildPrompt(input: CodeReviewPromptInput): string {
 
   return TEMPLATE.replace('{{issueKey}}', input.issueKey)
     .replace('{{summary}}', input.summary)
-    .replace('{{description}}', extractPlainText(input.description))
+    .replace('{{description}}', extractPlainText(input.description) || '(no description)')
     .replace('{{codeChangeSection}}', codeChangeSection)
     .replace('{{repoInstruction}}', repoInstruction)
     .replace('{{contextReposSection}}', contextReposSection)
@@ -402,7 +382,7 @@ export class CodeReviewTask implements AiTask {
       return {
         title: `Code review: ${issueKey} — ${summary}`,
         markdown: `No linked GitLab branch was found for **${issueKey}** via the Jira development panel. Skipping AI review.`,
-        meta: { projectPaths, repoChanges: [] },
+        meta: { projectPaths, repoChanges: [], requirement: toRequirement(jiraIssue?.fields.description) },
       };
     }
 
@@ -444,7 +424,16 @@ export class CodeReviewTask implements AiTask {
     return {
       title: `Code review: ${issueKey} — ${summary}`,
       markdown,
-      meta: { projectPaths, repoChanges },
+      meta: {
+        projectPaths,
+        repoChanges,
+        // Kept with the review so a later fix works from the same reading of
+        // the ask that produced the findings — see core/requirement.ts.
+        requirement: toRequirement(
+          jiraIssue?.fields.description,
+          context.jiraComments as CodeReviewPromptInput['comments'],
+        ) satisfies Requirement,
+      },
     };
   }
 }

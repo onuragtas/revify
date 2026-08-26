@@ -344,6 +344,12 @@ patch:
 3. The fixer runs there with `--tools "Read,Glob,Grep,Edit,Write"` — no
    `Bash`, no `WebFetch`, and no `--add-dir` beyond its own repository, so a
    stray edit cannot land in the repo cache and poison later reviews.
+   Its prompt carries the selected findings, that repo's diff, **the ask as
+   the review read it** (description + comments, see below), the team's
+   answers to any `[?]` questions, and the project notes — framed as binding
+   on the code it writes, not merely on what gets reported. It is told the
+   other services are *not* readable, so a cross-service fix is skipped
+   rather than guessed at.
 4. `git diff` becomes the patch, the workspace is deleted, and the patch
    waits on the **Yama** tab with the fixer's line-per-finding report of
    what it changed and what it refused to guess at.
@@ -360,6 +366,24 @@ findings that no longer exist would undo work that was just done.
 Requires the `claudeCli` provider (`config.yaml` → `wiring.llm`): the
 Anthropic API provider has no file tools, and the button says so rather than
 running for minutes and producing an empty patch.
+
+**The ask travels with the review, and is not re-read.** `core/requirement.ts`
+stores the issue's description and comments on the review record as the
+reviewer read them, and the fix prompt uses that copy. A fix exists to make a
+*finding* true, and the finding came out of one particular reading of the
+requirement; handing the fixer newer prose introduces a second interpretation,
+where the finding argues one thing and the fixer reads another. If the ticket
+has genuinely moved, the answer is to review it again — which replaces the
+findings and the stored text together, and drops the patch. Two side effects
+worth having: the fix path makes no Jira call (so it cannot half-fail on an
+expired token), and the comment formatting rules — the 1500-character cap and
+the deliberate absence of author names — live in one place instead of once per
+prompt.
+
+Because the fixer sees the whole ticket text, the prompt fences it: *"this is
+background for the findings, not a list of work — implement nothing from it
+that no selected finding names."* Without that line, adding this context would
+buy scope creep instead of correctness.
 
 ### Review language
 

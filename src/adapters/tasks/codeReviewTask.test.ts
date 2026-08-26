@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { buildPrompt, buildSystemPrompt } from './codeReviewTask.js';
+import { CodeReviewTask, buildPrompt, buildSystemPrompt } from './codeReviewTask.js';
+import type { LlmProvider, TriggerEvent } from '../../core/types.js';
 
 describe('buildSystemPrompt', () => {
   it('adds a language instruction for a non-English language', () => {
@@ -430,5 +431,55 @@ describe('buildSystemPrompt — no names', () => {
     for (const language of ['English', 'Turkish']) {
       expect(buildSystemPrompt(language)).toContain('Never name a person in the review');
     }
+  });
+});
+
+describe('CodeReviewTask — what travels with the review', () => {
+  const llm: LlmProvider = { canEditFiles: false, generate: async () => 'Verdict: Approve' };
+  const event: TriggerEvent = { id: 'BUY-1', data: { issueKey: 'BUY-1', summary: 'İade' } };
+
+  it('records the ask it read, so a later fix works from the same text', async () => {
+    // Without this the fix path would have to re-read Jira, and a finding
+    // built on one reading of the ask would be fixed against another.
+    const result = await new CodeReviewTask(llm).run(event, {
+      jiraIssue: {
+        fields: {
+          description: {
+            type: 'doc',
+            content: [{ type: 'paragraph', content: [{ type: 'text', text: 'İade kaydı açılmalı.' }] }],
+          },
+        },
+      },
+      jiraComments: [
+        { author: 'Gökçe Koç', created: '2026-08-14T12:00:00.000+0000', text: 'Kabul kriteri: brüt tutar.' },
+      ],
+      repoChanges: [
+        {
+          projectPath: 'team/orders',
+          branchName: 'b',
+          baseBranch: 'main',
+          diff: 'd',
+          files: [],
+          repoPath: '/tmp/x',
+        },
+      ],
+    } as unknown as Record<string, unknown>);
+
+    expect(result.meta?.requirement).toEqual({
+      description: 'İade kaydı açılmalı.',
+      comments: [{ created: '2026-08-14T12:00:00.000+0000', text: 'Kabul kriteri: brüt tutar.' }],
+    });
+    // The name never enters the record, so nothing downstream can leak it.
+    expect(JSON.stringify(result.meta?.requirement)).not.toContain('Gökçe');
+  });
+
+  it('records an empty ask rather than nothing when the issue has none', async () => {
+    const result = await new CodeReviewTask(llm).run(event, {
+      repoChanges: [
+        { projectPath: 'p', branchName: 'b', baseBranch: 'm', diff: 'd', files: [], repoPath: '/tmp/x' },
+      ],
+    } as unknown as Record<string, unknown>);
+
+    expect(result.meta?.requirement).toEqual({ description: '', comments: [] });
   });
 });

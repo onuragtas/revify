@@ -17,6 +17,9 @@ export class WebApprovalChannel implements ApprovalChannel {
       review: { title: taskResult.title, markdown: taskResult.markdown },
       projectPaths: (taskResult.meta?.projectPaths as string[] | undefined) ?? [],
       repoChanges: (taskResult.meta?.repoChanges as ReviewRecord['repoChanges']) ?? null,
+      // Travels with the review because a fix has to work from the same
+      // reading of the ask that produced the findings.
+      requirement: taskResult.meta?.requirement as ReviewRecord['requirement'],
     });
     progressBus.log(event.id, 'awaiting your approval in the UI');
     return {};

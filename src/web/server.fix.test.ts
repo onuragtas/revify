@@ -101,6 +101,15 @@ function seedReview(): void {
     status: 'awaiting_approval',
     review: { title: 'Code review: BUY-1', markdown: REVIEW },
     projectPaths: ['team/orders'],
+    // What the review read, kept on the record so the fix works from the
+    // same text the findings came out of.
+    requirement: {
+      description: 'İptal edilen siparişte iade kaydı açılmalı.',
+      comments: [{ created: '2026-08-14T10:00:00.000+0000', text: 'Kabul kriteri: tutar brüt olmalı.' }],
+    },
+    clarifications: [
+      { question: 'Kuyruk sırası garanti mi?', answer: 'Hayır.', answeredAt: '2026-08-15T09:00:00.000Z' },
+    ],
     repoChanges: [
       {
         projectPath: 'team/orders',
@@ -181,6 +190,53 @@ describe('fix', () => {
     expect(reviewStore.get('BUY-1')!.fix!.findings).toEqual([
       { severity: 'blocking', heading: 'blocking — app.ts:1' },
     ]);
+  });
+
+  it('gives the fixer the review\'s own reading of the ask, not a fresh one', async () => {
+    let seen = '';
+    const app = createServer(
+      makeConfig(),
+      makeWired({
+        canEditFiles: true,
+        generate: async ({ prompt, workdir }) => {
+          seen = prompt;
+          writeFileSync(join(workdir!, 'app.ts'), 'export const rate = 2;\n');
+          return '[fixed] blocking — app.ts:1 — düzeltildi';
+        },
+      }),
+    );
+    seedReview();
+
+    await request(app).post('/api/reviews/BUY-1/fix').send({});
+    await waitForFix('ready');
+
+    // The requirement a "not implemented" finding refers to…
+    expect(seen).toContain('İptal edilen siparişte iade kaydı açılmalı.');
+    expect(seen).toContain('Kabul kriteri: tutar brüt olmalı.');
+    // …the facts a human established while reading the review…
+    expect(seen).toContain('Kuyruk sırası garanti mi?');
+    // …and the fence that stops it implementing the rest of the ticket.
+    expect(seen).toContain('not a list of work');
+  });
+
+  it('binds the team\'s standing notes on the code the fixer writes', async () => {
+    let seen = '';
+    const wired = makeWired({
+      canEditFiles: true,
+      generate: async ({ prompt, workdir }) => {
+        seen = prompt;
+        writeFileSync(join(workdir!, 'app.ts'), 'export const rate = 2;\n');
+        return '[fixed] blocking — app.ts:1 — düzeltildi';
+      },
+    });
+    wired.notesStore.add({ scope: 'repo', projectPath: 'team/orders', text: 'Log için yalnızca AppLogger.' });
+    const app = createServer(makeConfig(), wired);
+    seedReview();
+
+    await request(app).post('/api/reviews/BUY-1/fix').send({});
+    await waitForFix('ready');
+
+    expect(seen).toContain('Log için yalnızca AppLogger.');
   });
 
   it('keeps the patch out of the polled detail payload but serves it on its own', async () => {

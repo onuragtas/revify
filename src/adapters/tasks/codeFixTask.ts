@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import type { LlmProvider } from '../../core/types.js';
 import type { Finding } from '../../core/findings.js';
+import { isEmptyRequirement, renderComments, type Requirement } from '../../core/requirement.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const TEMPLATE = readFileSync(join(here, 'prompts/codeFix.md'), 'utf-8');
@@ -40,6 +41,21 @@ export interface FixPromptInput {
   diff: string;
   findings: Finding[];
   language?: string;
+  /**
+   * What the issue asked for, as the review read it.
+   *
+   * Needed because the review's own definition of `blocking` includes "the
+   * issue is not solved" — a requirement that was never implemented. A
+   * fixer given only the finding is being asked to complete something
+   * without being told what it was supposed to do.
+   */
+  requirement?: Requirement | null;
+  /** Standing team decisions about this codebase. A review honours them by
+   * not reporting; a fix honours them by writing code that obeys them. */
+  notes?: string[];
+  /** Facts a human established that the review could not verify on its own.
+   * Often the very thing that decides between two possible fixes. */
+  clarifications?: Array<{ question: string; answer: string }>;
 }
 
 /** Pure, so the prompt can be asserted in a test without an LLM call. */
@@ -49,6 +65,66 @@ export function buildFixPrompt(input: FixPromptInput): string {
     !language || language.toLowerCase() === 'english'
       ? ''
       : `\nWrite your report in ${language}. Keep file paths and code identifiers exactly as they are.`;
+
+  /*
+   * The ask, and a hard fence around it.
+   *
+   * Handing a fixer the whole ticket invites it to implement the whole
+   * ticket. The text is here so a finding of the form "this requirement is
+   * not met" can be acted on at all — everything else in it belongs to
+   * whoever is doing the ticket, not to this patch.
+   */
+  const requirement = input.requirement;
+  const requirementSection = isEmptyRequirement(requirement)
+    ? ''
+    : '\n## What the issue asked for\n\n' +
+      '**This is background for the findings above, not a list of work.** It is here so a\n' +
+      'finding that says a requirement is unmet can be fixed by someone who knows what the\n' +
+      'requirement was. Implement nothing from it that no selected finding names — an\n' +
+      'unimplemented requirement nobody flagged is somebody else\'s ticket, and putting it in\n' +
+      'this patch makes the patch unreviewable. If reading this convinces you a finding is\n' +
+      'wrong, do not fix it: say so in your report and leave the code alone.\n\n' +
+      (requirement!.description.trim()
+        ? `### Açıklama\n\n${requirement!.description.trim()}\n`
+        : '') +
+      (requirement!.comments.length
+        ? '\n### Issue discussion (oldest first)\n\n' +
+          'Acceptance criteria and previously requested changes live here as often as in the\n' +
+          'description. Later comments win over earlier ones.\n\n' +
+          renderComments(requirement!.comments)
+        : '');
+
+  // Facts, not opinions: a human answered a question the review could not
+  // settle from the code. Re-litigating one would reopen a loop that was
+  // closed on purpose.
+  const clarifications = (input.clarifications ?? []).filter((c) => c.question.trim() && c.answer.trim());
+  const clarificationsSection = clarifications.length
+    ? '\n## Answers from the team\n\n' +
+      'A human answered these while the review was being read. Treat each answer as\n' +
+      'established fact about this codebase and let it decide the shape of your fix. Do not\n' +
+      'work around one, and do not go looking for evidence against it.\n\n' +
+      clarifications.map((c) => `- **S:** ${c.question.trim()}\n  **C:** ${c.answer.trim()}`).join('\n') +
+      '\n'
+    : '';
+
+  /*
+   * Standing decisions, stated where the code gets written.
+   *
+   * These read to a reviewer as "do not report this". To a fixer they mean
+   * something stronger: the code you write has to obey them. A fix that
+   * solves the finding by doing the thing a note forbids has traded one
+   * problem for one the team has already argued about.
+   */
+  const notes = (input.notes ?? []).map((n) => n.trim()).filter(Boolean);
+  const notesSection = notes.length
+    ? '\n## Project notes (standing decisions from the team)\n\n' +
+      'Deliberate calls about this codebase, already argued and settled. Your change must\n' +
+      'obey them — they outrank your own judgement about what the code ought to look like.\n' +
+      'If the only fix you can see for a finding would break one of these, do not write it:\n' +
+      'skip the finding and say which note stands in the way.\n\n' +
+      notes.map((n) => `- ${n}`).join('\n') +
+      '\n'
+    : '';
 
   const findingsSection = input.findings
     .map(
@@ -64,6 +140,9 @@ export function buildFixPrompt(input: FixPromptInput): string {
     .replace(/\{\{projectPath\}\}/g, input.projectPath)
     .replace(/\{\{branchName\}\}/g, input.branchName)
     .replace('{{findingsSection}}', findingsSection)
+    .replace('{{requirementSection}}', requirementSection)
+    .replace('{{clarificationsSection}}', clarificationsSection)
+    .replace('{{notesSection}}', notesSection)
     .replace('{{diff}}', input.diff.trim() || '(diff yok)')
     .replace('{{languageInstruction}}', languageInstruction);
 }

@@ -18,7 +18,7 @@ These are the findings a human selected. Fix these and nothing else.
 ```diff
 {{diff}}
 ```
-
+{{requirementSection}}{{clarificationsSection}}{{notesSection}}
 ## How to work
 
 The repository is your working directory. You have `Read`, `Glob`, `Grep`, `Edit` and
@@ -46,8 +46,13 @@ a finding names a symptom, and the fix belongs wherever the cause is.
 Some findings should not be fixed by you, and skipping one is a real answer:
 
 - The right fix depends on a product or architecture decision that has not been made.
-- The finding rests on something you cannot verify from this repository — another
-  service's behaviour, a runtime value, a schema you cannot see.
+- **The other services are not here.** Only this repository is on disk — you cannot read
+  the code of anything it calls or is called by. When a fix turns on what another service
+  actually does (the shape it returns, whether a field can be absent, what an endpoint
+  accepts), do not infer it from a name or a call site. Skip the finding and say which
+  service would settle it.
+- The finding rests on something else you cannot verify from this repository — a runtime
+  value, a schema you cannot see.
 - Fixing it properly means changing a public contract, a migration, or someone else's
   caller.
 
