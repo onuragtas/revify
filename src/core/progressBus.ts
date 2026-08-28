@@ -4,6 +4,15 @@ export interface ProgressEvent {
   issueId: string;
   message: string;
   ts: string;
+  /**
+   * This line begins a run.
+   *
+   * One issue's log can hold more than one: a review, and later a fix
+   * against it. Without a marker, "how long has this been going" could only
+   * be measured from the top of the log, and a fix started an hour after
+   * the review would claim to have been running for an hour.
+   */
+  startsRun?: true;
 }
 
 const MAX_BUFFER_PER_ISSUE = 500;
@@ -17,8 +26,18 @@ const MAX_BUFFER_PER_ISSUE = 500;
 class ProgressBus extends EventEmitter {
   private readonly buffers = new Map<string, ProgressEvent[]>();
 
-  log(issueId: string, message: string): void {
-    const event: ProgressEvent = { issueId, message, ts: new Date().toISOString() };
+  /** The first line of a run, so elapsed time is measured from here. */
+  startRun(issueId: string, message: string): void {
+    this.log(issueId, message, true);
+  }
+
+  log(issueId: string, message: string, startsRun = false): void {
+    const event: ProgressEvent = {
+      issueId,
+      message,
+      ts: new Date().toISOString(),
+      ...(startsRun ? { startsRun: true as const } : {}),
+    };
     console.log(`[${issueId}] ${message}`);
 
     const buf = this.buffers.get(issueId) ?? [];

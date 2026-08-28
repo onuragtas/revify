@@ -16,7 +16,7 @@
  *   "1. seçenek yapılmalı" there and losing it is how a human's call
  *   silently fails to reach the code.
  */
-import { computed, ref, watch } from 'vue';
+import { computed, ref } from 'vue';
 import { state, host } from '../bridge';
 import { startFix } from '../api';
 import { checkedByDefault, disputes, findings, fixUi, revisionPending } from '../fixState';
@@ -26,20 +26,25 @@ const instructions = ref<Record<string, string>>({});
 const result = ref('');
 const starting = ref(false);
 
-// Opening is what seeds the form: the defaults depend on what the review
-// says right now, not on what it said when the panel was last rendered.
-watch(
-  () => fixUi.modalOpen,
-  (open) => {
-    if (!open) return;
-    result.value = '';
-    picked.value = Object.fromEntries(
-      findings.value.map((f) => [f.id, checkedByDefault(f.heading, f.severity)]),
-    );
-    instructions.value = Object.fromEntries(
-      findings.value.map((f) => [f.id, disputes.value.get(f.heading) ?? '']),
-    );
-  },
+/*
+ * Opening is what seeds the form.
+ *
+ * Done here, in setup, because this component exists only while the dialog
+ * is open — it is mounted by `v-if` on the same flag. It used to watch that
+ * flag instead, which meant the seeding ran only if the component was
+ * already alive when the flag flipped; once it was rendered properly the
+ * watcher could never fire, every box came up unticked and the confirm
+ * button stayed disabled.
+ *
+ * The defaults depend on what the review says right now, not on what it
+ * said when the panel was last rendered — which is exactly why this belongs
+ * at open time rather than at module load.
+ */
+picked.value = Object.fromEntries(
+  findings.value.map((f) => [f.id, checkedByDefault(f.heading, f.severity)]),
+);
+instructions.value = Object.fromEntries(
+  findings.value.map((f) => [f.id, disputes.value.get(f.heading) ?? '']),
 );
 
 const chosen = computed(() => findings.value.filter((f) => picked.value[f.id]));

@@ -27,7 +27,7 @@ import { connection, meta, metaError, openIssue, showTab, startPolling, stopPoll
 import { contextSelection, openModal } from '../uiState';
 import { outcomeConfig } from '../appConfig';
 import { session } from '../session';
-import { formatDate, statusLabel } from '../format';
+import { elapsedText, formatDate, statusLabel } from '../format';
 import StateNote from './StateNote.vue';
 
 import ActionMenu from './ActionMenu.vue';
@@ -115,12 +115,30 @@ const chips = computed(() => {
   ).filter(([, value]) => value);
 });
 
-const steps = computed(
-  () =>
+/**
+ * The log, with the wall clock and how far into the run each line landed.
+ *
+ * `[16:10:20 +02:13]` — when it happened, and how long the run had been
+ * going by then. The second number is the one you read while waiting: it
+ * answers "is this still moving" without arithmetic on timestamps.
+ *
+ * The baseline is the most recent line that began a run, not the top of the
+ * log. One issue accumulates a review's steps and then a fix's, and a fix
+ * started an hour later must not claim to have been running for an hour.
+ */
+const steps = computed(() => {
+  let runStart = '';
+  return (
     (detail.value?.steps ?? [])
-      .map((s) => `[${s.ts.split('T')[1]?.slice(0, 8) ?? ''}] ${s.message}`)
-      .join('\n') || '(henüz adım yok)',
-);
+      .map((s) => {
+        if (s.startsRun || !runStart) runStart = s.ts;
+        const clock = s.ts.split('T')[1]?.slice(0, 8) ?? '';
+        const since = elapsedText(runStart, s.ts);
+        return `[${clock}${since ? ` +${since}` : ''}] ${s.message}`;
+      })
+      .join('\n') || '(henüz adım yok)'
+  );
+});
 
 // The log is read from the bottom: a run that is working adds to the end.
 watch(steps, () => {

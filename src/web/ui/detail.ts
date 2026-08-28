@@ -143,7 +143,8 @@ export function openIssue(issueKey: string, { force = false } = {}): void {
  * Start (or restart) a review, with whatever the context picker selected.
  *
  * Shared because two screens ask for it: the button in the detail header,
- * and "save and re-review" in Doğrulama. To the person pressing either, it
+ * and "save and re-review" in the Review tab's Doğrulama section. To the
+ * person pressing either, it
  * is one act.
  */
 export async function startReview(issueKey: string, contextRepos: string[] = []): Promise<void> {

@@ -154,6 +154,51 @@ describe('DetailPane while the first payload is in flight', () => {
   });
 });
 
+describe('the step log', () => {
+  it('says how long the run had been going at each line, not just the clock', async () => {
+    // The wall clock says when; this says how long it has been going, which
+    // is the question someone asks when a run looks stuck.
+    const wrapper = mount(DetailPane);
+    state.detail = {
+      ...DETAIL,
+      steps: [
+        { ts: '2026-08-28T10:00:00Z', message: 'started', startsRun: true },
+        { ts: '2026-08-28T10:00:07Z', message: 'klonlanıyor' },
+        { ts: '2026-08-28T10:02:13Z', message: 'model çağrıldı' },
+      ],
+    };
+    await flushPromises();
+
+    const log = wrapper.find('#steps').text();
+    expect(log).toContain('[10:00:00 +00:00] started');
+    expect(log).toContain('[10:00:07 +00:07] klonlanıyor');
+    expect(log).toContain('[10:02:13 +02:13] model çağrıldı');
+  });
+
+  it('restarts the clock for a fix, which is its own run in the same log', async () => {
+    /*
+     * An issue accumulates a review's steps and then a fix's. Measured from
+     * the top of the log, a fix started an hour after the review would claim
+     * to have been running for an hour.
+     */
+    const wrapper = mount(DetailPane);
+    state.detail = {
+      ...DETAIL,
+      steps: [
+        { ts: '2026-08-28T10:00:00Z', message: 'started', startsRun: true },
+        { ts: '2026-08-28T10:04:00Z', message: 'review hazır' },
+        { ts: '2026-08-28T11:00:00Z', message: 'fix: başladı', startsRun: true },
+        { ts: '2026-08-28T11:00:31Z', message: 'fix: Read Payment.java' },
+      ],
+    };
+    await flushPromises();
+
+    const log = wrapper.find('#steps').text();
+    expect(log).toContain('[11:00:31 +00:31] fix: Read Payment.java');
+    expect(log).not.toContain('+60:31');
+  });
+});
+
 describe('starting a review', () => {
   it('says why the server refused, instead of a button that does nothing', async () => {
     /*

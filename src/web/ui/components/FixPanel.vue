@@ -178,7 +178,7 @@ async function clear(): Promise<void> {
 
       <StateNote v-if="fix.error" kind="error">{{ fix.error }}</StateNote>
 
-      <p v-if="busy" class="card-hint">Çalışıyor — ilerleme <b>Adımlar</b> sekmesinde.</p>
+      <p v-if="busy" class="card-hint">Çalışıyor — ilerleme <b>Süreç</b> sekmesinde.</p>
       <ul v-else-if="fix.report?.length" class="fixReport">
         <!-- Spelled out rather than `:class="line.outcome"`: binding a data
              value straight to a class name couples the two invisibly, and
@@ -254,8 +254,8 @@ async function clear(): Promise<void> {
   </div>
 
   <StateNote v-else>
-    Henüz yama yok. Review'deki <b>blocking</b> ve <b>major</b> bulgular için yukarıdaki
-    <b>Düzelt…</b> ile yama üretebilirsin — hiçbir dosyan değişmez, yamayı sonra kendi seçtiğin
-    dizine uygularsın.
+    Henüz yama yok. Review'deki <b>blocking</b> ve <b>major</b> bulgular için başlıktaki
+    <b>⋯</b> menüsünden <b>Düzelt…</b> ile yama üretebilirsin — hiçbir dosyan değişmez, yamayı
+    sonra kendi seçtiğin dizine uygularsın.
   </StateNote>
 </template>

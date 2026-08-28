@@ -192,6 +192,92 @@ describe('App', () => {
     expect(wrapper.text()).toContain('Ayarlar');
   });
 
+  it('reaches the fix dialog from the detail header, with findings ready to go', async () => {
+    /*
+     * Every part of this existed and none of it was connected: the button
+     * set a flag, the flag gated a `v-if` nobody had written, and the dialog
+     * seeded its form from a watcher that could therefore never fire.
+     * Mounted alone, each half passed its own tests. This is the path a
+     * person actually takes.
+     */
+    server({
+      '/api/reviews/BUY-1/detail': {
+        status: 'awaiting_approval',
+        review: { title: 't', markdown: '' },
+        reviewPreamble: '',
+        reviewTail: '',
+        findings: [
+          { id: 'f0', severity: 'blocking', location: 'app.ts:1', heading: 'blocking — app.ts:1', body: 'Yanlış.' },
+          { id: 'f1', severity: 'minor', location: 'log.ts:4', heading: 'minor — log.ts:4', body: 'Nit.' },
+        ],
+        fixAvailable: true,
+        steps: [],
+        prompts: [],
+        notes: [],
+        history: [],
+        fixTargets: {},
+      },
+      '/api/reviews/BUY-1/prepare': { summary: 'İade akışı', description: 'Açıklama', changedRepos: [] },
+    });
+    const wrapper = mount(App);
+    await flushPromises();
+
+    await wrapper.find('.issue-card').trigger('click');
+    await flushPromises();
+
+    await wrapper.find('.detail-head-actions .actionMenu > .btn').trigger('click');
+    const fix = wrapper.findAll('.actionMenu-list .btn').find((b) => b.text().includes('Düzelt'))!;
+    expect((fix.element as HTMLButtonElement).disabled).toBe(false);
+
+    await fix.trigger('click');
+    await flushPromises();
+
+    // On screen, with the blocking finding ticked and the button live.
+    const modal = wrapper.find('.modal-backdrop');
+    expect(modal.exists()).toBe(true);
+    expect(modal.text()).toContain('blocking — app.ts:1');
+    expect((modal.findAll('input[type="checkbox"]')[0].element as HTMLInputElement).checked).toBe(true);
+    expect((modal.find('.modal-foot .btn-primary').element as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('opens a review from Onay bekleyenler, on the screen that can show it', async () => {
+    /*
+     * Selecting an issue is not the same as showing one. This set the key
+     * and started its poll while leaving the reader on the pending table —
+     * the detail pane only exists on the review screen — so the row read as
+     * dead.
+     */
+    server({
+      '/api/pending': {
+        items: [{ issueKey: 'BUY-1', summary: 'İade akışı', reviewedAt: '2026-08-27T10:00:00Z' }],
+      },
+      '/api/reviews/BUY-1/detail': {
+        status: 'awaiting_approval',
+        review: { title: 't', markdown: '' },
+        reviewPreamble: 'Kısa giriş.',
+        reviewTail: '',
+        findings: [],
+        steps: [],
+        prompts: [],
+        notes: [],
+        history: [],
+        fixTargets: {},
+      },
+    });
+    const wrapper = mount(App);
+    await flushPromises();
+
+    await wrapper.findAll('.viewTab').find((t) => t.text().startsWith('Onay bekleyenler'))!.trigger('click');
+    await flushPromises();
+
+    await wrapper.find('table.decisions tr.clickable').trigger('click');
+    await flushPromises();
+
+    expect(views.active).toBe('reviews');
+    expect(state.issueKey).toBe('BUY-1');
+    expect(wrapper.text()).toContain('Kısa giriş.');
+  });
+
   it('signs out back to the gate', async () => {
     server();
     const wrapper = mount(App);

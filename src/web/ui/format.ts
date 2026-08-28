@@ -33,3 +33,18 @@ export function sinceText(iso: string, now = Date.now()): string {
   if (hours < 48) return `${hours} saat`;
   return `${Math.floor(hours / 24)} gün`;
 }
+
+/**
+ * How far into a run a step happened, as `mm:ss`.
+ *
+ * Read while watching a log scroll: the wall clock says *when*, this says
+ * *how long it has been going*, which is the question someone asks when a
+ * run looks stuck. Minutes are not wrapped at 60 — `+72:05` is longer than
+ * `+12:05` at a glance, where `1:12:05` invites a second look.
+ */
+export function elapsedText(fromIso: string, atIso: string): string {
+  const ms = Date.parse(atIso) - Date.parse(fromIso);
+  if (!Number.isFinite(ms) || ms < 0) return '';
+  const total = Math.floor(ms / 1000);
+  return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
+}

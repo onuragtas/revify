@@ -8,7 +8,7 @@ import {
   startPolling,
   startReview,
 } from './detail';
-import { setViewCount } from './views';
+import { setViewCount, views } from './views';
 
 /**
  * The state every screen reads from.
@@ -113,7 +113,19 @@ export const host = {
   showTab,
   startReview,
   refreshNotes,
-  openIssue,
+  /**
+   * Open an issue, wherever the reader happened to be.
+   *
+   * Asking for an issue is asking to *look* at it, and it can only be
+   * looked at on the review screen — so going there is part of opening it,
+   * not something every caller has to remember. "Onay bekleyenler" did not
+   * remember: clicking a row selected the issue, started its poll, and left
+   * the reader on a table, which reads as a dead row.
+   */
+  openIssue: (issueKey: string, options?: { force?: boolean }) => {
+    views.active = 'reviews';
+    openIssue(issueKey, options);
+  },
   setViewCount,
   /** The one screen that fixes a first run with no credentials. */
   openSettings: () => openModal('settings'),

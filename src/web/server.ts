@@ -164,7 +164,7 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired, opti
         await runFix(event, signal);
         return;
       }
-      progressBus.log(event.id, 'started');
+      progressBus.startRun(event.id, 'started');
       try {
         // Before the review, not when someone opens the notes screen: an
         // auto-prepared review runs with nobody watching, and it must
@@ -274,7 +274,7 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired, opti
     }
 
     if (!wired.repoCache) {
-      throw new Error('Repo checkout kapalı (Ayarlar → yerel checkout), düzeltme için kod gerekiyor.');
+      throw new Error('Repo checkout kapalı (Ayarlar → "Repoyu klonla"), düzeltme için kod gerekiyor.');
     }
     progressBus.log(issueKey, `fix: ${change.projectPath}@${change.branchName} güncelleniyor…`);
     const dir = await wired.repoCache.ensureCheckout(
@@ -302,6 +302,10 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired, opti
    */
   async function runFix(event: TriggerEvent, signal: AbortSignal): Promise<void> {
     const issueKey = event.id;
+    // A fix is its own run in a log that already holds the review's. Marked
+    // so the elapsed clock restarts here rather than counting from whenever
+    // the review began.
+    progressBus.startRun(issueKey, 'fix: başladı');
     const record = wired.reviewStore.get(issueKey);
     const wanted = new Set((event.data.fixFindingIds as string[] | undefined) ?? []);
 

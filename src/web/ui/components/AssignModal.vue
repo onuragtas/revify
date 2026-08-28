@@ -36,7 +36,7 @@ async function load(): Promise<void> {
   }
   const teams = await loadTeams();
   if (!teams.length) {
-    result.value = 'Önce bir takım oluştur (Takım menüsü).';
+    result.value = 'Önce bir takım oluştur — üst barda adına tıkla.';
     return;
   }
   teamId.value = teams[0].id;
@@ -106,7 +106,7 @@ async function assign(): Promise<void> {
             <span class="muted">{{ m.email }}</span>
           </div>
           <div v-if="!others.length" class="section-empty">
-            Takımda başka kimse yok. Takım menüsünden birini ekleyebilirsin.
+            Takımda başka kimse yok. Üst barda adına tıklayarak birini ekleyebilirsin.
           </div>
         </div>
 

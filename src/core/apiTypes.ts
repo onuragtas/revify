@@ -108,6 +108,9 @@ export interface NoteView {
 export interface StepView {
   ts: string;
   message: string;
+  /** First line of a run — where the elapsed clock restarts. One issue's
+   * log can hold a review and a later fix. */
+  startsRun?: boolean;
 }
 
 /** `GET /api/reviews/:issueKey/detail` — polled once a second while an issue
