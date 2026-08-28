@@ -1522,9 +1522,14 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired, opti
     }
 
     try {
+      // Same rule as the collector: the development panel is queried by
+      // internal id, and an issue attached to a local review by hand has
+      // none. Sending "undefined" got a 400 back that blamed Jira.
       const [meta, branches] = await Promise.all([
         wired.jiraClient.getIssueMeta(req.params.issueKey),
-        wired.jiraClient.getLinkedBranches(String(event.data.issueId)),
+        event.data.issueId
+          ? wired.jiraClient.getLinkedBranches(String(event.data.issueId))
+          : Promise.resolve([]),
       ]);
       res.json({
         issueKey: meta.key,

@@ -25,8 +25,10 @@ const BASE_SYSTEM_PROMPT =
   'the changed lines. Be direct and specific: every finding cites the file and line it lives at, ' +
   'and states the condition that triggers it. Write for a busy engineer deciding whether to ' +
   'merge: short, plain sentences, no preamble about your method or what you could access, no ' +
-  'repetition, no filler. A review that names two real problems in ten lines beats one that ' +
-  'lists eight observations in a hundred. Reviewing is not the same as finding fault — if the ' +
+  'repetition, no filler. Report every real defect you find: a review is not more useful for ' +
+  'being shorter, and a defect left out is one that ships. What stays out is padding — ' +
+  'observations that are not defects, restatements, and notes about things that are fine. ' +
+  'Reviewing is not the same as finding fault — if the ' +
   'change is sound, say so in a sentence and approve it. Never name a person in the review: ' +
   'write about the code and about what was decided or requested, never about who decided or ' +
   'requested it, even when the issue or its comments name someone.';

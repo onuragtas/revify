@@ -185,6 +185,17 @@ export class JiraClient {
    * self-hosted GitLab via the GitLab.com Jira Connect app), so we look it
    * up dynamically via `/issue/summary` first instead of guessing it. */
   async getLinkedBranches(issueId: string): Promise<JiraLinkedBranch[]> {
+    /*
+     * A tripwire, because this one fails quietly at the wrong end.
+     *
+     * Without it a missing id is interpolated into the URL as the string
+     * "undefined" and Jira answers 400 "An invalid ID was provided" — an
+     * error that names Jira and says nothing about the caller that had no
+     * id to give. Callers with a legitimately id-less event (a review of a
+     * local directory) skip this entirely; anyone reaching here without one
+     * has a bug worth seeing.
+     */
+    if (!issueId) throw new Error('getLinkedBranches: issueId gerekli (dev-status yalnızca id ile sorgulanır).');
     const summary = await this.request<{
       summary?: { branch?: { overall?: { count?: number }; byInstanceType?: Record<string, unknown> } };
     }>(`/rest/dev-status/1.0/issue/summary?issueId=${issueId}`);

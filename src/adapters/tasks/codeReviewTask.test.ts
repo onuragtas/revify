@@ -176,13 +176,41 @@ describe('buildPrompt', () => {
     expect(prompt).toContain('Lead with the risky paths');
   });
 
-  it('constrains output length and bans preamble/filler', () => {
+  it('bans preamble and padding without capping real findings', () => {
+    /*
+     * This asked for "Three findings at most" — and got it.
+     *
+     * The rule was written against padding, but it was phrased as a cap on
+     * *count*, so it threw away blocking and major defects along with the
+     * fourth nit. A reviewer then had to run the review again to see the
+     * rest, which is the one thing a review must not require: it is read
+     * once and acted on, and a defect left out is a defect that ships.
+     *
+     * The cap now applies where padding actually lives — minor findings.
+     */
     const prompt = buildPrompt(baseInput);
 
     expect(prompt).toContain('No preamble');
-    expect(prompt).toContain('Three findings at most');
     expect(prompt).toContain('No repetition');
-    expect(prompt).toContain('under a minute');
+    expect(prompt).toContain('Report every blocking and every major finding');
+    expect(prompt).toContain('no cap');
+    expect(prompt).toContain('Minor findings: three at most');
+
+    // The old rule, and the length target that pulled the same way.
+    expect(prompt).not.toContain('Three findings at most');
+    expect(prompt).not.toContain('under a minute');
+  });
+
+  it('does not trade completeness for brevity in the system prompt either', () => {
+    // "Two real problems in ten lines beats eight observations in a hundred"
+    // reads as a preference for fewer findings. The distinction that was
+    // meant is defects versus padding, so it says that instead.
+    const system = buildSystemPrompt('English');
+
+    expect(system).toContain('Report every real defect you find');
+    expect(system).toContain('a defect left out is one that ships');
+    expect(system).toContain('no filler');
+    expect(system).not.toContain('beats one that');
   });
 
   it('injects project notes and demands they be disclosed', () => {

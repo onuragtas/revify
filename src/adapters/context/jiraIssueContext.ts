@@ -17,7 +17,15 @@ export class JiraIssueContext implements ContextCollector {
 
   async collect(event: TriggerEvent): Promise<Record<string, unknown>> {
     const issueKey = event.data.issueKey as string | undefined;
-    const issueId = event.data.issueId as string;
+    /*
+     * Absent on a review that was started from a directory and then attached
+     * to a ticket by hand: it has a key, because a human confirmed one, but
+     * it never came from a Jira search and so was never given an internal
+     * id. The development panel is queried by id alone, and the change under
+     * review is the working copy anyway — whatever branches Jira has linked
+     * are not what is being read.
+     */
+    const issueId = event.data.issueId as string | undefined;
     // A review of a local directory has no issue behind it. Every
     // collector sees every event, so recognising one's own is the price of
     // a single wiring — and a single wiring is what keeps the two entry
@@ -26,7 +34,7 @@ export class JiraIssueContext implements ContextCollector {
 
     const [issue, linkedBranches, comments, related, attachments] = await Promise.all([
       this.jiraClient.getIssue(issueKey),
-      this.jiraClient.getLinkedBranches(issueId),
+      issueId ? this.jiraClient.getLinkedBranches(issueId) : Promise.resolve([]),
       // The discussion is context, not a requirement: a ticket with no
       // comments must still review fine, so a failure here is logged and
       // the run continues without them.
@@ -58,7 +66,10 @@ export class JiraIssueContext implements ContextCollector {
       progressBus.log(event.id, `related issues: ${related.map((r) => `${r.key} (${r.relation})`).join(', ')}`);
     }
 
-    if (linkedBranches.length === 0) {
+    if (!issueId) {
+      // Said plainly rather than as "no linked branch": nothing was asked.
+      progressBus.log(event.id, 'yerel dizin incelemesi — Jira dev-status sorgulanmadı');
+    } else if (linkedBranches.length === 0) {
       progressBus.log(event.id, 'no linked GitLab branch found in dev-status');
     } else {
       progressBus.log(event.id, `found ${linkedBranches.length} linked branch(es): ${linkedBranches.map((b) => b.name).join(', ')}`);

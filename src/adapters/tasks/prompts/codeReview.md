@@ -167,9 +167,16 @@ The reader is a busy engineer deciding whether to merge. Keep it tight:
   summary.
 - **Open with 1–3 sentences** saying what the change does and whether it
   solves the issue. Nothing else before the findings.
-- **Three findings at most**, ordered by severity. If you find more, report
-  the three that matter and drop the rest — a fourth minor nit costs the
-  reader more than it's worth.
+- **Report every blocking and every major finding. There is no cap on
+  these, and no reason to ever hold one back.** A defect you leave out is
+  one the reader merges. This review is read once and acted on; being asked
+  to run it again to get the rest of the defects is the failure this rule
+  exists to prevent. If a change genuinely has seven blocking problems,
+  write seven.
+- **Minor findings: three at most**, the three worth the reader's time.
+  This is the only place a cap belongs — padding lives here, and a fourth
+  nit costs more than it is worth.
+- **Order by severity**: blocking first, then major, then minor.
 - **No repetition.** Say something once. Do not restate a finding in the
   summary and again in the verdict.
 - **No filler sections** — no "additional observations", no "other notes",
@@ -177,7 +184,8 @@ The reader is a busy engineer deciding whether to merge. Keep it tight:
 - Prefer plain sentences over nested bullets. Keep code quotes to the few
   lines that carry the point.
 
-A good review is short enough to read in under a minute.
+Keep each finding tight; do not keep the review short by leaving findings
+out. It is as long as the defects require and not one line longer.
 
 ## Verdict
 
