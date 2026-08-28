@@ -179,10 +179,45 @@ export function startReviewByKey(issueKey: string): Promise<unknown> {
   });
 }
 
-export function startReviewByPath(path: string): Promise<{ issueKey: string }> {
+export function startReviewByPath(path: string, issueKey = ''): Promise<{ issueKey: string }> {
   return json<{ issueKey: string }>('/api/reviews/local', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path, contextRepos: [] }),
+    body: JSON.stringify({ path, issueKey, contextRepos: [] }),
   });
+}
+
+/** One Jira issue, named by a key somebody typed or a branch implied. */
+export interface IssueSummary {
+  key: string;
+  summary?: string;
+  status?: string;
+  /** Set when Jira could not answer — which is not the same as the issue
+   * not existing, and must not be reported as though it were. */
+  error?: string;
+}
+
+export interface LocalInspection {
+  path: string;
+  projectPath: string;
+  branch: string;
+  baseBranch: string | null;
+  files: number;
+  /** Read out of the branch name. A guess, shown for confirmation — never
+   * acted on by itself, and resolved through `readIssueSummary` like any
+   * key a person types. */
+  suggestedIssueKey: string | null;
+}
+
+/** What is in a directory, before anything runs. Read-only. */
+export function inspectLocalPath(path: string): Promise<LocalInspection> {
+  return json<LocalInspection>('/api/reviews/local/inspect', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path }),
+  });
+}
+
+export function readIssueSummary(issueKey: string): Promise<IssueSummary> {
+  return json<IssueSummary>(`/api/issues/${encodeURIComponent(issueKey)}/summary`);
 }

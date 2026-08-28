@@ -9,7 +9,8 @@
  */
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { host, listRefresh, state } from '../bridge';
-import { readIssues, startReviewByKey, startReviewByPath, type IssueRow } from '../api';
+import { localReviewTarget, openModal } from '../uiState';
+import { readIssues, startReviewByKey, type IssueRow } from '../api';
 import { formatDate, statusLabel } from '../format';
 import StateNote from './StateNote.vue';
 
@@ -201,7 +202,8 @@ function badge(item: IssueRow): string {
 /** Whichever the box turned out to hold. */
 async function startFromBox(): Promise<void> {
   if (!startWith.value.trim()) return;
-  await (asPath.value ? openByPath() : openByKey());
+  if (asPath.value) openByPath();
+  else await openByKey();
 }
 
 async function openByKey(): Promise<void> {
@@ -221,27 +223,20 @@ async function openByKey(): Promise<void> {
 }
 
 /**
- * Reviews a directory instead of an issue.
+ * Reviews a directory instead of an issue — after one question.
  *
- * Both the committed branch diff and whatever is uncommitted go in — the
- * uncommitted half is the half most likely to be wrong, and leaving it out
- * would produce a confident review of code nobody is about to push.
+ * The directory is inspected first and the dialog takes it from there: a
+ * branch named after a ticket is offered for confirmation, because reading
+ * Jira is harmless and writing to it is not, and only a person can say
+ * which ticket this actually is. Nothing runs until they answer.
  */
-async function openByPath(): Promise<void> {
+function openByPath(): void {
   const path = startWith.value.trim();
   if (!path) return;
-  hint.value = 'Dizin okunuyor…';
-  let started;
-  try {
-    started = await startReviewByPath(path);
-  } catch (err) {
-    hint.value = (err as Error).message;
-    return;
-  }
   hint.value = '';
   startWith.value = '';
-  host.openIssue(started.issueKey);
-  await load();
+  localReviewTarget.path = path;
+  openModal('localReview');
 }
 </script>
 

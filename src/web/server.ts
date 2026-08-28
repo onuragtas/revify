@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { loadConfig, refreshSettingsOverrides, type AppConfig } from '../config/loadConfig.js';
 import { buildPipeline, type Wired } from '../core/registry.js';
 import { Pipeline } from '../core/pipeline.js';
-import { isIssueKey, normalizeIssueKey, toTriggerEvent, UnknownIssueError } from '../core/issueEvent.js';
+import { isIssueKey, issueKeyFromBranch, normalizeIssueKey, toTriggerEvent, UnknownIssueError } from '../core/issueEvent.js';
 import { NotARepositoryError, readLocalChange, type LocalChange } from '../core/localRepo.js';
 import { ReviewQueue } from '../core/reviewQueue.js';
 import { AutoPrepareWatcher } from '../core/autoPrepare.js';
@@ -624,9 +624,10 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired, opti
       /** False when this machine's LLM provider has no file tools — the UI
        * says why instead of offering a button that cannot work. */
       fixAvailable: wired.fixTask.available && Boolean(record?.repoChanges?.length),
-      // Started from a directory: the decision is recorded here and nothing
-      // is written anywhere. See jiraReviewOutcomeAction.applyOutcome.
-      local: Boolean(record?.localPath),
+      // Started from a directory *and* attached to nothing: the decision is
+      // recorded here and written nowhere. See
+      // jiraReviewOutcomeAction.applyOutcome.
+      local: isLocalOnly(record),
       /** Where each project was last applied on this machine, so the apply
        * form opens filled in. */
       fixTargets: settings.get('fixTargets') ?? {},
@@ -1502,12 +1503,12 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired, opti
      * already on the record, and none of it costs a git call.
      */
     const record = wired.reviewStore.get(req.params.issueKey);
-    if (record?.localPath) {
+    if (isLocalOnly(record)) {
       res.json({
-        issueKey: record.issueKey,
-        summary: record.summary,
+        issueKey: record!.issueKey,
+        summary: record!.summary,
         description:
-          `Yerel dizin incelemesi — bağlı bir Jira issue'su yok.\n\nDizin: ${record.localPath}`,
+          `Yerel dizin incelemesi — bağlı bir Jira issue'su yok.\n\nDizin: ${record!.localPath}`,
         issueType: 'Yerel dizin',
         changedRepos: [],
       });
@@ -1645,6 +1646,84 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired, opti
     };
   }
 
+  /**
+   * What is in a directory, before anything is run.
+   *
+   * Read-only, and deliberately a separate step. A branch called
+   * `feature/BUY-2397` almost certainly belongs to that ticket, but "almost
+   * certainly" is not a licence to comment on it and move its status — so
+   * the guess is shown to a human, with the ticket's summary next to it so
+   * they can see whether it is the right one, and they confirm, correct or
+   * decline. Only then does a review start.
+   *
+   * Doing it here rather than after the run is what makes it free: attaching
+   * afterwards would mean re-running the review under a new id.
+   */
+  /**
+   * A review that came from a directory *and* has no Jira issue behind it.
+   *
+   * The two are not the same. Confirming the branch's ticket makes the id
+   * the issue key and the decision a Jira write — while the record still
+   * remembers the directory, because re-running has to read it again. Asking
+   * only "does it have a localPath" would call that attached review local,
+   * and then the decision bar would promise not to touch a ticket it is
+   * about to comment on.
+   */
+  const isLocalOnly = (record?: ReviewRecord): boolean =>
+    Boolean(record?.localPath) && !isIssueKey(record!.issueKey);
+
+  app.post('/api/reviews/local/inspect', async (req, res) => {
+    const started = await buildLocalStart(String(req.body?.path ?? '').trim());
+    if (!started.ok) {
+      res.status(started.status).json({ error: started.error });
+      return;
+    }
+
+    const { change } = started;
+    const suggested = issueKeyFromBranch(change.branch);
+
+    res.json({
+      path: change.path,
+      projectPath: change.projectPath,
+      branch: change.branch,
+      baseBranch: change.baseBranch || null,
+      files: change.files.length,
+      // Only the guess. Whether Jira knows it is a separate question with
+      // its own endpoint, asked the same way for a suggested key and a typed
+      // one — two paths to the same answer is how they end up disagreeing.
+      suggestedIssueKey: suggested,
+    });
+  });
+
+  /** Jira's one-line answer to "is this the ticket you meant?" */
+  async function describeIssueKey(
+    issueKey: string,
+  ): Promise<{ key: string; summary?: string; status?: string; error?: string }> {
+    try {
+      const meta = await wired.jiraClient.getIssueMeta(issueKey);
+      return { key: meta.key, summary: meta.summary, status: meta.status };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        key: issueKey,
+        error: message.includes('404')
+          ? `${issueKey} Jira'da bulunamadı (ya da erişimin yok).`
+          : `Jira'ya sorulamadı: ${message}`,
+      };
+    }
+  }
+
+  /** Confirms a key a human typed, so a typo is caught in the dialog rather
+   * than after a review has run against the wrong ticket. */
+  app.get('/api/issues/:issueKey/summary', async (req, res) => {
+    const issueKey = normalizeIssueKey(req.params.issueKey);
+    if (!isIssueKey(issueKey)) {
+      res.status(400).json({ error: `"${req.params.issueKey}" bir issue anahtarına benzemiyor (örn. BUY-2455).` });
+      return;
+    }
+    res.json(await describeIssueKey(issueKey));
+  });
+
   app.post('/api/reviews/local', async (req, res) => {
     const started = await buildLocalStart(String(req.body?.path ?? '').trim(), {
       issueKey: String(req.body?.issueKey ?? '').trim().toUpperCase(),
@@ -1735,7 +1814,11 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired, opti
      */
     const localPath = wired.reviewStore.get(req.params.issueKey)?.localPath;
     if (localPath) {
-      const started = await buildLocalStart(localPath, { contextRepos });
+      // An attached one keeps its issue: re-running must not quietly demote
+      // a review of BUY-2397 back into `local:...` and take its decision
+      // path away with it.
+      const attached = isIssueKey(req.params.issueKey) ? normalizeIssueKey(req.params.issueKey) : '';
+      const started = await buildLocalStart(localPath, { issueKey: attached, contextRepos });
       if (!started.ok) {
         res.status(started.status).json({ error: started.error });
         return;

@@ -1050,6 +1050,16 @@
 .pointer { cursor: pointer; }
 .warn { color: var(--amber); }
 
+/* A checkbox and its label read as one thing, and click as one thing. */
+.checkRow { display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; }
+.checkRow input { margin: 0; }
+
+/* The issue key, and Jira's own answer about it directly underneath. */
+.localAttach {
+  display: flex; flex-direction: column; gap: 0.35rem;
+  margin: 0.5rem 0 0 1.5rem;
+}
+
 /* The destructive action, set apart from the ones that start work — it is
    the last row of the menu, so the rule goes above it rather than beside. */
 .detachedAction { margin-top: 0.3rem; padding-top: 0.4rem; border-top: 1px solid var(--border); }

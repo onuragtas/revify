@@ -8,6 +8,7 @@
  */
 import { onMounted, onUnmounted } from 'vue';
 import AssignModal from './AssignModal.vue';
+import LocalReviewModal from './LocalReviewModal.vue';
 import BackupModal from './BackupModal.vue';
 import ContextModal from './ContextModal.vue';
 import SettingsModal from './SettingsModal.vue';
@@ -27,6 +28,7 @@ onUnmounted(() => document.removeEventListener('keydown', onKey));
   <BackupModal v-if="modals.backup" @close="closeModal('backup')" />
   <ContextModal v-if="modals.context" />
   <AssignModal v-if="modals.assign" />
+  <LocalReviewModal v-if="modals.localReview" />
   <TeamModal v-if="modals.team" />
   <SettingsModal v-if="modals.settings" />
 </template>

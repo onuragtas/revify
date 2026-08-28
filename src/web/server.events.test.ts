@@ -104,6 +104,12 @@ function makeWired(options: { fail?: boolean } = {}): Wired {
           fields: { summary: 'Typed by hand', status: { name: 'In Progress' }, updated: '2026-08-17T09:00:00.000Z' },
         };
       },
+      // The one-line answer the confirm dialog asks for. Same fixture rule:
+      // BUY-9 exists, nothing else does.
+      getIssueMeta: async (key: string) => {
+        if (key !== 'BUY-9') throw new Error('Jira API 404 Not Found');
+        return { key, summary: 'Typed by hand', status: 'In Progress' };
+      },
       searchIssues: async () => [],
     } as unknown as Wired['jiraClient'],
   };
@@ -414,6 +420,111 @@ describe('reviewing a local directory', () => {
     expect(meta.status).toBe(200);
     expect(meta.body.description).toContain(root);
     expect(meta.body.issueType).toBe('Yerel dizin');
+    server.shutdown();
+  });
+
+  it('offers the branch\'s ticket for confirmation without acting on it', async () => {
+    /*
+     * A branch named `feature/BUY-9-...` almost certainly belongs to that
+     * ticket — and "almost certainly" is not a licence to comment on it and
+     * move its status. Inspecting says what it found; nothing is queued and
+     * nothing is written until a human answers.
+     */
+    const root = makeRepo();
+    execFileSync('git', ['checkout', '-qb', 'feature/BUY-9-km-muayene'], { cwd: root });
+    const wired = makeWired();
+    const server = createServer(makeConfig(), wired, isolated());
+
+    const res = await request(server).post('/api/reviews/local/inspect').send({ path: root });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      branch: 'feature/BUY-9-km-muayene',
+      suggestedIssueKey: 'BUY-9',
+      files: 1,
+    });
+    // Read-only: no record, no queue entry.
+    expect(wired.reviewStore.list()).toEqual([]);
+    server.shutdown();
+  });
+
+  it('finds no ticket in a branch that names none', async () => {
+    const root = makeRepo();
+    const server = createServer(makeConfig(), makeWired(), isolated());
+
+    const res = await request(server).post('/api/reviews/local/inspect').send({ path: root });
+    expect(res.body.suggestedIssueKey).toBeNull();
+    server.shutdown();
+  });
+
+  it('answers whether a typed key is a real issue, so a typo is caught in the dialog', async () => {
+    const server = createServer(makeConfig(), makeWired(), isolated());
+
+    const found = await request(server).get('/api/issues/buy-9/summary');
+    expect(found.body).toMatchObject({ key: 'BUY-9', summary: 'Typed by hand' });
+
+    // Jira answers 404 both for "no such issue" and "not yours to see".
+    const missing = await request(server).get('/api/issues/BUY-404/summary');
+    expect(missing.body.error).toContain('BUY-404');
+
+    const typo = await request(server).get('/api/issues/not-a-key/summary');
+    expect(typo.status).toBe(400);
+    server.shutdown();
+  });
+
+  it('attaches the review to the issue a human confirmed, and only then', async () => {
+    const root = makeRepo();
+    const wired = makeWired();
+    const server = createServer(makeConfig(), wired, isolated());
+
+    const attached = await request(server).post('/api/reviews/local').send({ path: root, issueKey: 'BUY-9' });
+    // The id becomes the issue's — this is a review of BUY-9 now, and the
+    // decision will reach Jira like any other.
+    expect(attached.body.issueKey).toBe('BUY-9');
+    expect(attached.body.local).toBe(false);
+
+    const plain = await request(server).post('/api/reviews/local').send({ path: root });
+    expect(plain.body.issueKey).toContain('local:');
+    expect(plain.body.local).toBe(true);
+    server.shutdown();
+  });
+
+  it('keeps an attached review attached when it is run again', async () => {
+    /*
+     * A confirmed review of BUY-9 is a review of BUY-9, even though the
+     * record still remembers the directory so a re-run can re-read it.
+     * Rebuilding it without the key would silently demote it back to
+     * `local:...` — new id, and a decision that no longer reaches Jira.
+     */
+    const root = makeRepo();
+    const wired = makeWired();
+    const server = createServer(makeConfig(), wired, isolated());
+
+    await request(server).post('/api/reviews/local').send({ path: root, issueKey: 'BUY-9' });
+    await vi.waitFor(() => expect(wired.reviewStore.get('BUY-9')?.review).toBeDefined());
+
+    const again = await request(server).post('/api/reviews/BUY-9/start').send({ contextRepos: [] });
+    expect(again.status).toBe(200);
+    await vi.waitFor(() => expect(wired.reviewStore.get('BUY-9')?.history?.length).toBe(1));
+
+    // And it is still not a local-only review: the decision goes to Jira.
+    const detail = await request(server).get('/api/reviews/BUY-9/detail');
+    expect(detail.body.local).toBe(false);
+    expect(wired.reviewStore.get('local:')).toBeUndefined();
+    server.shutdown();
+  });
+
+  it('describes an attached review from Jira, not from the directory', async () => {
+    // It has a `localPath` — it was started from one — but it also has a
+    // ticket, and the ticket is what the reader needs to see.
+    const root = makeRepo();
+    const server = createServer(makeConfig(), makeWired(), isolated());
+
+    await request(server).post('/api/reviews/local').send({ path: root, issueKey: 'BUY-9' });
+    await request(server).get('/api/reviews');
+    const meta = await request(server).get('/api/reviews/BUY-9/prepare');
+
+    expect(meta.body.issueType).not.toBe('Yerel dizin');
     server.shutdown();
   });
 

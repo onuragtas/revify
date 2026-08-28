@@ -38,6 +38,30 @@ export function isIssueKey(raw: string): boolean {
   return /^[A-Z][A-Z0-9_]*-\d+$/.test(normalizeIssueKey(raw));
 }
 
+/**
+ * The issue a branch was cut for, if its name says so.
+ *
+ * `feature/BUY-2397-km-muayene` names a ticket; `main` and
+ * `release/2024-01-15` do not. Reviewing a directory is the case that needs
+ * this — nothing else says what the change is *for*, and a review that does
+ * not know the requirement can only judge the code against itself.
+ *
+ * Deliberately a guess, and treated as one. What it unlocks is *reading*
+ * Jira: the description, the discussion, the acceptance criteria. It never
+ * decides where a decision gets written — that follows `issueKey`, which is
+ * only ever set by a human naming the issue outright. A wrong guess here
+ * costs one failed lookup; a wrong guess there would move somebody else's
+ * ticket.
+ *
+ * Two characters minimum before the hyphen, because Jira project keys are
+ * at least that and a single letter would make `v-2` an issue. A date
+ * cannot match: a key has to start with a letter.
+ */
+export function issueKeyFromBranch(branch: string): string | null {
+  const match = normalizeIssueKey(branch).match(/(?:^|[^A-Z0-9_])([A-Z][A-Z0-9_]+-\d+)(?![0-9])/);
+  return match ? match[1] : null;
+}
+
 export class UnknownIssueError extends Error {
   constructor(readonly issueKey: string) {
     // Jira answers 404 both for an issue that does not exist and for one

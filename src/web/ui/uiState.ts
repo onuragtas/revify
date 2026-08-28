@@ -8,7 +8,7 @@ import { reactive } from 'vue';
  * and the thing doing the opening should not have to hold a reference to the
  * thing being opened.
  */
-export type ModalName = 'backup' | 'context' | 'assign' | 'team' | 'settings';
+export type ModalName = 'backup' | 'context' | 'assign' | 'team' | 'settings' | 'localReview';
 
 export const modals = reactive<Record<ModalName, boolean>>({
   backup: false,
@@ -16,7 +16,18 @@ export const modals = reactive<Record<ModalName, boolean>>({
   assign: false,
   team: false,
   settings: false,
+  localReview: false,
 });
+
+/**
+ * The directory a local review is about to be started from.
+ *
+ * Set by the sidebar when its inspect call comes back, read by the dialog
+ * that asks whether the branch's ticket is the right one. Shared for the
+ * same reason `contextSelection` is: the thing that opens a modal and the
+ * modal itself should not have to hold references to each other.
+ */
+export const localReviewTarget = reactive<{ path: string }>({ path: '' });
 
 export function openModal(name: ModalName): void {
   modals[name] = true;

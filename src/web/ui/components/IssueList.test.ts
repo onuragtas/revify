@@ -6,7 +6,7 @@ import IssueList from './IssueList.vue';
 import PendingView from './PendingView.vue';
 import { state } from '../bridge';
 import { views } from '../views';
-import { modals } from '../uiState';
+import { localReviewTarget, modals } from '../uiState';
 
 const ITEMS = [
   {
@@ -44,6 +44,8 @@ function stub(byUrl: Record<string, unknown>, calls: Array<{ url: string; body: 
 beforeEach(() => {
   state.issueKey = null;
   modals.settings = false;
+  modals.localReview = false;
+  localReviewTarget.path = '';
   views.counts = {};
 });
 afterEach(() => vi.unstubAllGlobals());
@@ -106,10 +108,7 @@ describe('IssueList', () => {
      * Jira key and a directory do not look alike, so one box decides — and
      * says which it decided, because a silent guess is worse than a question.
      */
-    const calls = stub({
-      '/api/reviews': { items: ITEMS },
-      '/api/reviews/local': { issueKey: 'LOCAL-1' },
-    });
+    const calls = stub({ '/api/reviews': { items: ITEMS } });
     const wrapper = mount(IssueList);
     await flushPromises();
 
@@ -119,8 +118,11 @@ describe('IssueList', () => {
     await wrapper.find('.byKey .btn').trigger('click');
     await flushPromises();
 
-    expect(calls.some((c) => c.url === '/api/reviews/local')).toBe(true);
-    expect(state.issueKey).toBe('LOCAL-1');
+    // A directory opens the dialog rather than starting anything: the branch
+    // may name a Jira ticket, and only a person can confirm which.
+    expect(modals.localReview).toBe(true);
+    expect(localReviewTarget.path).toBe('~/projects/api');
+    expect(calls.some((c) => c.url.startsWith('/api/reviews/local'))).toBe(false);
   });
 
   it('says it read a bare word as a Jira key before acting on it', async () => {

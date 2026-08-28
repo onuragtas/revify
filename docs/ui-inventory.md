@@ -6,8 +6,8 @@ Buradaki bir satırın karşılığı arayüzde yoksa, o feature **kaybolmuş** 
 Göçün nasıl yürüdüğü `ui-migration.md` içinde.
 
 - Sayfadaki inline script: **yok** · inline stil: **yok**
-- Bileşen: **28** · düğme: **72** · alan: **31** · modal: **6**
-- API ucu: **27**
+- Bileşen: **29** · düğme: **75** · alan: **33** · modal: **7**
+- API ucu: **29**
 
 ## Bileşenler
 ### `ActionMenu` — `src/web/ui/components/ActionMenu.vue`
@@ -99,6 +99,13 @@ Göçün nasıl yürüdüğü `ui-migration.md` içinde.
 - [ ] alan: Issue veya özet ara…  ( / )
 - [ ] alan: BUY-2455 ya da ~/projects/api
 
+### `LocalReviewModal` _(modal)_ — `src/web/ui/components/LocalReviewModal.vue`
+- [ ] düğme: ✕
+- [ ] düğme: Vazgeç
+- [ ] düğme: İncele
+- [ ] alan: onay kutusu
+- [ ] alan: BUY-2397
+
 ### `NotesPanel` — `src/web/ui/components/NotesPanel.vue`
 - [ ] düğme: sil
 - [ ] düğme: Ekle
@@ -177,7 +184,7 @@ Göçün nasıl yürüdüğü `ui-migration.md` içinde.
 - [ ] alan: metin kutusu
 - [ ] alan: metin kutusu
 
-## Kullanılan API uçları (27)
+## Kullanılan API uçları (29)
 - [ ] `/api/auto-prepare`
 - [ ] `/api/backend/`
 - [ ] `/api/backend/assignments`
@@ -190,6 +197,7 @@ Göçün nasıl yürüdüğü `ui-migration.md` içinde.
 - [ ] `/api/export`
 - [ ] `/api/gate`
 - [ ] `/api/import`
+- [ ] `/api/issues/`
 - [ ] `/api/notes`
 - [ ] `/api/notes/`
 - [ ] `/api/outcome-config`
@@ -201,6 +209,7 @@ Göçün nasıl yürüdüğü `ui-migration.md` içinde.
 - [ ] `/api/reviews`
 - [ ] `/api/reviews/`
 - [ ] `/api/reviews/local`
+- [ ] `/api/reviews/local/inspect`
 - [ ] `/api/settings`
 - [ ] `/api/update`
 - [ ] `/api/update/check`
