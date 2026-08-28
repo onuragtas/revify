@@ -97,16 +97,19 @@ describe('runCli — stuck and slow are different things', () => {
   });
 
   it('lets a talkative run continue well past the idle window', async () => {
-    // Eight lines, 100ms apart: about 800ms of work under a 400ms idle
+    // Forty lines, 20ms apart: about 800ms of work under a 500ms idle
     // window. A timer measuring total duration would have killed this at
-    // 400ms; one measuring silence must not. The window is comfortably
-    // wider than node's own startup, or the test would be measuring that.
-    const { stdout } = await runCli(process.execPath, chatter(8, 100), {
-      idleTimeoutMs: 400,
+    // 500ms; one measuring silence must not.
+    //
+    // The margins are deliberately lopsided — a 20ms gap against a 500ms
+    // window survives a machine running the whole suite in parallel, which
+    // a tighter pair did not.
+    const { stdout } = await runCli(process.execPath, chatter(40, 20), {
+      idleTimeoutMs: 500,
       maxRunMs: 60000,
       onLine: () => {},
     });
-    expect(stdout.split('\n').filter(Boolean)).toHaveLength(8);
+    expect(stdout.split('\n').filter(Boolean)).toHaveLength(40);
   });
 
   it('still stops a run that chatters forever', async () => {

@@ -21,10 +21,20 @@ let overrides: Record<string, unknown> = {};
  * this only at import was the reason a saved setting used to need a
  * restart: the value on disk had changed, but nothing ever looked again.
  */
-export async function refreshSettingsOverrides(): Promise<void> {
+export async function refreshSettingsOverrides(
+  from?: import('../core/settingsStore.js').SettingsStore,
+): Promise<void> {
   try {
     const { SettingsStore, applySettingsToEnv, configOverrides } = await import('../core/settingsStore.js');
-    const store = new SettingsStore();
+    /*
+     * The caller's store when it has one.
+     *
+     * The default is a real file in the real home directory, and a server
+     * built around an isolated store would still reload from the developer's
+     * own — two stores over one config, disagreeing. Production always passes
+     * nothing and gets the default, which is the only store there is.
+     */
+    const store = from ?? new SettingsStore();
     applySettingsToEnv(store);
     overrides = configOverrides(store);
   } catch (err) {

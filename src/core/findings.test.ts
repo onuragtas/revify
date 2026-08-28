@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseFindings, worstSeverity } from './findings.js';
+import { parseFindings, splitFindings, worstSeverity } from './findings.js';
 
 const REVIEW = `Kısa bir giriş cümlesi.
 
@@ -85,5 +85,49 @@ describe('worstSeverity', () => {
 
   it('is empty when there are no findings', () => {
     expect(worstSeverity('Verdict: Approve')).toBe('');
+  });
+});
+
+describe('splitFindings', () => {
+  it('separates the context, the findings and the verdict', () => {
+    const { preamble, findings, tail } = splitFindings(REVIEW);
+
+    expect(preamble).toBe('Kısa bir giriş cümlesi.');
+    expect(findings).toHaveLength(3);
+    // The verdict belongs to the review, not to whichever finding happens to
+    // come last — the UI shows findings as cards and would otherwise bury it.
+    expect(tail).toContain('Verdict: Request changes');
+    expect(tail).toContain('## Verdict');
+  });
+
+  it('still separates the verdict when the review found nothing', () => {
+    // No findings, but the verdict is still the review's conclusion rather
+    // than part of its opening sentence — and renders after the (empty) list
+    // either way.
+    const sections = splitFindings('Değişiklik sağlam.\n\nVerdict: Approve');
+    expect(sections.findings).toEqual([]);
+    expect(sections.preamble).toBe('Değişiklik sağlam.');
+    expect(sections.tail).toBe('Verdict: Approve');
+  });
+
+  it('does not mistake a heading inside a quoted diff for the end of a finding', () => {
+    const review = [
+      'Giriş.',
+      '',
+      '### blocking — README.md:3',
+      '',
+      '```diff',
+      '-## Kurulum',
+      '+## Setup',
+      '```',
+      '',
+      'Verdict: Request changes',
+    ].join('\n');
+
+    const { preamble, findings, tail } = splitFindings(review);
+    expect(preamble).toBe('Giriş.');
+    expect(findings).toHaveLength(1);
+    expect(findings[0].body).toContain('+## Setup');
+    expect(tail).toBe('Verdict: Request changes');
   });
 });

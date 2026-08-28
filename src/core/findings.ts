@@ -38,7 +38,17 @@ export interface Finding {
 }
 
 const HEADING = /^(#{2,6})\s*(?:\*\*)?(blocking|major|minor)(?:\*\*)?\b\s*[—–-]?\s*(.*)$/i;
-const ANY_HEADING = /^#{1,6}\s/;
+
+/**
+ * What ends a finding without starting another.
+ *
+ * A section heading, the QA notes, or the verdict line — all of which belong
+ * to the review as a whole. The verdict matters most: `codeReview.md` asks
+ * for it as a bare `Verdict: …` line, so without this rule it lands inside
+ * whichever finding happened to be written last, and travels to the fixer as
+ * if it were part of that finding.
+ */
+const SECTION_END = /^\s*(?:#{1,6}\s|\*\*"?QA|Verdict:)/i;
 
 /**
  * Splits a review into its findings.
@@ -49,11 +59,41 @@ const ANY_HEADING = /^#{1,6}\s/;
  * such line would cut a finding in half.
  */
 export function parseFindings(markdown: string): Finding[] {
+  return splitFindings(markdown).findings;
+}
+
+/** A review read as its three parts. */
+export interface ReviewSections {
+  /** Whatever the reviewer wrote before the first finding — usually a
+   * sentence of context. */
+  preamble: string;
+  findings: Finding[];
+  /** Everything after the last finding: the verdict, the QA notes. It
+   * belongs to the review as a whole, not to the finding it happens to
+   * follow. */
+  tail: string;
+}
+
+/**
+ * Splits a review into its findings *and* the prose around them.
+ *
+ * The UI shows findings as cards — severity, file and actions of their own —
+ * so it needs to know which text is a finding and which is not. Computing
+ * that here rather than in the browser keeps one scanner: a second
+ * implementation would disagree about where a finding ends the first time a
+ * reviewer wrote a heading inside a quoted diff.
+ */
+export function splitFindings(markdown: string): ReviewSections {
   const findings: Finding[] = [];
+  const preamble: string[] = [];
+  const tail: string[] = [];
   const lines = String(markdown ?? '').split('\n');
 
   let current: { severity: Severity; location: string; heading: string; lines: string[] } | null = null;
   let inFence = false;
+  /** True once the first finding heading has been seen — what separates the
+   * preamble from the verdict. */
+  let started = false;
 
   const flush = () => {
     if (!current) return;
@@ -74,6 +114,7 @@ export function parseFindings(markdown: string): Finding[] {
       const match = line.match(HEADING);
       if (match) {
         flush();
+        started = true;
         const severity = match[2].toLowerCase() as Severity;
         const location = match[3].trim().replace(/^`|`$/g, '');
         current = {
@@ -84,20 +125,27 @@ export function parseFindings(markdown: string): Finding[] {
         };
         continue;
       }
-      // A heading that is not a finding ends the one before it — the
-      // verdict at the bottom of the review is not part of the last
-      // finding, and handing it to the fixer would read as an instruction.
-      if (current && ANY_HEADING.test(line)) {
+      // A heading, the QA notes or the verdict end the finding before them
+      // — and then belong to the tail, not to the finding they closed.
+      if (SECTION_END.test(line)) {
         flush();
-        continue;
+        started = true;
       }
     }
 
-    current?.lines.push(line);
+    if (current) current.lines.push(line);
+    // Outside a finding: before the first one it is context, after the last
+    // one it is the verdict.
+    else if (started) tail.push(line);
+    else preamble.push(line);
   }
   flush();
 
-  return findings;
+  return {
+    preamble: preamble.join('\n').trim(),
+    findings,
+    tail: tail.join('\n').replace(/\n{3,}/g, '\n\n').trim(),
+  };
 }
 
 /** The highest severity present, or '' when the review reported none. */

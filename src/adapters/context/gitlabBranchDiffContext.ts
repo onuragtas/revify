@@ -51,6 +51,9 @@ export class GitlabBranchDiffContext implements ContextCollector {
 
     const repoChanges: RepoChange[] = [];
     const changedProjects = new Set<string>();
+    /** project@branch, so the same branch listed twice is deduped while two
+     * branches of one project are not. */
+    const seen = new Set<string>();
 
     for (const branch of linkedBranches) {
       const projectPath = parseProjectPathFromUrl(branch.repositoryUrl);
@@ -59,7 +62,19 @@ export class GitlabBranchDiffContext implements ContextCollector {
         continue;
       }
       // Jira can list the same branch under several repository entries.
-      if (changedProjects.has(projectPath)) continue;
+      if (seen.has(`${projectPath}@${branch.name}`)) continue;
+      seen.add(`${projectPath}@${branch.name}`);
+
+      /*
+       * A repository can appear twice, on two branches.
+       *
+       * This used to key on the project alone, so the second branch was
+       * dropped and never reached the review at all — the change looked
+       * smaller than it was. Each branch now gets its own entry, and the
+       * second one its own checkout, because one directory cannot be on two
+       * branches at once.
+       */
+      const separate = changedProjects.has(projectPath);
 
       try {
         const baseBranch = await this.gitlabClient.getDefaultBranch(projectPath);
@@ -70,7 +85,13 @@ export class GitlabBranchDiffContext implements ContextCollector {
         let repoPath: string | null = null;
         if (this.repoCache) {
           try {
-            repoPath = await this.repoCache.ensureCheckout(projectPath, branch.name, baseBranch);
+            repoPath = await this.repoCache.ensureCheckout(
+              projectPath,
+              branch.name,
+              baseBranch,
+              signal,
+              { separate },
+            );
             progressBus.log(event.id, `${projectPath} checked out at ${branch.name}`);
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err);

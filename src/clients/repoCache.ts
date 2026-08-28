@@ -73,9 +73,32 @@ export interface CachedRepo {
   defaultBranch: string;
   /** Branch currently checked out in the working tree. */
   currentBranch: string;
+  /** When this checkout last talked to the remote. Absent for a clone made
+   * before this was recorded, which is read as "long ago". */
+  fetchedAt?: string;
 }
 
+/**
+ * How long a context repo may go without asking the remote.
+ *
+ * These are not decoration. The review prompt tells the model to grep them
+ * and *"treat what you find as fact"* — so a checkout left at whatever it
+ * was cloned as puts weeks-old code in front of a reviewer that will state
+ * it plainly. Before this, a repo already on its default branch was never
+ * fetched again at all.
+ *
+ * A window rather than a fetch per review: twenty cached repos would
+ * otherwise mean twenty network round trips before every run, and code that
+ * moved in the last quarter of an hour is not what makes a review wrong.
+ */
+export const CONTEXT_FRESH_MS = 15 * 60 * 1000;
+
 const META_FILE = '.cache-meta.json';
+
+/** Where a second branch of an already-checked-out project lives. Leading
+ * dot so it is skipped by the adoption scan and by anything globbing the
+ * cache for repositories. */
+const BRANCH_DIR = '.branches';
 
 /**
  * Keeps local, read-only checkouts of GitLab repos so the reviewing model
@@ -190,6 +213,26 @@ export class RepoCache {
     return resolve(join(this.cacheRoot, cacheDirName(projectPath)));
   }
 
+  /**
+   * A second branch of a repository the change already touches.
+   *
+   * One directory per project is right almost always — it is the same code,
+   * and one checkout is what makes a repo usable as context. But a change
+   * can link two branches of the *same* repository, and one directory cannot
+   * be on two branches at once. Rather than silently drop the second (which
+   * is what happened: it vanished from the review entirely), it gets a
+   * checkout of its own.
+   *
+   * Under `.branches/` so `adoptExistingCheckouts` never mistakes one for a
+   * cached repo: it scans the root for directories containing `.git`, and
+   * this one does not.
+   */
+  private branchDirFor(projectPath: string, branch: string): string {
+    return resolve(
+      join(this.cacheRoot, BRANCH_DIR, `${cacheDirName(projectPath)}@${cacheDirName(branch)}`),
+    );
+  }
+
   /** Repos already on disk from earlier reviews. These are what the model
    * can consult for cross-service questions without paying a clone. */
   listCached(): CachedRepo[] {
@@ -206,9 +249,12 @@ export class RepoCache {
     branch: string,
     defaultBranch?: string,
     signal?: AbortSignal,
+    /** Give this branch a checkout of its own rather than moving the
+     * project's. Used when one change spans two branches of one repository. */
+    options: { separate?: boolean } = {},
   ): Promise<string> {
     mkdirSync(this.cacheRoot, { recursive: true });
-    const repoDir = this.dirFor(projectPath);
+    const repoDir = options.separate ? this.branchDirFor(projectPath, branch) : this.dirFor(projectPath);
 
     if (!existsSync(join(repoDir, '.git'))) {
       try {
@@ -233,14 +279,21 @@ export class RepoCache {
       await this.git(['checkout', '-f', '-B', branch, 'FETCH_HEAD'], repoDir, signal);
     }
 
-    const previous = this.meta[projectPath];
-    this.meta[projectPath] = {
-      projectPath,
-      dir: repoDir,
-      defaultBranch: defaultBranch ?? previous?.defaultBranch ?? branch,
-      currentBranch: branch,
-    };
-    this.saveMeta();
+    // A separate branch checkout is an artefact of one change, not a cached
+    // repository: recording it would put it in `listCached()` and mount it as
+    // context on its feature branch, which is precisely what context must
+    // never be.
+    if (!options.separate) {
+      const previous = this.meta[projectPath];
+      this.meta[projectPath] = {
+        projectPath,
+        dir: repoDir,
+        defaultBranch: defaultBranch ?? previous?.defaultBranch ?? branch,
+        currentBranch: branch,
+        fetchedAt: new Date().toISOString(),
+      };
+      this.saveMeta();
+    }
     return repoDir;
   }
 
@@ -258,7 +311,9 @@ export class RepoCache {
     signal?: AbortSignal,
   ): Promise<string> {
     const cached = this.meta[projectPath];
-    if (cached && cached.currentBranch === defaultBranch && existsSync(join(cached.dir, '.git'))) {
+    const onDisk = cached && existsSync(join(cached.dir, '.git'));
+
+    if (onDisk && cached.currentBranch === defaultBranch && this.isFresh(cached)) {
       // An adopted checkout arrives with an unknown default branch, and
       // this early return used to skip persisting the one the caller just
       // resolved — so every later review paid another API call to learn the
@@ -269,7 +324,31 @@ export class RepoCache {
       }
       return cached.dir;
     }
-    return this.ensureCheckout(projectPath, defaultBranch, defaultBranch, signal);
+
+    /*
+     * Stale, or on the wrong branch, or gone. Either way the answer is the
+     * same: fetch and reset.
+     *
+     * A failure here must not sink the review. A context repo that could not
+     * be refreshed is still better than none — it is the same code the last
+     * review read — so an unreachable remote falls back to what is on disk
+     * rather than dropping the repo from the run.
+     */
+    try {
+      return await this.ensureCheckout(projectPath, defaultBranch, defaultBranch, signal);
+    } catch (err) {
+      if (!onDisk) throw err;
+      console.warn(
+        `[repo] ${projectPath} tazelenemedi (${err instanceof Error ? err.message : String(err)}) — diskteki hâliyle kullanılıyor`,
+      );
+      return cached.dir;
+    }
+  }
+
+  /** Within the window, and therefore worth trusting without asking. */
+  private isFresh(cached: CachedRepo): boolean {
+    const at = Date.parse(cached.fetchedAt ?? '');
+    return Number.isFinite(at) && Date.now() - at < CONTEXT_FRESH_MS;
   }
 
   /** Removes a repo's checkout from disk. */

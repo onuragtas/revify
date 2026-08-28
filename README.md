@@ -342,6 +342,42 @@ queue position moves. `/api/reviews/:key/detail` therefore lists only the kinds
 and sizes — the text has its own endpoint and is fetched when a card is
 opened. Clearing a task deletes its prompts with it.
 
+### Keeping the context fresh
+
+Repositories the change touches are re-fetched on every run (`ensureCheckout`
+does `git fetch` + a hard reset). The ones mounted only as *context* are not,
+and used never to be: `ensureDefaultBranch` returned early whenever a repo
+already sat on its default branch, so a checkout made in March answered
+questions in August.
+
+That is not a performance detail. `codeReview.md` tells the model to grep
+these repositories and **treat what it finds as fact** — so stale code is
+stated plainly rather than hedged. They now carry a `fetchedAt` and are
+refreshed when it is older than `CONTEXT_FRESH_MS` (15 minutes): a window
+rather than a fetch per review, because twenty cached repos would otherwise
+mean twenty round trips before every run, and code that moved in the last
+quarter hour is not what makes a review wrong. A repo that cannot be
+refreshed falls back to what is on disk — the same code the last review read
+— rather than dropping out of the run.
+
+Reviewing a **directory** fetches too, for the same reason in reverse: the
+base branch is a remote-tracking ref, nobody fetches before asking for a
+review, and a branch cut from a week-old `main` would otherwise be diffed
+against that week-old commit — reporting everything a colleague merged since
+as part of this change. The fetch touches no branch and no file, and is
+allowed to fail.
+
+### One change, two branches of one repository
+
+`GitlabBranchDiffContext` used to key on the project alone, so a change that
+linked two branches of the same repository lost the second one entirely — it
+never reached the review, and the change simply looked smaller than it was.
+Branches are now keyed by `project@branch`. The first gets the project's
+normal checkout; a second gets one of its own under `<cache>/.branches/`, and
+is deliberately *not* recorded in the cache metadata: it belongs to one
+change, and mounting it later as context would put a feature branch where
+only merged code belongs.
+
 ### Fixing what the review found
 
 The review says what is wrong; **Düzelt…** turns the findings you pick into

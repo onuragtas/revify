@@ -350,3 +350,38 @@ describe('reviewing a local directory', () => {
   });
 });
 
+
+describe('content security policy', () => {
+  it('forbids everything by default, and allows only this origin', async () => {
+    const app = createServer(makeConfig(), makeWired(), isolated());
+    const res = await request(app).get('/api/reviews');
+    const policy = res.headers['content-security-policy'];
+
+    expect(policy).toContain("default-src 'none'");
+    // The page talks to this server and nothing else — the team backend is
+    // reached through it, never from the browser.
+    expect(policy).toContain("connect-src 'self'");
+    expect(policy).toContain("frame-ancestors 'none'");
+  });
+
+  it('allows nothing inline — not script, and not style either', async () => {
+    // Until the UI moved to Vue this page *was* a 2000-line inline script,
+    // and `script-src 'unsafe-inline'` would have made the rest close to
+    // pointless. Nothing inline is left, so nothing inline may run.
+    const app = createServer(makeConfig(), makeWired(), isolated());
+    const policy = (await request(app).get('/')).headers['content-security-policy'];
+
+    expect(policy).toContain("script-src 'self'");
+    expect(policy).toContain("style-src 'self'");
+    // One directive left open for convenience is how a policy stops meaning
+    // anything.
+    expect(policy).not.toContain('unsafe-inline');
+    expect(policy).not.toContain('unsafe-eval');
+  });
+
+  it('covers the page itself, not only the API', async () => {
+    const app = createServer(makeConfig(), makeWired(), isolated());
+    const res = await request(app).get('/');
+    expect(res.headers['content-security-policy']).toBeTruthy();
+  });
+});

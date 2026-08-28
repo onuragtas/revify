@@ -116,3 +116,65 @@ describe('splitByFile', () => {
     expect(splitByFile(diff)[0].diff).toContain('+b');
   });
 });
+
+describe('readLocalChange — the base branch', () => {
+  /**
+   * Nobody fetches before asking for a review.
+   *
+   * Left alone, `origin/main` is whatever was last pulled — so a branch cut
+   * from a week-old base is diffed against that week-old commit, and every
+   * change a colleague merged since is reported as part of this one. That is
+   * not a slow review; it is a wrong one.
+   */
+  let origin: string;
+
+  beforeEach(() => {
+    origin = mkdtempSync(join(tmpdir(), 'revify-origin-'));
+    execFileSync('git', ['init', '-q', '-b', 'main', '--bare', origin], { stdio: 'pipe' });
+    git('remote', 'add', 'origin', origin);
+    git('push', '-q', 'origin', 'main');
+  });
+  afterEach(() => rmSync(origin, { recursive: true, force: true }));
+
+  it('brings the base branch up to date before measuring against it', async () => {
+    git('checkout', '-qb', 'feature');
+    writeFileSync(join(dir, 'app.ts'), 'export const a = 2;\n');
+    git('commit', '-aqm', 'my change');
+
+    // Someone else moves main and pushes. This clone knows nothing of it
+    // until something fetches — and nobody fetches before asking for a
+    // review.
+    const other = mkdtempSync(join(tmpdir(), 'revify-other-'));
+    execFileSync('git', ['clone', '-q', origin, other], { stdio: 'pipe' });
+    execFileSync('git', ['config', 'user.email', 't@t'], { cwd: other, stdio: 'pipe' });
+    execFileSync('git', ['config', 'user.name', 't'], { cwd: other, stdio: 'pipe' });
+    writeFileSync(join(other, 'theirs.ts'), 'export const theirs = 1;\n');
+    execFileSync('git', ['add', '.'], { cwd: other, stdio: 'pipe' });
+    execFileSync('git', ['commit', '-qm', 'their change'], { cwd: other, stdio: 'pipe' });
+    execFileSync('git', ['push', '-q', 'origin', 'main'], { cwd: other, stdio: 'pipe' });
+    const upstream = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: other, stdio: 'pipe' })
+      .toString()
+      .trim();
+    rmSync(other, { recursive: true, force: true });
+
+    const before = git('rev-parse', 'origin/main').trim();
+    expect(before).not.toBe(upstream);
+
+    await readLocalChange(dir);
+
+    // The base a review is measured against is now the base that exists.
+    expect(git('rev-parse', 'origin/main').trim()).toBe(upstream);
+  });
+
+  it('still reviews when the remote cannot be reached', async () => {
+    // Refusing to review because a remote is unreachable would be worse than
+    // reviewing against a slightly old base.
+    git('checkout', '-qb', 'feature');
+    writeFileSync(join(dir, 'app.ts'), 'export const a = 9;\n');
+    git('commit', '-aqm', 'change');
+    rmSync(origin, { recursive: true, force: true });
+
+    const change = await readLocalChange(dir);
+    expect(change.committedDiff).toContain('export const a = 9');
+  });
+});

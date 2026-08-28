@@ -93,6 +93,35 @@ export async function detectBaseBranch(path: string, branch: string): Promise<st
   return '';
 }
 
+/**
+ * Brings `origin/*` up to date, best effort.
+ *
+ * The base branch is a remote-tracking ref, and nobody fetches before asking
+ * for a review. Left alone it is whatever was last pulled — so a branch cut
+ * from a week-old `main` is diffed against that week-old commit, and every
+ * change a colleague merged since is reported as part of this one. That is
+ * not a slow review; it is a wrong one.
+ *
+ * A fetch touches no branch and no file: it moves remote-tracking refs and
+ * nothing else, so it cannot disturb work in progress. It is also allowed to
+ * fail — offline, no remote, no credentials — and when it does the review
+ * runs against what is on disk, which is exactly what it did before.
+ */
+const FETCH_TIMEOUT_MS = 30_000;
+
+async function refreshRemoteRefs(root: string): Promise<void> {
+  try {
+    await run('git', ['fetch', '--quiet', '--prune', 'origin'], {
+      cwd: root,
+      timeout: FETCH_TIMEOUT_MS,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+    });
+  } catch {
+    // Reviewing against a stale base is worse than reviewing; refusing to
+    // review because a remote is unreachable would be worse than both.
+  }
+}
+
 export async function readLocalChange(rawPath: string): Promise<LocalChange> {
   const path = resolve(rawPath.replace(/^~(?=\/|$)/, process.env.HOME ?? '~'));
   if (!existsSync(path)) throw new NotARepositoryError(path);
@@ -100,6 +129,8 @@ export async function readLocalChange(rawPath: string): Promise<LocalChange> {
   const top = await tryGit(path, ['rev-parse', '--show-toplevel']);
   if (!top?.trim()) throw new NotARepositoryError(path);
   const root = top.trim();
+
+  await refreshRemoteRefs(root);
 
   const branch = (await tryGit(root, ['rev-parse', '--abbrev-ref', 'HEAD']))?.trim() || 'HEAD';
   const baseBranch = await detectBaseBranch(root, branch);

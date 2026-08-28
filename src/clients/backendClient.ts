@@ -50,6 +50,10 @@ export interface TeamNudge {
   fromName?: string;
 }
 
+/** Long enough for a slow link, short enough that nobody stares at a blank
+ * screen wondering whether the app is broken. */
+const REQUEST_TIMEOUT_MS = 8000;
+
 export class BackendClient {
   constructor(private readonly settings: SettingsStore) {}
 
@@ -79,7 +83,23 @@ export class BackendClient {
 
     let res: Response;
     try {
-      res = await fetch(`${this.baseUrl()}${path}`, { ...init, headers, redirect: 'manual' });
+      res = await fetch(`${this.baseUrl()}${path}`, {
+        ...init,
+        headers,
+        redirect: 'manual',
+        /*
+         * A team call must not be able to hang the app.
+         *
+         * Everything this client does is a nicety layered over work that runs
+         * locally — the reviews themselves need none of it. Without a bound,
+         * an address that accepts a connection and then says nothing (a
+         * firewall, a wedged proxy, a machine that went to sleep) leaves the
+         * sign-in check awaiting forever, and the screen waiting on it stays
+         * blank. Failing fast lands in the offline path, which is the one
+         * this design already promises.
+         */
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
     } catch (err) {
       // A dead or wrong address is the most likely failure by far, and the
       // raw fetch error ("fetch failed") says nothing useful.

@@ -33,3 +33,6 @@ config/config.yaml
 *.tmp
 
 .DS_Store
+
+# Built by vite from src/web/ui — generated, never edited by hand.
+src/web/public/assets/

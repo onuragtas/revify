@@ -19,7 +19,8 @@ import { ReminderWatcher } from '../core/reminderWatcher.js';
 import type { DueReminder, ReminderItem } from '../core/reminders.js';
 import { progressBus } from '../core/progressBus.js';
 import { splitReview } from '../core/reviewParts.js';
-import { FIXABLE_SEVERITIES, parseFindings, worstSeverity } from '../core/findings.js';
+import type { ReviewDetail } from '../core/apiTypes.js';
+import { FIXABLE_SEVERITIES, parseFindings, splitFindings, worstSeverity } from '../core/findings.js';
 import {
   applyFixPatch,
   createFixWorkspace,
@@ -98,6 +99,42 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired, opti
   let wired = initialWired;
 
   const app = express();
+
+  /*
+   * A content policy the page can actually live under.
+   *
+   * Worth stating what makes it possible: until the UI moved to Vue this
+   * page *was* a 2000-line inline `<script>`, so `script-src` would have
+   * needed `'unsafe-inline'` — which is the one directive that makes the
+   * rest close to pointless. There is no inline script left, so scripts are
+   * restricted to this origin and nothing else can run.
+   *
+   * Styles are external too. The tokens moved from an inline `<style>` block
+   * into `app.css`, and the dozen `style="…"` attributes the components
+   * carried became classes — an inline style attribute needs
+   * `'unsafe-inline'` exactly as an inline script does, and one directive
+   * left open for convenience is how a policy stops meaning anything.
+   *
+   * Everything the app talks to is this server: the team backend is reached
+   * *through* it, never from the page, so `connect-src 'self'` holds.
+   */
+  app.use((_req, res, next) => {
+    res.setHeader(
+      'Content-Security-Policy',
+      [
+        "default-src 'none'",
+        "script-src 'self'",
+        "style-src 'self'",
+        "img-src 'self' data:",
+        "font-src 'self'",
+        "connect-src 'self'",
+        "base-uri 'none'",
+        "form-action 'none'",
+        "frame-ancestors 'none'",
+      ].join('; '),
+    );
+    next();
+  });
   // Backups run to megabytes — well past express's 100kb default, which
   // would reject an import with a bare 413.
   app.use(express.json({ limit: '64mb' }));
@@ -546,7 +583,13 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired, opti
     // The review is split server-side so the UI and the Jira action share
     // one parser: readers see the body, the team sees the bookkeeping.
     const parts = record?.review ? splitReview(record.review.markdown) : null;
-    res.json({
+    // One scanner, server-side: the UI shows findings as cards and needs to
+    // know which text is a finding and which is the verdict around them.
+    const sections = splitFindings(parts?.body ?? '');
+
+    // Typed, so a field renamed here is a compile error rather than a panel
+    // that quietly goes blank in a UI declaring the same shape by hand.
+    const payload: ReviewDetail = {
       status: record?.status ?? 'idle',
       queuePosition: record?.queuePosition ?? null,
       summary: record?.summary ?? null,
@@ -561,14 +604,9 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired, opti
       history: record?.history ?? [],
       // The review read as a list, so the fix screen can offer the findings
       // as checkboxes rather than asking a human to retype them.
-      findings: record?.review
-        ? parseFindings(record.review.markdown).map((f) => ({
-            id: f.id,
-            severity: f.severity,
-            location: f.location,
-            heading: f.heading,
-          }))
-        : [],
+      findings: record?.review ? sections.findings : [],
+      reviewPreamble: record?.review ? sections.preamble : '',
+      reviewTail: record?.review ? sections.tail : '',
       /*
        * The fix, minus the patches themselves.
        *
@@ -613,7 +651,8 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired, opti
           ),
         ).values(),
       ],
-    });
+    };
+    res.json(payload);
   });
 
   /**
@@ -2153,7 +2192,9 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired, opti
    */
   async function reload(): Promise<{ ok: true } | { ok: false; error: string }> {
     try {
-      await refreshSettingsOverrides();
+      // This server's own store, not whatever lives in the home directory —
+      // see refreshSettingsOverrides.
+      await refreshSettingsOverrides(settings);
       const next = loadConfig();
       const nextWired = buildPipeline(next, {
         reviewStore: wired.reviewStore,
