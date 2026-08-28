@@ -5,7 +5,8 @@ import type { AiTask, LlmProvider, TaskResult, TriggerEvent } from '../../core/t
 import type { JiraIssueDetail } from '../../clients/jiraClient.js';
 import type { ContextRepo, RepoChange } from '../context/gitlabBranchDiffContext.js';
 import type { NotesStore } from '../../core/notesStore.js';
-import type { ReviewStore } from '../../core/reviewStore.js';
+import type { ReviewHistoryEntry, ReviewStore } from '../../core/reviewStore.js';
+import { splitFindings } from '../../core/findings.js';
 import type { PromptStore } from '../../core/promptStore.js';
 import { progressBus } from '../../core/progressBus.js';
 import {
@@ -84,6 +85,21 @@ export interface CodeReviewPromptInput {
   comments?: Array<{ author: string; created: string; text: string }>;
   /** Free-text instructions for this revision, in the reviewer's words. */
   revisionRequest?: string;
+  /**
+   * The last review of this change, and what was done about it.
+   *
+   * Without this a re-review starts from nothing: it reads code somebody
+   * has just fixed, has no idea which findings prompted the change, and
+   * reports whatever it sees as if for the first time. To the person
+   * waiting, that is a review that never converges — fix, re-review, new
+   * findings, again. The point of passing it is to make the second pass
+   * *answer* the first rather than repeat it.
+   */
+  previous?: {
+    findings: Array<{ severity: string; heading: string; body: string }>;
+    /** What a fix run claimed to change since. */
+    fixReport?: Array<{ outcome: 'fixed' | 'skipped'; text: string }>;
+  };
   /** Other services checked out read-only alongside this one, so a claim
    * about what they return can be checked rather than assumed. */
   contextRepos?: ContextRepo[];
@@ -335,6 +351,43 @@ export function buildPrompt(input: CodeReviewPromptInput): string {
       'say so on its own `[note]` line rather than inventing a suppressed finding.\n'
     : '';
 
+  /*
+   * What the last pass said, and what happened since.
+   *
+   * Ordered before the new findings on purpose: the first duty of a
+   * re-review is to settle the open ones. Being explicit that "the code
+   * near it changed" is not evidence matters — a fix run reports what it
+   * *intended*, and a review that takes that at face value launders a claim
+   * into a fact.
+   */
+  const previous = input.previous;
+  const previousSection =
+    previous && previous.findings.length
+      ? '\n## Your previous review of this change\n\n' +
+        'This change has been reviewed before and worked on since. These are the findings\n' +
+        'that review reported:\n\n' +
+        previous.findings
+          .map((f, i) => `${i + 1}. **${f.heading}**\n\n${f.body.trim()}\n`)
+          .join('\n') +
+        (previous.fixReport?.length
+          ? '\nA fix run then reported doing this — its own account, not a verified fact:\n\n' +
+            previous.fixReport.map((r) => `- ${r.outcome === 'fixed' ? 'düzeltildi' : 'atlandı'}: ${r.text}`).join('\n') +
+            '\n'
+          : '') +
+        '\nSettle every one of them first, against the code as it is now:\n\n' +
+        '- **Resolved** — do not report it again. List it under the verdict as\n' +
+        '  `[resolved] <heading> — <what changed>`, one line each.\n' +
+        '- **Still open** — report it as a finding again, saying what is still missing.\n' +
+        '  A finding that survives a fix attempt is more important than a new one, not less.\n' +
+        '- **Partly done** — report what remains, and say which part landed.\n\n' +
+        'Check the condition that made it a finding, not the neighbourhood. Code changing\n' +
+        'near a finding is not evidence that the finding is gone, and neither is a fix run\n' +
+        'saying it fixed it — that is a claim to verify, and a wrong one is the most\n' +
+        'expensive kind here: it closes a real defect on paper while it ships.\n\n' +
+        'Then report anything genuinely new. If the change is now sound, say so and approve\n' +
+        '— re-reviews are supposed to end.\n'
+      : '';
+
   return TEMPLATE.replace('{{issueKey}}', input.issueKey)
     .replace('{{summary}}', input.summary)
     .replace('{{description}}', extractPlainText(input.description) || '(no description)')
@@ -346,11 +399,37 @@ export function buildPrompt(input: CodeReviewPromptInput): string {
     .replace('{{challengesSection}}', challengesSection)
     .replace('{{relatedSection}}', relatedSection)
     .replace('{{commentsSection}}', commentsSection)
+    .replace('{{previousSection}}', previousSection)
     .replace('{{revisionSection}}', revisionSection)
     .replace('{{notesSection}}', notesSection)
     .replace('{{notesReminder}}', notesReminder)
     .replace('{{notesDisclosure}}', notesDisclosure)
     .replace('{{languageInstruction}}', languageInstruction);
+}
+
+/**
+ * The last review's findings, ready to be answered.
+ *
+ * Read from history rather than from the live record because re-reviewing
+ * archives the review before the new run starts — by the time this is
+ * asked, `record.review` is already the previous one's replacement slot,
+ * empty. The findings are re-parsed rather than stored a second time: one
+ * parser, and it is the same one the UI and the fix path read with.
+ */
+export function previousReview(
+  record?: { history?: ReviewHistoryEntry[] },
+): CodeReviewPromptInput['previous'] {
+  const last = record?.history?.[0];
+  if (!last) return undefined;
+
+  const findings = splitFindings(last.markdown).findings.map((f) => ({
+    severity: f.severity,
+    heading: f.heading,
+    body: f.body,
+  }));
+  if (!findings.length) return undefined;
+
+  return { findings, fixReport: last.fixReport };
 }
 
 export class CodeReviewTask implements AiTask {
@@ -431,6 +510,7 @@ export class CodeReviewTask implements AiTask {
       clarifications: this.reviewStore?.get(issueKey)?.clarifications,
       challenges: this.reviewStore?.get(issueKey)?.challenges,
       revisionRequest: this.reviewStore?.get(issueKey)?.revisionRequest,
+      previous: previousReview(this.reviewStore?.get(issueKey)),
       comments: context.jiraComments as CodeReviewPromptInput['comments'],
       relatedIssues: context.relatedIssues as CodeReviewPromptInput['relatedIssues'],
       contextRepos,

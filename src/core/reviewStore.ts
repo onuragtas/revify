@@ -26,6 +26,16 @@ export interface ReviewHistoryEntry {
    * rejected, posted, or still awaiting a decision. */
   outcome: ReviewStatus;
   archivedAt: string;
+  /**
+   * What the fix run claimed to change, if one ran against this review.
+   *
+   * Kept because the patch itself is not: re-reviewing clears the fix, on
+   * the grounds that a patch built from findings that no longer exist is a
+   * patch nobody can check. That is right about the patch and wrong about
+   * the account of it — the next review is precisely the thing that needs
+   * to know which findings somebody already acted on, and what they did.
+   */
+  fixReport?: Array<{ outcome: 'fixed' | 'skipped'; text: string }>;
 }
 
 /** One repository's worth of fix: what the fixer changed, as a patch that
@@ -236,6 +246,8 @@ export class ReviewStore {
       markdown: existing.review.markdown,
       outcome: existing.status,
       archivedAt: new Date().toISOString(),
+      // Archived here because the caller drops `fix` immediately after.
+      ...(existing.fix?.report?.length ? { fixReport: existing.fix.report } : {}),
     };
     // Newest first, so the UI can show the most recent previous run without
     // walking the array.

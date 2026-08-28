@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CodeReviewTask, buildPrompt, buildSystemPrompt } from './codeReviewTask.js';
+import { CodeReviewTask, buildPrompt, buildSystemPrompt, previousReview } from './codeReviewTask.js';
 import type { LlmProvider, TriggerEvent } from '../../core/types.js';
 
 describe('buildSystemPrompt', () => {
@@ -628,5 +628,119 @@ describe('CodeReviewTask — a review with no Jira issue behind it', () => {
 
     expect(result.markdown).toContain('Jira development panel');
     expect(result.markdown).toContain('BUY-1');
+  });
+});
+
+
+describe('buildPrompt — a review that has to answer the last one', () => {
+  const base = {
+    issueKey: 'BUY-1',
+    summary: 'İade akışı',
+    description: 'x',
+    repoChanges: [
+      {
+        projectPath: 'team/app',
+        branchName: 'feature/BUY-1',
+        baseBranch: 'main',
+        diff: 'd',
+        files: [],
+        repoPath: null,
+      },
+    ],
+  };
+
+  const previous = {
+    findings: [
+      {
+        severity: 'blocking',
+        heading: 'blocking — src/Payment.php:829',
+        body: '`refund()` transaction dışında çağrılıyor.',
+      },
+      { severity: 'major', heading: 'major — src/Bank.php:12', body: 'Null kontrolü yok.' },
+    ],
+  };
+
+  it('carries the previous findings so the second pass settles them', () => {
+    /*
+     * Without this a re-review starts from nothing: it reads code somebody
+     * has just fixed, has no idea which findings prompted the change, and
+     * reports whatever it sees as if for the first time. To the person
+     * waiting that is a review that never converges — fix, re-review, new
+     * findings, again.
+     */
+    const prompt = buildPrompt({ ...base, previous });
+
+    expect(prompt).toContain('previous review');
+    expect(prompt).toContain('blocking — src/Payment.php:829');
+    expect(prompt).toContain('transaction dışında');
+    expect(prompt).toContain('[resolved]');
+    // A survivor of a fix attempt matters more than a new finding, not less.
+    expect(prompt).toContain('Still open');
+  });
+
+  it('passes on the fix run\'s account as a claim, not as a fact', () => {
+    // A fix reports what it *intended*. A review that takes that at face
+    // value launders a claim into a fact and closes a live defect on paper.
+    const prompt = buildPrompt({
+      ...base,
+      previous: {
+        ...previous,
+        fixReport: [
+          { outcome: 'fixed' as const, text: 'refund() transaction içine alındı' },
+          { outcome: 'skipped' as const, text: 'Bank.php: hangi alanın null olabileceği belirsiz' },
+        ],
+      },
+    });
+
+    expect(prompt).toContain('refund() transaction içine alındı');
+    expect(prompt).toContain('atlandı: Bank.php');
+    expect(prompt).toContain('its own account, not a verified fact');
+    expect(prompt).toContain('not the neighbourhood');
+  });
+
+  it('says nothing about a previous review when there was not one', () => {
+    const prompt = buildPrompt(base);
+    expect(prompt).not.toContain('previous review');
+    expect(prompt).not.toContain('[resolved]');
+  });
+});
+
+describe('previousReview', () => {
+  const REVIEW = [
+    'Giriş.',
+    '',
+    '### blocking — src/Payment.php:829',
+    '',
+    '`refund()` transaction dışında.',
+    '',
+    'Verdict: Request changes',
+  ].join('\n');
+
+  it('reads the last run out of history, where re-reviewing puts it', () => {
+    // The live `review` is already gone by the time the new run asks:
+    // starting one archives the old review first.
+    const previous = previousReview({
+      history: [
+        {
+          title: 't',
+          markdown: REVIEW,
+          outcome: 'awaiting_approval' as const,
+          archivedAt: '',
+          fixReport: [{ outcome: 'fixed' as const, text: 'yapıldı' }],
+        },
+      ],
+    });
+
+    expect(previous?.findings.map((f) => f.heading)).toEqual(['blocking — src/Payment.php:829']);
+    expect(previous?.fixReport).toEqual([{ outcome: 'fixed', text: 'yapıldı' }]);
+  });
+
+  it('is absent when there is no history, or nothing was found last time', () => {
+    expect(previousReview({})).toBeUndefined();
+    expect(
+      previousReview({
+        history: [{ title: 't', markdown: 'Verdict: Approve', outcome: 'posted' as const, archivedAt: '' }],
+      }),
+    ).toBeUndefined();
   });
 });

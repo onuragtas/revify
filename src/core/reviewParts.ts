@@ -12,11 +12,23 @@ export interface ReviewParts {
    * re-checked and dropped. Internal like the notes above — Jira should see
    * the corrected review, not a record of what a draft once claimed. */
   withdrawn: string[];
+  /**
+   * `[resolved]` lines: findings the previous review reported that this one
+   * checked and found fixed.
+   *
+   * The visible half of a review that converges. Without it a second pass
+   * reads as "here are some findings" all over again, with no way to tell
+   * that three earlier ones are gone — which is what makes the loop feel
+   * endless even when it is closing. Internal: Jira should read the review
+   * of the code as it stands, not a diff against a draft it never saw.
+   */
+  resolved: string[];
 }
 
 const QUESTION = /^\s*\[\?\]\s*(.+?)\s*$/;
 const NOTE = /^\s*\[note\]\s*(.+?)\s*$/i;
 const WITHDRAWN = /^\s*\[withdrawn\]\s*(.+?)\s*$/i;
+const RESOLVED = /^\s*\[resolved\]\s*(.+?)\s*$/i;
 
 /**
  * Splits a raw review into the part meant for readers and the parts meant
@@ -31,6 +43,7 @@ export function splitReview(markdown: string): ReviewParts {
   const openQuestions: string[] = [];
   const appliedNotes: string[] = [];
   const withdrawn: string[] = [];
+  const resolved: string[] = [];
   const bodyLines: string[] = [];
 
   for (const line of String(markdown ?? '').split('\n')) {
@@ -49,6 +62,11 @@ export function splitReview(markdown: string): ReviewParts {
       withdrawn.push(dropped[1]);
       continue;
     }
+    const fixed = line.match(RESOLVED);
+    if (fixed) {
+      resolved.push(fixed[1]);
+      continue;
+    }
     bodyLines.push(line);
   }
 
@@ -59,5 +77,6 @@ export function splitReview(markdown: string): ReviewParts {
     openQuestions: [...new Set(openQuestions)],
     appliedNotes: [...new Set(appliedNotes)],
     withdrawn: [...new Set(withdrawn)],
+    resolved: [...new Set(resolved)],
   };
 }

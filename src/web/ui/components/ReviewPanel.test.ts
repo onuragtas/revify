@@ -120,3 +120,47 @@ describe('ReviewPanel', () => {
     expect(wrapper.findAll('.findingCard.collapsed')).toHaveLength(5);
   });
 });
+
+
+describe('closed findings', () => {
+  it('shows what the last round actually closed', async () => {
+    /*
+     * After a fix the first question is "did it work", and a re-review that
+     * only ever shows a fresh list of problems reads as one that never
+     * converges — even when it is closing. Above the findings for the same
+     * reason.
+     */
+    state.issueKey = 'BUY-1';
+    state.detail = {
+      review: { title: 't', markdown: '' },
+      reviewPreamble: '',
+      reviewTail: '',
+      findings: [],
+      resolved: [
+        'blocking — src/Payment.php:829 — refund() artık transaction içinde',
+        'major — src/Cache.php:5 — anahtar normalize ediliyor',
+      ],
+    } as never;
+    await nextTick();
+
+    const wrapper = mount(ReviewPanel);
+    const card = wrapper.find('.resolvedCard');
+    expect(card.exists()).toBe(true);
+    expect(card.findAll('li')).toHaveLength(2);
+    expect(card.text()).toContain('refund() artık transaction içinde');
+  });
+
+  it('says nothing when nothing was closed', async () => {
+    state.issueKey = 'BUY-1';
+    state.detail = {
+      review: { title: 't', markdown: '' },
+      reviewPreamble: '',
+      reviewTail: '',
+      findings: [],
+      resolved: [],
+    } as never;
+    await nextTick();
+
+    expect(mount(ReviewPanel).find('.resolvedCard').exists()).toBe(false);
+  });
+});

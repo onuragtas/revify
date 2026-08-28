@@ -69,6 +69,23 @@ function toggle(id: string): void {
       <div v-if="detail.reviewPreamble" class="mdBody" v-html="renderMarkdown(detail.reviewPreamble)"></div>
     </div>
 
+    <!--
+      What the last round closed.
+
+      Above the findings on purpose: after a fix, the first question is "did
+      it work", and a re-review that only ever shows a fresh list of
+      problems reads as one that never converges — even when it is closing.
+    -->
+    <div v-if="detail.resolved?.length" class="card resolvedCard">
+      <h3>Kapanan bulgular <span class="sev sev-resolved">{{ detail.resolved.length }}</span></h3>
+      <p class="card-hint">
+        Önceki incelemede raporlanmış, bu incelemede kodda karşılığı bulunup kapatılmış maddeler.
+      </p>
+      <ul class="resolvedList">
+        <li v-for="(r, i) in detail.resolved" :key="i">{{ r }}</li>
+      </ul>
+    </div>
+
     <article
       v-for="f in sorted"
       :key="f.id"

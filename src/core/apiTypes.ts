@@ -159,6 +159,10 @@ export interface ReviewDetail {
   /** `[withdrawn]` lines: findings a human disputed that the reviewer then
    * re-checked and dropped. */
   withdrawn: string[];
+  /** `[resolved]` lines: findings the previous review reported that this
+   * one checked and found fixed. The visible proof that a re-review is
+   * closing rather than starting over. */
+  resolved: string[];
   error: string | null;
   steps: StepView[];
   prompts: PromptSummaryView[];

@@ -1050,6 +1050,13 @@
 .pointer { cursor: pointer; }
 .warn { color: var(--amber); }
 
+/* Closed findings: green, and quieter than the open ones — good news that
+   does not compete with the work still to do. */
+.resolvedCard { border-color: var(--green); }
+.sev-resolved { background: var(--green-soft); color: var(--green); }
+.resolvedList { margin: 0; padding-left: 1.1rem; font-size: 0.85rem; line-height: 1.7; }
+.resolvedList li { color: var(--text-muted); }
+
 /* A checkbox and its label read as one thing, and click as one thing. */
 .checkRow { display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; }
 .checkRow input { margin: 0; }

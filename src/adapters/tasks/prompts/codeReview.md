@@ -57,7 +57,7 @@ empty dimension needs no mention:
 Explicitly out of scope: formatting, naming preferences, import order, and
 other style opinions. Do not report them.
 
-{{attachmentsSection}}{{contextReposSection}}{{clarificationsSection}}{{challengesSection}}{{revisionSection}}{{notesSection}}
+{{attachmentsSection}}{{contextReposSection}}{{previousSection}}{{clarificationsSection}}{{challengesSection}}{{revisionSection}}{{notesSection}}
 {{notesReminder}}
 ## Links and fetched pages
 

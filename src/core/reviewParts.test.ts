@@ -87,3 +87,39 @@ describe('splitReview — withdrawn findings', () => {
     expect(parts.body).toBe('');
   });
 });
+
+describe('[resolved] lines', () => {
+  it('are lifted out of the review the way the other markers are', () => {
+    /*
+     * The visible half of a review that converges. Without it a second pass
+     * reads as "here are some findings" all over again, with no way to tell
+     * that three earlier ones are gone — which is what makes the loop feel
+     * endless even when it is closing.
+     */
+    const parts = splitReview(
+      [
+        '### major — src/Bank.php:12',
+        '',
+        'Hâlâ null kontrolü yok.',
+        '',
+        'Verdict: Request changes',
+        '',
+        '[resolved] blocking — src/Payment.php:829 — refund() artık transaction içinde',
+        '[resolved] major — src/Cache.php:5 — anahtar normalize ediliyor',
+      ].join('\n'),
+    );
+
+    expect(parts.resolved).toEqual([
+      'blocking — src/Payment.php:829 — refund() artık transaction içinde',
+      'major — src/Cache.php:5 — anahtar normalize ediliyor',
+    ]);
+    // Internal, like the notes: Jira reads the review of the code as it
+    // stands, not a diff against a draft it never saw.
+    expect(parts.body).not.toContain('[resolved]');
+    expect(parts.body).toContain('Hâlâ null kontrolü yok.');
+  });
+
+  it('is empty when nothing was closed', () => {
+    expect(splitReview('Verdict: Approve').resolved).toEqual([]);
+  });
+});

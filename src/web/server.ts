@@ -640,6 +640,7 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired, opti
       revisionRequest: record?.revisionRequest ?? '',
       challenges: record?.challenges ?? [],
       withdrawn: parts?.withdrawn ?? [],
+      resolved: parts?.resolved ?? [],
       error: record?.error ?? null,
       steps: progressBus.getBuffered(issueKey),
       /*
