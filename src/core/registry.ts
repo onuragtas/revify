@@ -120,6 +120,31 @@ export function buildPipeline(config: AppConfig, keep?: Stores): Wired {
     // the Jira collectors and ignores events that are not its own.
     localRepoDiffContext: () => new LocalRepoDiffContext(gitlabClient, repoCache),
   };
+  /*
+   * A collector this build has and the config never heard of.
+   *
+   * Collectors are named by string, so an omission is not an error — it is
+   * a feature that silently stops existing. `localRepoDiffContext` was
+   * missing from a config written before it did, so reviewing a directory
+   * ran to completion and reported that no GitLab branch was linked to the
+   * Jira issue: true, and about a ticket there never was.
+   *
+   * A test cannot catch this. `config/config.yaml` holds credentials and is
+   * gitignored, so the file that goes stale is the one on somebody's own
+   * machine, written once and never revisited. The only place to say it is
+   * where it is read.
+   */
+  const unwired = Object.keys(contextCollectors).filter(
+    (name) => !config.wiring.contextCollectors.includes(name),
+  );
+  if (unwired.length) {
+    console.warn(
+      `[config] wiring.contextCollectors bu toplayıcıları listelemiyor: ${unwired.join(', ')}. ` +
+        'Her toplayıcı kendine ait olmayan olayı zaten atlar, o yüzden hepsini listelemek güvenlidir — ' +
+        'eksik bırakmak ilgili giriş noktasını sessizce kapatır (config/config.yaml).',
+    );
+  }
+
   const wiredContextCollectors = config.wiring.contextCollectors.map((name) =>
     resolve(contextCollectors, name, 'contextCollector'),
   );

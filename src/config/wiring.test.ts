@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { load as parseYaml } from 'js-yaml';
 
 /**
@@ -28,18 +28,34 @@ const COLLECTORS = ['jiraIssueContext', 'gitlabBranchDiffContext', 'localRepoDif
 const wiringOf = (path: string) =>
   (parseYaml(readFileSync(path, 'utf-8')) as { wiring: { contextCollectors: string[] } }).wiring;
 
+/**
+ * The committed one, and the local one if this machine has it.
+ *
+ * `config/config.yaml` is gitignored — it holds real credentials — so it
+ * exists on a developer's machine and nowhere else, and asserting on it
+ * unconditionally fails CI for a file CI was never given. The example is
+ * the artifact that actually ships: a fresh install with no config of its
+ * own falls back to it (see loadConfig). The local file is still worth
+ * checking when it is there, because a config written before a collector
+ * existed is exactly how this went wrong.
+ */
+const CONFIGS = ['config/config.example.yaml', 'config/config.yaml'].filter((p) => existsSync(p));
+
 describe('shipped config', () => {
-  it.each(['config/config.yaml', 'config/config.example.yaml'])(
-    '%s wires every context collector',
-    (path) => {
-      expect(wiringOf(path).contextCollectors).toEqual(expect.arrayContaining(COLLECTORS));
-    },
-  );
+  it('has something to check', () => {
+    // The example is committed; if it is missing, the filter above would
+    // quietly leave nothing to test and every assertion below would pass.
+    expect(CONFIGS).toContain('config/config.example.yaml');
+  });
+
+  it.each(CONFIGS)('%s wires every context collector', (path) => {
+    expect(wiringOf(path).contextCollectors).toEqual(expect.arrayContaining(COLLECTORS));
+  });
 
   it('registry knows every collector the config names', () => {
     // The other direction: a name nobody can build makes the app refuse to
     // start, which is at least loud — but it should never ship that way.
-    for (const path of ['config/config.yaml', 'config/config.example.yaml']) {
+    for (const path of CONFIGS) {
       for (const name of wiringOf(path).contextCollectors) {
         expect(COLLECTORS).toContain(name);
       }
