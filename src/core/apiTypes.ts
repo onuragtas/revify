@@ -63,6 +63,7 @@ export interface FixPatchView {
   appliedTo?: string;
   appliedAt?: string;
   appliedWithMerge?: boolean;
+  appliedIgnoringWhitespace?: boolean;
   error?: string;
 }
 

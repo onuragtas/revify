@@ -11,5 +11,19 @@ export default defineConfig({
     // meant to run here.
     include: ['src/**/*.test.ts'],
     exclude: ['node_modules/**', 'dist/**', 'data/**'],
+    /*
+     * Long enough for the tests that shell out to git.
+     *
+     * The fix and local-review suites init real repositories, clone them,
+     * and apply real patches — deliberately, because every question they
+     * ask is a git question and a mock would only ever agree with the code.
+     * That work is a few seconds per file on its own and more under
+     * parallel load, so the 5s default turned two of them into coin flips
+     * that failed on a busy machine and passed on a quiet one. A flaky test
+     * teaches people to re-run rather than to read.
+     *
+     * The cost is that a genuinely hung test takes this long to say so.
+     */
+    testTimeout: 20_000,
   },
 });

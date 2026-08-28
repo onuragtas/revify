@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  applyFailure,
   applyFixPatch,
   createFixWorkspace,
   extractFixPatch,
@@ -241,5 +242,155 @@ describe('parseNumstat', () => {
       insertions: 3,
       deletions: 1,
     });
+  });
+});
+
+
+describe('applyFixPatch — when it does not fit', () => {
+  it('names the directory and the files, not git\'s progress log', async () => {
+    /*
+     * `git apply --verbose` narrates on the same stream it diagnoses on:
+     * "Checking patch X…" and "Falling back to direct application…" are
+     * progress, `error:` lines are the answer. Reading the tail of stderr —
+     * which is what a generic git error reader does — returned the progress
+     * of whichever file came last and dropped the reason. The failure a
+     * person actually saw was three lines of "Falling back to direct
+     * application…" and nothing to act on.
+     */
+    /*
+     * A repository that has never held the reviewed content — not one that
+     * held it and moved on. That distinction is the whole case: when the
+     * preimage blob exists, git merges three ways and reports conflicts,
+     * which is handled elsewhere and leaves a usable result. When it does
+     * not, git falls back to applying the hunks literally, the context does
+     * not match, and nothing lands.
+     */
+    const other = join(root, 'elsewhere');
+    execFileSync('mkdir', ['-p', other]);
+    git(other, 'init', '-q', '-b', 'main');
+    git(other, 'config', 'user.email', 'test@example.invalid');
+    git(other, 'config', 'user.name', 'Test');
+    writeFileSync(join(other, 'app.ts'), 'tamamen başka bir dosya\n');
+    git(other, 'add', '.');
+    git(other, 'commit', '-qm', 'unrelated');
+
+    await createFixWorkspace({ dir: source, includeWorkingTree: false }, workspace);
+    writeFileSync(join(workspace, 'app.ts'), FILE.replace('{{rate}}', '2'));
+    const { patch } = await extractFixPatch(workspace);
+
+    const failed = await applyFixPatch(other, patch, undefined, 'feature/BUY-2397').catch(
+      (err: Error) => err.message,
+    );
+
+    expect(failed).toContain(other);
+    expect(failed).toContain('app.ts');
+    expect(failed).toContain('feature/BUY-2397');
+    expect(failed).toContain('başka bir dal');
+    // And the file is untouched: a failed apply leaves nothing behind.
+    expect(readFileSync(join(other, 'app.ts'), 'utf-8')).toBe('tamamen başka bir dosya\n');
+  });
+});
+
+describe('applyFixPatch — whitespace that drifted', () => {
+  it('applies a patch git refuses over indentation alone', async () => {
+    /*
+     * A patch was refused, downloaded, applied by hand from an editor — and
+     * it was right. `git apply` matches context exactly; editors do not.
+     * The usual cause is indentation that moved between the reviewed
+     * checkout and this one, and refusing over it sends someone to do by
+     * hand exactly what this exists to do for them.
+     */
+    const other = join(root, 'reformatted');
+    execFileSync('mkdir', ['-p', other]);
+    git(other, 'init', '-q', '-b', 'main');
+    git(other, 'config', 'user.email', 'test@example.invalid');
+    git(other, 'config', 'user.name', 'Test');
+    // Same code, tabs instead of two spaces.
+    writeFileSync(join(other, 'app.ts'), FILE.replace('{{rate}}', '1').replace(/^ {2}/gm, '\t'));
+    git(other, 'add', '.');
+    git(other, 'commit', '-qm', 'tabs');
+
+    await createFixWorkspace({ dir: source, includeWorkingTree: false }, workspace);
+    writeFileSync(join(workspace, 'app.ts'), FILE.replace('{{rate}}', '2'));
+    const { patch } = await extractFixPatch(workspace);
+
+    const result = await applyFixPatch(other, patch);
+
+    expect(result.ignoredWhitespace).toBe(true);
+    expect(readFileSync(join(other, 'app.ts'), 'utf-8')).toContain('rate = 2');
+  });
+
+  it('does not relax anything else to get a patch in', async () => {
+    // Whitespace is the only thing waived. A hunk landing somewhere
+    // plausible but wrong is worse than one that does not land.
+    const other = join(root, 'unrelated');
+    execFileSync('mkdir', ['-p', other]);
+    git(other, 'init', '-q', '-b', 'main');
+    git(other, 'config', 'user.email', 'test@example.invalid');
+    git(other, 'config', 'user.name', 'Test');
+    writeFileSync(join(other, 'app.ts'), 'bambaşka bir dosya\n');
+    git(other, 'add', '.');
+    git(other, 'commit', '-qm', 'unrelated');
+
+    await createFixWorkspace({ dir: source, includeWorkingTree: false }, workspace);
+    writeFileSync(join(workspace, 'app.ts'), FILE.replace('{{rate}}', '2'));
+    const { patch } = await extractFixPatch(workspace);
+
+    await expect(applyFixPatch(other, patch)).rejects.toThrow(/uymadı/);
+    expect(readFileSync(join(other, 'app.ts'), 'utf-8')).toBe('bambaşka bir dosya\n');
+  });
+});
+
+describe('applyFailure', () => {
+  const GIT_OUTPUT = [
+    'Checking patch src/main/java/Payment.java...',
+    'error: repository lacks the necessary blob to perform 3-way merge.',
+    'Falling back to direct application...',
+    'error: while searching for:',
+    'public class Payment {',
+    '',
+    'error: patch failed: src/main/java/Payment.java:1',
+    'error: src/main/java/Payment.java: patch does not apply',
+    'Checking patch src/main/resources/db/migration_refund_bank_rules.sql...',
+    'Falling back to direct application...',
+  ].join('\n');
+
+  it('does not call a missing blob a mismatch on its own', () => {
+    /*
+     * "repository lacks the necessary blob" is routine: the target's object
+     * store has no copy of the preimage, which is the normal case when the
+     * review was written against uncommitted work — that blob only ever
+     * existed in the throwaway workspace. git says it, falls back, and
+     * usually succeeds. Reading it as "you are on the wrong branch" tells
+     * someone their directory is wrong when it is not.
+     */
+    const fallback = [
+      'Checking patch a.ts...',
+      'error: repository lacks the necessary blob to perform 3-way merge.',
+      'Falling back to direct application...',
+      'Applied patch a.ts cleanly.',
+    ].join('\n');
+
+    expect(applyFailure(fallback).contentDiffers).toBe(false);
+  });
+
+  it('reads the diagnosis rather than whatever line came last', () => {
+    const failure = applyFailure(GIT_OUTPUT);
+
+    expect(failure.detail).toContain('patch does not apply');
+    expect(failure.detail).not.toContain('Checking patch');
+    expect(failure.files).toEqual(['src/main/java/Payment.java']);
+    expect(failure.contentDiffers).toBe(true);
+  });
+
+  it('does not call a routine 3-way fallback a mismatch', () => {
+    // git falls back and still succeeds all the time; only the failure to
+    // apply afterwards means the target is the wrong code.
+    const chatter = 'Checking patch a.ts...\nFalling back to direct application...\nApplied patch a.ts cleanly.';
+    expect(applyFailure(chatter).contentDiffers).toBe(false);
+  });
+
+  it('still says something when git said nothing it recognises', () => {
+    expect(applyFailure('bir tuhaflık oldu').detail).toBe('bir tuhaflık oldu');
   });
 });

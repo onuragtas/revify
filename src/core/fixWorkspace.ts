@@ -232,6 +232,10 @@ export interface ApplyResult {
    * has moved since the review, and the result is worth reading before it
    * is committed. */
   merged: boolean;
+  /** Set when it only went in once whitespace was waived: the indentation
+   * here differs from the reviewed checkout, so the result deserves a look
+   * before it is committed. */
+  ignoredWhitespace?: boolean;
 }
 
 /**
@@ -248,10 +252,58 @@ export interface ApplyResult {
  * Nothing is committed and nothing is pushed. The whole point is that a
  * person reads the change before it becomes theirs.
  */
+/**
+ * What actually went wrong, out of everything `git apply --verbose` says.
+ *
+ * The narration and the diagnosis share stderr: "Checking patch X…" and
+ * "Falling back to direct application…" are progress, `error:` and `fatal:`
+ * are the answer. Reading the tail — which is what a generic git error
+ * reader does — hands back the progress of whichever file happened to be
+ * last and drops the reason entirely. That is how an apply failure came
+ * back as three lines of "Falling back to direct application…" and nothing
+ * a person could act on.
+ */
+export function applyFailure(message: string): {
+  files: string[];
+  contentDiffers: boolean;
+  detail: string;
+} {
+  const lines = message.split('\n').map((l) => l.trim());
+  const errors = lines.filter((l) => /^(error|fatal):/.test(l));
+
+  return {
+    // `error: patch failed: src/a.sql:12` — the file the patch could not sit on.
+    files: [
+      ...new Set(
+        errors
+          .map((l) => l.match(/^error: patch failed: (.+):\d+$/)?.[1])
+          .filter((f): f is string => Boolean(f)),
+      ),
+    ],
+    /*
+     * "The code here is not what the patch was written against."
+     *
+     * Only the failure to apply says that. It is tempting to read
+     * "repository lacks the necessary blob" the same way, and wrong: that
+     * line means the target's object store has no copy of the preimage,
+     * which is the *normal* case when the review was written against
+     * uncommitted work — the blob only ever existed in the throwaway
+     * workspace. git says it, falls back, and usually succeeds. Claiming a
+     * mismatch on that alone tells someone their directory is on the wrong
+     * branch when it is not, which is worse than saying nothing.
+     */
+    contentDiffers: /patch does not apply|patch failed:/i.test(message),
+    detail: (errors.length ? errors : lines.filter(Boolean).slice(-3)).join('\n'),
+  };
+}
+
 export async function applyFixPatch(
   targetDir: string,
   patch: string,
   signal?: AbortSignal,
+  /** The branch the review was written against, named in the failure so the
+   * reader knows what to check out. */
+  branchName?: string,
 ): Promise<ApplyResult> {
   const dir = resolve(targetDir.replace(/^~(?=\/|$)/, process.env.HOME ?? '~'));
   if (!existsSync(dir)) throw new Error(`${dir} bulunamadı.`);
@@ -288,6 +340,34 @@ export async function applyFixPatch(
     );
     return { root, files: filesInPatch(patch), merged: /fell back|3-way/i.test(`${stdout}\n${stderr}`) };
   } catch (err) {
+    /*
+     * Second attempt, ignoring whitespace.
+     *
+     * `git apply` matches context exactly; an editor's "apply patch" does
+     * not, which is why a patch git refuses can go in cleanly by hand and
+     * be correct. The usual cause is indentation that drifted between the
+     * reviewed checkout and this one — tabs against spaces, a reformat, a
+     * trailing space — and refusing over it sends someone to do by hand
+     * exactly what this was for.
+     *
+     * Whitespace is the only thing relaxed. Reducing the required context
+     * lines would let a hunk land in the wrong place, and a patch applied
+     * somewhere plausible but wrong is worse than one that does not apply.
+     */
+    if (!signal?.aborted && !/conflict/i.test(gitError(err))) {
+      try {
+        await gitFull(
+          root,
+          ['apply', '--3way', '--whitespace=nowarn', '--ignore-whitespace', '--verbose', patchFile],
+          signal,
+        );
+        return { root, files: filesInPatch(patch), merged: true, ignoredWhitespace: true };
+      } catch {
+        // Report the first attempt's diagnosis: it is the one that describes
+        // the patch as it stands, not as it would be with whitespace waived.
+      }
+    }
+
     const message = gitError(err);
     // A conflicted 3-way apply exits non-zero *and* writes the merge into
     // the working copy — reporting it as a plain failure would send someone
@@ -297,7 +377,27 @@ export async function applyFixPatch(
         `Yama çakışmalarla uygulandı — çalışma kopyanda çakışma işaretleri var, çözüp öyle commitle:\n${message}`,
       );
     }
-    throw new Error(`Yama uygulanamadı: ${message}`);
+    /*
+     * The common failure, said in terms of the decision it asks for.
+     *
+     * "patch does not apply" is true and useless: the reader wants to know
+     * *which* directory is wrong and what to do about it. The patch was
+     * written against a specific branch's code, and this directory is not
+     * on it — checking that out is the fix, and applying anyway would be
+     * the wrong thing even if git could.
+     */
+    const failure = applyFailure(message);
+    if (failure.contentDiffers) {
+      throw new Error(
+        `Yama bu dizine uymadı: ${root}\n` +
+          (failure.files.length ? `Uymayan dosya(lar): ${failure.files.join(', ')}\n` : '') +
+          'Buradaki kod, review\'in yapıldığı koddan farklı — büyük ihtimalle başka bir dal ya da ' +
+          `commit üzerindesin${branchName ? ` (yama \`${branchName}\` için üretildi)` : ''}. ` +
+          'Doğru dala geçip tekrar dene.\n' +
+          failure.detail,
+      );
+    }
+    throw new Error(`Yama uygulanamadı: ${failure.detail}`);
   } finally {
     rmSync(patchFile, { force: true });
   }

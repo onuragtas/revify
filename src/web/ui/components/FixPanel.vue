@@ -221,7 +221,10 @@ async function clear(): Promise<void> {
 
         <p v-if="entry.appliedAt" class="card-hint">
           {{ entry.appliedTo }} dizinine uygulandı · {{ when(entry.appliedAt) }}
-          <template v-if="entry.appliedWithMerge">
+          <template v-if="entry.appliedIgnoringWhitespace">
+            · girinti farklıydı, boşluklar yok sayılarak — sonucu okumadan commitleme
+          </template>
+          <template v-else-if="entry.appliedWithMerge">
             · birleştirilerek — sonucu okumadan commitleme
           </template>
           · commitlenmedi

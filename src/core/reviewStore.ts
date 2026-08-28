@@ -46,6 +46,9 @@ export interface FixPatch {
   /** True when git had to three-way merge it in — the working copy had
    * moved, and the result deserves reading before it is committed. */
   appliedWithMerge?: boolean;
+  /** True when it only went in once whitespace was waived: the indentation
+   * here differs from the reviewed checkout. */
+  appliedIgnoringWhitespace?: boolean;
   /** Set when this repository's run failed while others succeeded. */
   error?: string;
 }

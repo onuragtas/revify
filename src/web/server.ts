@@ -2057,12 +2057,18 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired, opti
     }
 
     try {
-      const result = await applyFixPatch(target, entry.patch);
+      const result = await applyFixPatch(target, entry.patch, undefined, entry.branchName);
       const at = new Date().toISOString();
       patchFix(issueKey, {
         patches: fix.patches.map((p) =>
           p.projectPath === projectPath
-            ? { ...p, appliedTo: result.root, appliedAt: at, appliedWithMerge: result.merged }
+            ? {
+                ...p,
+                appliedTo: result.root,
+                appliedAt: at,
+                appliedWithMerge: result.merged,
+                appliedIgnoringWhitespace: result.ignoredWhitespace,
+              }
             : p,
         ),
       });
