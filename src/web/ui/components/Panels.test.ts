@@ -5,7 +5,7 @@ import { nextTick } from 'vue';
 import HistoryPanel from './HistoryPanel.vue';
 import NotesPanel from './NotesPanel.vue';
 import VerifyPanel from './VerifyPanel.vue';
-import { state, type DetailPayload } from '../bridge';
+import { host, state, type DetailPayload } from '../bridge';
 import { tabs } from '../detail';
 
 function setDetail(over: Partial<DetailPayload> = {}): void {
@@ -115,6 +115,69 @@ describe('VerifyPanel', () => {
     // One question + one dispute + one instruction, and an unanswered
     // question is what makes the tab urgent rather than merely counted.
     expect(tabs.counts.verify).toEqual({ count: 3, alert: true });
+  });
+
+  it('says the save failed instead of looking exactly like success', async () => {
+    /*
+     * There was a `try/finally` with no `catch` and nowhere to put an error:
+     * a refused save rejected out of the click handler, the editing flags
+     * reset, and the panel looked the same as it does when it works. What
+     * the person had just written was still on screen and not on disk.
+     */
+    vi.stubGlobal('fetch', async () => ({ ok: false, json: async () => ({ error: 'disk dolu' }) }));
+    setDetail({ revisionRequest: '' });
+    const wrapper = mount(VerifyPanel);
+    await nextTick();
+
+    await wrapper.find('textarea').setValue('talimat');
+    await wrapper.find('.card-actions .btn').trigger('click');
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('disk dolu');
+  });
+
+  it('does not re-review against instructions that failed to save', async () => {
+    // The review would silently ignore them, and nothing would say why.
+    vi.stubGlobal('fetch', async (url: string) => {
+      if (String(url).endsWith('/revision')) return { ok: false, json: async () => ({ error: 'olmadı' }) };
+      return { ok: true, json: async () => ({ ok: true }) };
+    });
+    const started = vi.spyOn(host, 'startReview');
+    setDetail();
+    const wrapper = mount(VerifyPanel);
+    await nextTick();
+
+    await wrapper.find('textarea').setValue('talimat');
+    await wrapper.findAll('.card-actions .btn')[1].trigger('click');
+    await flushPromises();
+
+    expect(started).not.toHaveBeenCalled();
+    expect(wrapper.text()).toContain('olmadı');
+    started.mockRestore();
+  });
+
+  it('says why the re-review was refused, rather than nothing at all', async () => {
+    /*
+     * Starting a review was written twice — here and in the detail header —
+     * and only the header's copy learned to read the server's answer. This
+     * one swallowed every refusal, so the button did nothing and said
+     * nothing. There is one implementation now.
+     */
+    vi.stubGlobal('fetch', async (url: string) => {
+      if (String(url).endsWith('/start')) {
+        return { ok: false, status: 400, json: async () => ({ error: 'bir issue anahtarına benzemiyor' }) };
+      }
+      return { ok: true, json: async () => ({ ok: true }) };
+    });
+    setDetail();
+    const wrapper = mount(VerifyPanel);
+    await nextTick();
+
+    await wrapper.find('textarea').setValue('talimat');
+    await wrapper.findAll('.card-actions .btn')[1].trigger('click');
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('bir issue anahtarına benzemiyor');
   });
 
   it('shows the finding in full, not just its heading', async () => {

@@ -23,7 +23,7 @@
  */
 import { computed, onMounted, ref, watch } from 'vue';
 import { refreshList, state } from '../bridge';
-import { connection, meta, metaError, openIssue, showTab, startPolling, stopPolling, tabs } from '../detail';
+import { connection, meta, metaError, openIssue, startPolling, startReview, stopPolling, tabs, showTab } from '../detail';
 import { contextSelection, openModal } from '../uiState';
 import { outcomeConfig } from '../appConfig';
 import { session } from '../session';
@@ -166,50 +166,43 @@ onMounted(() => {
   if (fromUrl) openIssue(fromUrl);
 });
 
-const startError = ref('');
+/** What the last header action was refused with — start, stop or clear. */
+const actionError = ref('');
 
+/*
+ * One act, one implementation.
+ *
+ * This used to post to `/start` itself, alongside a second copy in
+ * `detail.ts` that "Kaydet ve yeniden incele" called. Only this one ever
+ * learned to report a refusal, which is exactly how the other button came
+ * to do nothing in silence.
+ */
 async function start(): Promise<void> {
   const issueKey = state.issueKey;
   if (!issueKey) return;
-  startError.value = '';
-  openIssue(issueKey, { force: true });
-  showTab('process', { pin: false });
-
-  /*
-   * A refusal has to be said out loud.
-   *
-   * This used to be `.catch(() => {})` with the response thrown away, so
-   * every way the server can decline — an issue Jira does not have, a
-   * directory with nothing to review, an id it could not make sense of —
-   * produced a button that did nothing and explained nothing. That is
-   * exactly how "yeniden incele" failed silently on local reviews.
-   */
+  actionError.value = '';
   try {
-    const response = await fetch(`/api/reviews/${encodeURIComponent(issueKey)}/start`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contextRepos: [...contextSelection.repos] }),
-    });
-    const body = await response.json().catch(() => ({}));
-    if (body.error || !response.ok) {
-      startError.value = body.error ?? `İnceleme başlatılamadı (HTTP ${response.status}).`;
-      return;
-    }
+    await startReview(issueKey, [...contextSelection.repos]);
   } catch (err) {
-    startError.value = `İnceleme başlatılamadı: ${(err as Error).message}`;
+    actionError.value = (err as Error).message;
     return;
   }
-
-  // Only now is the record 'queued'. The poll openIssue started read the
-  // status as it was before this request — for an issue already reviewed
-  // that reads as "settled", and it would stop polling a run just beginning.
-  startPolling(issueKey);
   refreshList();
 }
 
 async function stop(): Promise<void> {
   if (!state.issueKey) return;
-  await fetch(`/api/reviews/${encodeURIComponent(state.issueKey)}/stop`, { method: 'POST' }).catch(() => {});
+  actionError.value = '';
+  // "Bu iş çalışmıyor ya da kuyrukta değil" is a real answer to a real
+  // press — the run can finish between the render and the click. Swallowing
+  // it left a button that appeared to do nothing.
+  try {
+    const response = await fetch(`/api/reviews/${encodeURIComponent(state.issueKey)}/stop`, { method: 'POST' });
+    const body = await response.json().catch(() => ({}) as { error?: string });
+    if (body.error) actionError.value = body.error;
+  } catch (err) {
+    actionError.value = `Durdurulamadı: ${(err as Error).message}`;
+  }
   startPolling(state.issueKey);
 }
 
@@ -217,7 +210,18 @@ async function clear(): Promise<void> {
   const issueKey = state.issueKey;
   if (!issueKey) return;
   if (!confirm(`${issueKey} için review, geçmiş ve cevaplar silinsin mi? (klonlanan repolar korunur)`)) return;
-  await fetch(`/api/reviews/${encodeURIComponent(issueKey)}`, { method: 'DELETE' }).catch(() => {});
+  actionError.value = '';
+  try {
+    const response = await fetch(`/api/reviews/${encodeURIComponent(issueKey)}`, { method: 'DELETE' });
+    const body = await response.json().catch(() => ({}) as { error?: string });
+    if (body.error) {
+      actionError.value = body.error;
+      return;
+    }
+  } catch (err) {
+    actionError.value = `Temizlenemedi: ${(err as Error).message}`;
+    return;
+  }
   startPolling(issueKey);
   refreshList();
 }
@@ -332,7 +336,7 @@ function back(): void {
           click an issue that has a review and are told it has none. An empty
           state that lies is worse than a blank one.
         -->
-        <StateNote v-if="startError" kind="error">{{ startError }}</StateNote>
+        <StateNote v-if="actionError" kind="error">{{ actionError }}</StateNote>
         <StateNote v-if="!detail" kind="loading">{{ state.issueKey }} okunuyor…</StateNote>
 
         <template v-else>

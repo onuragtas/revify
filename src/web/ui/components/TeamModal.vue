@@ -71,7 +71,11 @@ async function load(): Promise<void> {
   try {
     members.value = (await (await fetch(`/api/backend/teams/${id}/members`)).json()).items ?? [];
   } catch {
+    // "Nobody in the team" and "could not ask" look identical on screen and
+    // are not the same fact; the second sends people looking for a member
+    // list that was never fetched.
     members.value = [];
+    result.value = 'Takım üyeleri okunamadı.';
   }
   try {
     assignments.value = (await (await fetch(`/api/backend/teams/${id}/assignments`)).json()).items ?? [];
@@ -110,19 +114,29 @@ async function runSearch(): Promise<void> {
   try {
     found.value = (await (await fetch(`/api/backend/users?q=${encodeURIComponent(q)}`)).json()).items ?? [];
   } catch {
+    // Same rule: "no such user" is an answer, "the search failed" is not.
     found.value = [];
+    result.value = 'Kullanıcı araması yapılamadı.';
   }
 }
 
 async function addMember(user: Member): Promise<void> {
   if (!team.value) return;
-  const data = await (
-    await fetch(`/api/backend/teams/${encodeURIComponent(team.value.id)}/members`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: user.email }),
-    })
-  ).json();
+  // The server's refusal was read; a server that never answered was not,
+  // and threw out of the click handler instead.
+  let data: { error?: string };
+  try {
+    data = await (
+      await fetch(`/api/backend/teams/${encodeURIComponent(team.value.id)}/members`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: user.email }),
+      })
+    ).json();
+  } catch (err) {
+    result.value = `Eklenemedi: ${(err as Error).message}`;
+    return;
+  }
   result.value = data.error ? `Eklenemedi: ${data.error}` : `${user.name} eklendi.`;
   search.value = '';
   found.value = [];
@@ -132,13 +146,19 @@ async function addMember(user: Member): Promise<void> {
 async function createTeam(): Promise<void> {
   const name = newTeamName.value.trim();
   if (!name) return;
-  const data = await (
-    await fetch('/api/backend/teams', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name }),
-    })
-  ).json();
+  let data: { error?: string };
+  try {
+    data = await (
+      await fetch('/api/backend/teams', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      })
+    ).json();
+  } catch (err) {
+    result.value = `Takım oluşturulamadı: ${(err as Error).message}`;
+    return;
+  }
   if (data.error) {
     result.value = `Takım oluşturulamadı: ${data.error}`;
     return;

@@ -18,6 +18,7 @@
  */
 import { computed, ref, watch } from 'vue';
 import { host, state } from '../bridge';
+import StateNote from './StateNote.vue';
 import { saveChallenges, saveClarifications, saveRevision } from '../api';
 import { renderMarkdown } from '../markdown';
 
@@ -109,11 +110,22 @@ watch(
 /* --------------------------------- saving -------------------------------- */
 
 const saving = ref(false);
+/** What the server refused, said where the buttons are. */
+const error = ref('');
 
-async function persist(): Promise<void> {
+/**
+ * Saves all three channels, and says so when it cannot.
+ *
+ * There was a `try/finally` here with no `catch` and nowhere to put an
+ * error: a refused save rejected out of the click handler, the flags reset,
+ * and the screen looked exactly as it does on success. Whatever the person
+ * had just written was still on screen and not on disk.
+ */
+async function persist(): Promise<boolean> {
   const issueKey = state.issueKey;
-  if (!issueKey) return;
+  if (!issueKey) return false;
   saving.value = true;
+  error.value = '';
   try {
     await saveRevision(issueKey, revision.value.trim());
     await saveClarifications(
@@ -124,6 +136,9 @@ async function persist(): Promise<void> {
       issueKey,
       disputable.value.map((row) => ({ finding: row.heading, objection: objections.value[row.heading] ?? '' })),
     );
+  } catch (err) {
+    error.value = `Kaydedilemedi: ${(err as Error).message}`;
+    return false;
   } finally {
     saving.value = false;
     editingRevision.value = false;
@@ -131,12 +146,24 @@ async function persist(): Promise<void> {
     editingObjections.value = false;
   }
   host.startPolling(issueKey);
+  return true;
 }
 
+/**
+ * Save, then re-review with what was just saved.
+ *
+ * The re-review only runs if the save landed: starting one against
+ * instructions that failed to save would produce a review that ignores them
+ * and give no sign why.
+ */
 async function persistAndRerun(): Promise<void> {
   const issueKey = state.issueKey;
-  await persist();
-  if (issueKey) host.startReview(issueKey);
+  if (!(await persist()) || !issueKey) return;
+  try {
+    await host.startReview(issueKey);
+  } catch (err) {
+    error.value = (err as Error).message;
+  }
 }
 
 async function clearRevision(): Promise<void> {
@@ -148,6 +175,10 @@ async function clearRevision(): Promise<void> {
 
 <template>
   <div>
+    <!-- One place for it: all three cards save together, so an error belongs
+         to the panel rather than to whichever button was pressed. -->
+    <StateNote v-if="error" kind="error">{{ error }}</StateNote>
+
     <div class="card">
       <h3>Review'i düzelt</h3>
       <p class="card-hint">

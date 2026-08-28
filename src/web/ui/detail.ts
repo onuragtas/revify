@@ -142,20 +142,35 @@ export function openIssue(issueKey: string, { force = false } = {}): void {
 /**
  * Start (or restart) a review, with whatever the context picker selected.
  *
- * Shared because two screens ask for it: the button in the detail header,
- * and "save and re-review" in the Review tab's Doğrulama section. To the
- * person pressing either, it
- * is one act.
+ * The one implementation, because two screens ask for it: the button in the
+ * detail header, and "Kaydet ve yeniden incele" in the Review tab. To the
+ * person pressing either it is one act — and while it was written twice,
+ * only one copy learned to report a refusal. The other went on swallowing
+ * every 400 and 409 the server could answer with, which is a button that
+ * does nothing and says nothing.
+ *
+ * Throws with the server's own sentence when it is refused; the caller
+ * decides where to show it.
  */
 export async function startReview(issueKey: string, contextRepos: string[] = []): Promise<void> {
   openIssue(issueKey, { force: true });
   showTab('process', { pin: false });
 
-  await fetch(`/api/reviews/${encodeURIComponent(issueKey)}/start`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ contextRepos }),
-  }).catch(() => {});
+  let response: Response;
+  try {
+    response = await fetch(`/api/reviews/${encodeURIComponent(issueKey)}/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contextRepos }),
+    });
+  } catch (err) {
+    throw new Error(`İnceleme başlatılamadı: ${(err as Error).message}`);
+  }
+
+  const body = await response.json().catch(() => ({}) as { error?: string });
+  if (body.error || !response.ok) {
+    throw new Error(body.error ?? `İnceleme başlatılamadı (HTTP ${response.status}).`);
+  }
 
   // Only now is the record 'queued'. The poll `openIssue` started read the
   // status as it was before this request — for an issue already reviewed

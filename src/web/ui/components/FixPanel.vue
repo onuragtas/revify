@@ -45,6 +45,9 @@ const bodies = ref<Record<string, string>>({});
 const targets = ref<Record<string, string>>({});
 const results = ref<Record<string, string>>({});
 const applying = ref<Record<string, boolean>>({});
+/** A refusal from stopping or clearing — panel-level, unlike `results`,
+ * which is per repository. */
+const panelError = ref('');
 
 // A body and a typed-in path belong to one issue. The hand-written version
 // keyed the same caches globally and showed one issue's patch under
@@ -139,13 +142,29 @@ async function apply(entry: FixPatchView): Promise<void> {
   host.startPolling(state.issueKey!);
 }
 
+/*
+ * Stopping and clearing can both be refused — nothing is running, the
+ * record moved on — and both swallowed the answer. A button that silently
+ * does nothing is the one thing a person cannot debug.
+ */
 async function stop(): Promise<void> {
-  await stopFix(state.issueKey!).catch(() => {});
+  panelError.value = '';
+  try {
+    await stopFix(state.issueKey!);
+  } catch (err) {
+    panelError.value = `Durdurulamadı: ${(err as Error).message}`;
+  }
   host.startPolling(state.issueKey!);
 }
 
 async function clear(): Promise<void> {
-  await clearFix(state.issueKey!).catch(() => {});
+  panelError.value = '';
+  try {
+    await clearFix(state.issueKey!);
+  } catch (err) {
+    panelError.value = `Silinemedi: ${(err as Error).message}`;
+    return;
+  }
   bodies.value = {};
   host.startPolling(state.issueKey!);
 }
@@ -168,6 +187,8 @@ async function clear(): Promise<void> {
         <button v-if="busy" class="btn btn-reject" @click="stop">Durdur</button>
         <button v-else class="btn btn-ghost" title="Bu yamayı sil" @click="clear">Temizle</button>
       </div>
+
+      <StateNote v-if="panelError" kind="error">{{ panelError }}</StateNote>
 
       <p class="card-hint">İstenen bulgular:</p>
       <div v-for="(f, i) in fix.findings" :key="i" class="patchFiles">

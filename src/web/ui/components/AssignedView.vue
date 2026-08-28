@@ -35,8 +35,17 @@ onMounted(() => {
   void load();
 });
 
+const error = ref('');
+
 async function close(row: AssignmentRow): Promise<void> {
-  await closeAssignment(row.teamId, row.issueKey).catch(() => {});
+  error.value = '';
+  try {
+    await closeAssignment(row.teamId, row.issueKey);
+  } catch (err) {
+    // The row simply stays, which reads as "nothing happened" — true, but
+    // only this says why.
+    error.value = `${row.issueKey} kapatılamadı: ${(err as Error).message}`;
+  }
   await load();
 }
 </script>
@@ -54,6 +63,7 @@ async function close(row: AssignmentRow): Promise<void> {
       <button class="btn pushRight" @click="load">↻ Yenile</button>
     </div>
 
+    <StateNote v-if="error" kind="error">{{ error }}</StateNote>
     <StateNote v-if="loading" kind="loading">yükleniyor…</StateNote>
     <StateNote v-else-if="!rows.length">Sana atanmış iş yok.</StateNote>
 
