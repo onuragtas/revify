@@ -264,7 +264,7 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired, opti
     issueKey: string,
     signal: AbortSignal,
   ): Promise<{ dir: string; includeWorkingTree: boolean }> {
-    const reviewed = (change as { repoPath?: string | null }).repoPath ?? null;
+    const reviewed = change.repoPath ?? null;
 
     if (reviewed && !isRepoCacheCheckout(reviewed)) {
       if (!existsSync(reviewed)) {
@@ -1512,7 +1512,7 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired, opti
         issueKey: record!.issueKey,
         summary: record!.summary,
         description:
-          `Yerel dizin incelemesi — bağlı bir Jira issue'su yok.\n\nDizin: ${record!.localPath}`,
+          `Yerel dizin incelemesi — bağlı bir Jira issue'su yok.\n\nDizin: ${localSourceOf(record)}`,
         issueType: 'Yerel dizin',
         changedRepos: [],
       });
@@ -1678,8 +1678,31 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired, opti
    * and then the decision bar would promise not to touch a ticket it is
    * about to comment on.
    */
+  /**
+   * Where a local review was read from, if it was one.
+   *
+   * Two sources, and the order matters. `localPath` is *declared*: written
+   * when somebody starts a review from a directory, so it is there even
+   * before the first run produces anything. `repoChanges[].repoPath` is
+   * *observed*: the collector records the directory it actually read, which
+   * means every review written before `localPath` existed already carries
+   * the answer — including the ones sitting in people's stores right now.
+   * Reading both is what makes those re-runnable instead of stranded.
+   *
+   * A repo-cache path is not a local review: the Jira path checks branches
+   * out there, and treating one as somebody's working copy would run a fix
+   * against a directory the next review hard-resets.
+   */
+  function localSourceOf(record?: ReviewRecord): string | undefined {
+    if (record?.localPath) return record.localPath;
+    const observed = record?.repoChanges?.find(
+      (c) => c.repoPath && !isRepoCacheCheckout(c.repoPath),
+    );
+    return observed?.repoPath ?? undefined;
+  }
+
   const isLocalOnly = (record?: ReviewRecord): boolean =>
-    Boolean(record?.localPath) && !isIssueKey(record!.issueKey);
+    Boolean(localSourceOf(record)) && !isIssueKey(record!.issueKey);
 
   app.post('/api/reviews/local/inspect', async (req, res) => {
     const started = await buildLocalStart(String(req.body?.path ?? '').trim());
@@ -1821,7 +1844,7 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired, opti
      * nothing about why. The record remembers where it came from; read the
      * directory again and build the same event typing the path would.
      */
-    const localPath = wired.reviewStore.get(req.params.issueKey)?.localPath;
+    const localPath = localSourceOf(wired.reviewStore.get(req.params.issueKey));
     if (localPath) {
       // An attached one keeps its issue: re-running must not quietly demote
       // a review of BUY-2397 back into `local:...` and take its decision
@@ -1833,6 +1856,8 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired, opti
         return;
       }
       lastPolled = [...lastPolled.filter((e) => e.id !== started.id), started.event];
+      // Recorded on the way through, so a review that predates the field
+      // stops relying on the collector's copy from here on.
       restartRecord(started.event, { projectPaths: [started.change.projectPath], localPath });
       res.json({ ok: true, position: queue.enqueue(started.event) });
       return;

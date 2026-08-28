@@ -489,6 +489,70 @@ describe('reviewing a local directory', () => {
     server.shutdown();
   });
 
+  it('re-runs a review recorded before the directory was stored separately', async () => {
+    /*
+     * The store already knew where these came from.
+     *
+     * `localPath` was added later, so every local review written before it
+     * had `undefined` there — and re-running one answered 400 with "bir
+     * issue anahtarına benzemiyor", about an id that was never an issue
+     * key. But the collector had recorded the directory on the change
+     * itself all along, which is what the fix path has always cloned from.
+     * Reading that makes the existing records work rather than stranding
+     * them.
+     */
+    const root = makeRepo();
+    const wired = makeWired();
+    const server = createServer(makeConfig(), wired, isolated());
+
+    const first = await request(server).post('/api/reviews/local').send({ path: root });
+    const id: string = first.body.issueKey;
+    await vi.waitFor(() => expect(wired.reviewStore.get(id)?.review).toBeDefined());
+
+    // Exactly the shape found in a real store: no `localPath`, and the
+    // directory on the change where the collector put it.
+    wired.reviewStore.upsert(id, {
+      localPath: undefined,
+      repoChanges: [
+        { projectPath: 'team/api', baseBranch: 'origin/main', branchName: 'main', files: [], repoPath: root },
+      ],
+    });
+    expect(wired.reviewStore.get(id)?.localPath).toBeUndefined();
+
+    const again = await request(server).post(`/api/reviews/${encodeURIComponent(id)}/start`).send({});
+    expect(again.status).toBe(200);
+    await vi.waitFor(() => expect(wired.reviewStore.get(id)?.history?.length).toBe(1));
+
+    // And it is a local review as far as the decision is concerned, so the
+    // buttons do not promise a Jira write.
+    const detail = await request(server).get(`/api/reviews/${encodeURIComponent(id)}/detail`);
+    expect(detail.body.local).toBe(true);
+    server.shutdown();
+  });
+
+  it('describes such a review from the directory it recorded', async () => {
+    // /prepare answered 404 for these — Jira advice about a review that has
+    // no Jira issue.
+    const root = makeRepo();
+    const wired = makeWired();
+    const server = createServer(makeConfig(), wired, isolated());
+
+    const first = await request(server).post('/api/reviews/local').send({ path: root });
+    const id: string = first.body.issueKey;
+    await vi.waitFor(() => expect(wired.reviewStore.get(id)?.review).toBeDefined());
+    wired.reviewStore.upsert(id, {
+      localPath: undefined,
+      repoChanges: [
+        { projectPath: 'team/api', baseBranch: 'origin/main', branchName: 'main', files: [], repoPath: root },
+      ],
+    });
+
+    const meta = await request(server).get(`/api/reviews/${encodeURIComponent(id)}/prepare`);
+    expect(meta.status).toBe(200);
+    expect(meta.body.description).toContain(root);
+    server.shutdown();
+  });
+
   it('keeps an attached review attached when it is run again', async () => {
     /*
      * A confirmed review of BUY-9 is a review of BUY-9, even though the

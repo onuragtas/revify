@@ -91,16 +91,31 @@ export interface ReviewRecord {
     baseBranch: string;
     branchName: string;
     files: Array<{ path: string; diff: string }>;
+    /**
+     * The directory this repository was read from, when there was one.
+     *
+     * Load-bearing rather than informational: the fix path clones from it,
+     * and it is how a review started from a working copy remembers which
+     * one. It was in the data and missing from this type, so every reader
+     * had to cast — and one of them, re-running a local review, did not
+     * know to look here at all.
+     *
+     * Either somebody's own checkout or a directory in the repo cache; the
+     * two are not interchangeable and callers check which.
+     */
+    repoPath?: string | null;
   }> | null;
   /** Projects this change touches — used to scope repo-level notes. */
   projectPaths?: string[];
   /**
    * The directory a local review was started from, absolute.
    *
-   * Only local reviews have one, and without it they could be started but
-   * never re-run: the id is `local:<project>@<branch>`, which names the
-   * project the way GitLab does and cannot be turned back into a path on
-   * this machine. "Yeniden incele" answered 400 for exactly that reason.
+   * Declared at start time, before any run has produced a `repoChanges`
+   * entry — which is the only reason it exists separately: a local review
+   * whose first run failed has nothing observed to fall back on. Readers
+   * should go through `localSourceOf`, which prefers this and falls back to
+   * what the collector recorded, so reviews written before this field
+   * existed stay re-runnable.
    */
   localPath?: string;
   /** What the issue asked for, as this review read it. Kept so a fix built
