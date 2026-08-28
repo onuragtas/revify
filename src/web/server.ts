@@ -1845,7 +1845,8 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired, opti
      * nothing about why. The record remembers where it came from; read the
      * directory again and build the same event typing the path would.
      */
-    const localPath = localSourceOf(wired.reviewStore.get(req.params.issueKey));
+    const record = wired.reviewStore.get(req.params.issueKey);
+    const localPath = localSourceOf(record);
     if (localPath) {
       // An attached one keeps its issue: re-running must not quietly demote
       // a review of BUY-2397 back into `local:...` and take its decision
@@ -1856,11 +1857,38 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired, opti
         res.status(started.status).json({ error: started.error });
         return;
       }
-      lastPolled = [...lastPolled.filter((e) => e.id !== started.id), started.event];
+
+      /*
+       * The directory is read again — that is the point of re-reviewing —
+       * but it may not be on the branch this record is about any more.
+       *
+       * The id is built from project and branch, so following the checkout
+       * silently would file a review of `feature/B` under a record whose
+       * id, summary and history all say `feature/A`, and start it under an
+       * id nobody is watching: the screen polls the old one and shows
+       * nothing happening. Refusing says which branch is wanted, which is
+       * the one thing that makes it fixable.
+       */
+      const reviewedBranch =
+        record?.repoChanges?.[0]?.branchName ?? req.params.issueKey.split('@').slice(1).join('@');
+      if (reviewedBranch && started.change.branch !== reviewedBranch) {
+        res.status(409).json({
+          error:
+            `Bu inceleme \`${reviewedBranch}\` dalı için; ${localPath} şu an ` +
+            `\`${started.change.branch}\` dalında. Doğru dala geçip tekrar dene — ya da bu dalı ` +
+            'incelemek istiyorsan soldaki kutuya dizin yolunu yazıp yeni bir inceleme başlat.',
+        });
+        return;
+      }
+
+      // Re-running a record keeps its identity, whatever the directory is
+      // called now.
+      const event = { ...started.event, id: req.params.issueKey };
+      lastPolled = [...lastPolled.filter((e) => e.id !== event.id), event];
       // Recorded on the way through, so a review that predates the field
       // stops relying on the collector's copy from here on.
-      restartRecord(started.event, { projectPaths: [started.change.projectPath], localPath });
-      res.json({ ok: true, position: queue.enqueue(started.event) });
+      restartRecord(event, { projectPaths: [started.change.projectPath], localPath });
+      res.json({ ok: true, position: queue.enqueue(event) });
       return;
     }
 

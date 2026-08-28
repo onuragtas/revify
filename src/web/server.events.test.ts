@@ -553,6 +553,60 @@ describe('reviewing a local directory', () => {
     server.shutdown();
   });
 
+  it('reads the directory again, so a re-review sees what is there now', async () => {
+    /*
+     * Not a snapshot of the moment somebody first pointed at it: the whole
+     * reason to press "yeniden incele" is that the code has changed since,
+     * usually because it was just fixed. Uncommitted work counts too — that
+     * is the half most likely to be wrong.
+     */
+    const root = makeRepo();
+    const wired = makeWired();
+    const server = createServer(makeConfig(), wired, isolated());
+
+    const first = await request(server).post('/api/reviews/local').send({ path: root });
+    const id: string = first.body.issueKey;
+    await vi.waitFor(() => expect(wired.reviewStore.get(id)?.review).toBeDefined());
+
+    // Something new in the working copy, never committed.
+    writeFileSync(join(root, 'b.txt'), 'sonradan\n');
+
+    const again = await request(server).post(`/api/reviews/${encodeURIComponent(id)}/start`).send({});
+    expect(again.status).toBe(200);
+    await vi.waitFor(() => expect(wired.reviewStore.get(id)?.history?.length).toBe(1));
+    server.shutdown();
+  });
+
+  it('will not file a review of one branch under a record about another', async () => {
+    /*
+     * The id is built from project and branch. Following the checkout
+     * silently would file a review of `feature/B` under a record whose id,
+     * summary and history all say `main` — and start it under an id nobody
+     * is watching, so the screen polls the old one and shows nothing
+     * happening. That is the third time a button has looked broken for
+     * exactly this reason.
+     */
+    const root = makeRepo();
+    const wired = makeWired();
+    const server = createServer(makeConfig(), wired, isolated());
+
+    const first = await request(server).post('/api/reviews/local').send({ path: root });
+    const id: string = first.body.issueKey;
+    await vi.waitFor(() => expect(wired.reviewStore.get(id)?.review).toBeDefined());
+
+    execFileSync('git', ['checkout', '-qb', 'feature/başka'], { cwd: root });
+    writeFileSync(join(root, 'a.txt'), 'yine değişti\n');
+
+    const again = await request(server).post(`/api/reviews/${encodeURIComponent(id)}/start`).send({});
+
+    expect(again.status).toBe(409);
+    expect(again.body.error).toContain('feature/başka');
+    expect(again.body.error).toContain('main');
+    // And nothing was filed anywhere else.
+    expect(wired.reviewStore.list().map((r) => r.issueKey)).toEqual([id]);
+    server.shutdown();
+  });
+
   it('keeps an attached review attached when it is run again', async () => {
     /*
      * A confirmed review of BUY-9 is a review of BUY-9, even though the
