@@ -111,6 +111,38 @@ describe('DecisionBar', () => {
     expect(text).toContain('DRY RUN');
   });
 
+  it('does not promise a Jira transition on a review with no Jira issue', async () => {
+    /*
+     * A local review has nowhere to post: no issue to comment on, no status
+     * to move, nobody to reassign — see jiraReviewOutcomeAction. Naming a
+     * transition here would not be a setting somebody could change; it
+     * simply cannot happen.
+     */
+    outcomeConfig.applyChanges = true;
+    outcomeConfig.approveStatus = 'Ready for Test';
+    setDetail({ local: true });
+    await nextTick();
+
+    const wrapper = mount(DecisionBar);
+    expect(wrapper.text()).not.toContain('Ready for Test');
+    expect(wrapper.text()).toContain("Jira'ya yazılmaz");
+
+    // And the confirm dialog it would otherwise raise says the same thing —
+    // by not being raised at all.
+    const confirmed = vi.fn(() => true);
+    vi.stubGlobal('confirm', confirmed);
+    stubServer();
+    await wrapper.findAll('.btn').find((b) => b.text() === 'Onayla')!.trigger('click');
+    await flushPromises();
+    expect(confirmed).not.toHaveBeenCalled();
+  });
+
+  it('says the decision went nowhere but here, once a local one is made', async () => {
+    setDetail({ status: 'posted', local: true });
+    await nextTick();
+    expect(mount(DecisionBar).text()).toContain("Jira'ya bir şey yazılmadı");
+  });
+
   it('says what pressing them will actually do to Jira', async () => {
     outcomeConfig.applyChanges = true;
     outcomeConfig.approveStatus = 'Ready for Test';

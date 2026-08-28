@@ -154,6 +154,48 @@ describe('DetailPane while the first payload is in flight', () => {
   });
 });
 
+describe('starting a review', () => {
+  it('says why the server refused, instead of a button that does nothing', async () => {
+    /*
+     * This was `.catch(() => {})` with the response discarded, so every way
+     * /start can decline vanished. On a local review it declined every
+     * time — the id is not a Jira key — and "Yeniden incele" simply did
+     * nothing, with only a 400 in the devtools console to show for it.
+     */
+    vi.stubGlobal('fetch', async (url: string) => {
+      if (String(url).endsWith('/start')) {
+        return { ok: false, status: 400, json: async () => ({ error: 'bir issue anahtarına benzemiyor' }) };
+      }
+      return new Promise(() => {});
+    });
+
+    const wrapper = mount(DetailPane);
+    state.detail = DETAIL;
+    await flushPromises();
+
+    await wrapper.find('.detail-head-actions .btn-primary').trigger('click');
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('bir issue anahtarına benzemiyor');
+  });
+
+  it('does not blame the server for a refusal it never explained', async () => {
+    vi.stubGlobal('fetch', async (url: string) => {
+      if (String(url).endsWith('/start')) return { ok: false, status: 500, json: async () => ({}) };
+      return new Promise(() => {});
+    });
+
+    const wrapper = mount(DetailPane);
+    state.detail = DETAIL;
+    await flushPromises();
+
+    await wrapper.find('.detail-head-actions .btn-primary').trigger('click');
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('HTTP 500');
+  });
+});
+
 describe('DetailPane accessibility', () => {
   it('names the buttons that are only a symbol', async () => {
     const wrapper = mount(DetailPane);

@@ -91,6 +91,15 @@ export interface ReviewRecord {
   }> | null;
   /** Projects this change touches — used to scope repo-level notes. */
   projectPaths?: string[];
+  /**
+   * The directory a local review was started from, absolute.
+   *
+   * Only local reviews have one, and without it they could be started but
+   * never re-run: the id is `local:<project>@<branch>`, which names the
+   * project the way GitLab does and cannot be turned back into a path on
+   * this machine. "Yeniden incele" answered 400 for exactly that reason.
+   */
+  localPath?: string;
   /** What the issue asked for, as this review read it. Kept so a fix built
    * from these findings works from the same text — see core/requirement.ts. */
   requirement?: Requirement;

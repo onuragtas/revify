@@ -34,8 +34,13 @@ const reasonBox = ref<HTMLTextAreaElement | null>(null);
 const decided = computed(() => DECIDED[state.detail?.status ?? '']);
 const pending = computed(() => Boolean(state.detail?.review) && !decided.value);
 
+/** A review of a directory has no issue behind it, so no transition, no
+ * comment and no reassignment can follow from the decision. */
+const local = computed(() => Boolean(state.detail?.local));
+
 const outcomeSummary = computed(() => {
   if (!outcomeConfig.loaded) return '';
+  if (local.value) return 'Yerel review — karar burada kaydedildi, Jira\'ya bir şey yazılmadı.';
   if (!outcomeConfig.applyChanges) {
     return "DRY RUN — Jira'ya hiçbir şey yazılmadı, yapılacaklar yalnızca loglandı.";
   }
@@ -43,13 +48,20 @@ const outcomeSummary = computed(() => {
   return `Jira'ya yazıldı, durum "${status}", issue geliştiriciye atandı.`;
 });
 
-/** What the buttons will actually do — said plainly, because they look the
- * same whether or not this machine writes to Jira. */
-const hint = computed(() =>
-  outcomeConfig.applyChanges
+/**
+ * What the buttons will actually do — said plainly, because they look the
+ * same however this machine is configured and whatever the review is about.
+ *
+ * Promising a Jira transition on a review that has no Jira issue is the
+ * worst of the three: it is not a setting anybody can change, it simply
+ * cannot happen.
+ */
+const hint = computed(() => {
+  if (local.value) return "Yerel review — karar yalnızca burada kaydedilir, Jira'ya yazılmaz";
+  return outcomeConfig.applyChanges
     ? `Onay → "${outcomeConfig.approveStatus}" · Red → "${outcomeConfig.rejectStatus}" · her ikisi de geliştiriciye atar`
-    : "DRY RUN — Jira'ya yazılmaz",
-);
+    : "DRY RUN — Jira'ya yazılmaz";
+});
 
 function startReject(): void {
   rejecting.value = true;
@@ -60,7 +72,7 @@ async function decide(kind: 'approve' | 'reject'): Promise<void> {
   const issueKey = state.issueKey;
   if (!issueKey) return;
 
-  if (outcomeConfig.applyChanges) {
+  if (outcomeConfig.applyChanges && !local.value) {
     const status = kind === 'approve' ? outcomeConfig.approveStatus : outcomeConfig.rejectStatus;
     const question =
       kind === 'approve'
@@ -115,7 +127,7 @@ async function decide(kind: 'approve' | 'reject'): Promise<void> {
     </div>
 
     <div v-else class="decisionBar-row">
-      <span class="card-hint grow" :class="{ live: outcomeConfig.applyChanges }">{{ hint }}</span>
+      <span class="card-hint grow" :class="{ live: outcomeConfig.applyChanges && !local }">{{ hint }}</span>
       <button class="btn btn-reject" :disabled="busy" @click="startReject">Reddet</button>
       <button class="btn btn-approve" :disabled="busy" @click="decide('approve')">Onayla</button>
     </div>

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import request from 'supertest';
@@ -335,7 +336,87 @@ describe('reviewing by issue key', () => {
   });
 });
 
+/** A real repository with one uncommitted change — the shape a local review
+ * is actually asked about. Real git, because every question this path asks
+ * is a git question and a mock would only ever agree with the code. */
+function makeRepo(): string {
+  const root = join(dir, 'work');
+  const git = (...args: string[]) =>
+    execFileSync('git', args, { cwd: root, stdio: 'pipe', env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null' } });
+
+  execFileSync('git', ['init', '-q', '-b', 'main', root]);
+  git('config', 'user.email', 'a@b.c');
+  git('config', 'user.name', 'Test');
+  writeFileSync(join(root, 'a.txt'), 'ilk\n');
+  git('add', '.');
+  git('commit', '-qm', 'ilk');
+  writeFileSync(join(root, 'a.txt'), 'ilk\ndeğişti\n');
+  return root;
+}
+
 describe('reviewing a local directory', () => {
+  it('can be run a second time, from the directory it came from', async () => {
+    /*
+     * "Yeniden incele" answered 400 and the UI said nothing.
+     *
+     * A local review's id is `local:<project>@<branch>` — a name, not a
+     * path — so /start normalized it (uppercase, which matches nothing),
+     * failed `isIssueKey`, and refused. The record now remembers the
+     * directory, which is the only thing the id cannot carry.
+     */
+    const root = makeRepo();
+    const wired = makeWired();
+    const server = createServer(makeConfig(), wired, isolated());
+
+    const first = await request(server).post('/api/reviews/local').send({ path: root });
+    expect(first.status).toBe(200);
+    const id: string = first.body.issueKey;
+    expect(id).toContain('local:');
+    await vi.waitFor(() => expect(wired.reviewStore.get(id)?.review).toBeDefined());
+
+    // The very request the button makes, on the very id the server handed
+    // back — including the '/' and ':' that survive a round trip.
+    const again = await request(server).post(`/api/reviews/${encodeURIComponent(id)}/start`).send({ contextRepos: [] });
+    expect(again.status).toBe(200);
+
+    // A re-run archives what the last one said rather than dropping it.
+    await vi.waitFor(() => expect(wired.reviewStore.get(id)?.history?.length).toBe(1));
+    server.shutdown();
+  });
+
+  it('says why it will not re-run, instead of refusing in silence', async () => {
+    // A directory that has gone clean since the review has nothing to
+    // review; the reader has to be told that, not shown a dead button.
+    const root = makeRepo();
+    const wired = makeWired();
+    const server = createServer(makeConfig(), wired, isolated());
+
+    const first = await request(server).post('/api/reviews/local').send({ path: root });
+    const id: string = first.body.issueKey;
+
+    execFileSync('git', ['checkout', '--', '.'], { cwd: root });
+    const again = await request(server).post(`/api/reviews/${encodeURIComponent(id)}/start`).send({});
+
+    expect(again.status).toBe(409);
+    expect(again.body.error).toContain('incelenecek değişiklik yok');
+    server.shutdown();
+  });
+
+  it('describes a local review from the record rather than asking Jira', async () => {
+    // Jira has no such issue, so /prepare answered 404 and the UI showed
+    // "Jira detayları yüklenemedi" on a screen with no Jira behind it.
+    const root = makeRepo();
+    const server = createServer(makeConfig(), makeWired(), isolated());
+
+    const first = await request(server).post('/api/reviews/local').send({ path: root });
+    const meta = await request(server).get(`/api/reviews/${encodeURIComponent(first.body.issueKey)}/prepare`);
+
+    expect(meta.status).toBe(200);
+    expect(meta.body.description).toContain(root);
+    expect(meta.body.issueType).toBe('Yerel dizin');
+    server.shutdown();
+  });
+
   it('refuses a path that is not a repository, and one with nothing to review', async () => {
     const server = createServer(makeConfig(), makeWired(), isolated());
 

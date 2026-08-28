@@ -12,7 +12,7 @@ import { loadConfig, refreshSettingsOverrides, type AppConfig } from '../config/
 import { buildPipeline, type Wired } from '../core/registry.js';
 import { Pipeline } from '../core/pipeline.js';
 import { isIssueKey, normalizeIssueKey, toTriggerEvent, UnknownIssueError } from '../core/issueEvent.js';
-import { NotARepositoryError, readLocalChange } from '../core/localRepo.js';
+import { NotARepositoryError, readLocalChange, type LocalChange } from '../core/localRepo.js';
 import { ReviewQueue } from '../core/reviewQueue.js';
 import { AutoPrepareWatcher } from '../core/autoPrepare.js';
 import { ReminderWatcher } from '../core/reminderWatcher.js';
@@ -624,6 +624,9 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired, opti
       /** False when this machine's LLM provider has no file tools — the UI
        * says why instead of offering a button that cannot work. */
       fixAvailable: wired.fixTask.available && Boolean(record?.repoChanges?.length),
+      // Started from a directory: the decision is recorded here and nothing
+      // is written anywhere. See jiraReviewOutcomeAction.applyOutcome.
+      local: Boolean(record?.localPath),
       /** Where each project was last applied on this machine, so the apply
        * form opens filled in. */
       fixTargets: settings.get('fixTargets') ?? {},
@@ -1492,6 +1495,25 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired, opti
   /** What the reviewer sees before starting a run: the task as Jira states
    * it, and which repos the change touches. Read-only — nothing runs. */
   app.get('/api/reviews/:issueKey/prepare', async (req, res) => {
+    /*
+     * A local review has no Jira issue, and asking Jira about it answered
+     * 404 — which the UI showed as "Jira detayları yüklenemedi" on a screen
+     * where there was never anything to load. Everything true about it is
+     * already on the record, and none of it costs a git call.
+     */
+    const record = wired.reviewStore.get(req.params.issueKey);
+    if (record?.localPath) {
+      res.json({
+        issueKey: record.issueKey,
+        summary: record.summary,
+        description:
+          `Yerel dizin incelemesi — bağlı bir Jira issue'su yok.\n\nDizin: ${record.localPath}`,
+        issueType: 'Yerel dizin',
+        changedRepos: [],
+      });
+      return;
+    }
+
     const event = lastPolled.find((e) => e.id === req.params.issueKey);
     if (!event) {
       res.status(404).json({ error: 'Unknown issue — refresh the list first.' });
@@ -1553,35 +1575,52 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired, opti
    * is a report: the decision is recorded here and nothing is written to
    * Jira, because there is nothing to write it to.
    */
-  app.post('/api/reviews/local', async (req, res) => {
-    const path = String(req.body?.path ?? '').trim();
-    if (!path) {
-      res.status(400).json({ error: 'Bir dizin yolu gerekli.' });
-      return;
-    }
+  /**
+   * Everything a local review needs, from a directory.
+   *
+   * Shared by the two ways one gets started: typing a path, and pressing
+   * "Yeniden incele" on a local review that already exists. Re-running used
+   * to be impossible — `/start` only knew how to build an event out of a
+   * Jira issue, so it answered 400 for an id that is not an issue key —
+   * and a re-run that silently does nothing is the worst kind of button.
+   *
+   * Reading the directory again on every run is the point: the working copy
+   * has moved since the last review, which is usually *why* someone is
+   * asking for another one.
+   */
+  type LocalStart =
+    | { ok: true; event: TriggerEvent; id: string; summary: string; change: LocalChange }
+    | { ok: false; status: number; error: string };
 
-    let change;
+  async function buildLocalStart(
+    path: string,
+    { issueKey = '', contextRepos = [] as string[] } = {},
+  ): Promise<LocalStart> {
+    if (!path) return { ok: false, status: 400, error: 'Bir dizin yolu gerekli.' };
+
+    let change: LocalChange;
     try {
       change = await readLocalChange(path);
     } catch (err) {
-      const status = err instanceof NotARepositoryError ? 400 : 500;
-      res.status(status).json({ error: err instanceof Error ? err.message : String(err) });
-      return;
+      return {
+        ok: false,
+        status: err instanceof NotARepositoryError ? 400 : 500,
+        error: err instanceof Error ? err.message : String(err),
+      };
     }
 
     if (!change.committedDiff.trim() && !change.workingDiff.trim()) {
       // Reviewing nothing produces a confident review of nothing, which is
       // worse than saying there is nothing to review.
-      res.status(409).json({
+      return {
+        ok: false,
+        status: 409,
         error: `${change.projectPath} (${change.branch}) taban dalıyla aynı ve çalışma alanı temiz — incelenecek değişiklik yok.`,
-      });
-      return;
+      };
     }
 
-    const issueKey = String(req.body?.issueKey ?? '').trim().toUpperCase();
     if (issueKey && !isIssueKey(issueKey)) {
-      res.status(400).json({ error: `"${issueKey}" bir issue anahtarına benzemiyor (örn. BUY-2455).` });
-      return;
+      return { ok: false, status: 400, error: `"${issueKey}" bir issue anahtarına benzemiyor (örn. BUY-2455).` };
     }
 
     // Readable, and stable for the same directory and branch: re-running
@@ -1589,15 +1628,34 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired, opti
     const id = issueKey || `local:${change.projectPath}@${change.branch}`;
     const summary = `${change.projectPath} · ${change.branch}`;
 
-    const event: TriggerEvent = {
+    return {
+      ok: true,
       id,
-      data: {
-        repoPath: change.path,
-        contextRepos: Array.isArray(req.body?.contextRepos) ? req.body.contextRepos.map(String) : [],
-        summary,
-        ...(issueKey ? { issueKey } : {}),
+      summary,
+      change,
+      event: {
+        id,
+        data: {
+          repoPath: change.path,
+          contextRepos,
+          summary,
+          ...(issueKey ? { issueKey } : {}),
+        },
       },
     };
+  }
+
+  app.post('/api/reviews/local', async (req, res) => {
+    const started = await buildLocalStart(String(req.body?.path ?? '').trim(), {
+      issueKey: String(req.body?.issueKey ?? '').trim().toUpperCase(),
+      contextRepos: Array.isArray(req.body?.contextRepos) ? req.body.contextRepos.map(String) : [],
+    });
+    if (!started.ok) {
+      res.status(started.status).json({ error: started.error });
+      return;
+    }
+
+    const { event, id, summary, change } = started;
     lastPolled = [...lastPolled.filter((e) => e.id !== id), event];
 
     wired.reviewStore.archiveCurrentReview(id);
@@ -1610,11 +1668,42 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired, opti
       rejectionReason: undefined,
       fix: undefined,
       projectPaths: [change.projectPath],
+      // The one thing the id cannot carry: where on this machine it came
+      // from. Without it the review can never be run a second time.
+      localPath: change.path,
     });
 
     const position = queue.enqueue(event);
-    res.json({ ok: true, issueKey: id, summary, position, local: !issueKey });
+    res.json({ ok: true, issueKey: id, summary, position, local: !event.data.issueKey });
   });
+
+  /**
+   * Clears the way for a run that is about to replace an existing one.
+   *
+   * The previous review is archived rather than dropped — a re-review is
+   * usually a response to something, and losing what was said last time
+   * makes it impossible to see what changed. The rejection reason and the
+   * patch go, though: both belong to findings that are about to stop
+   * existing, and applying a stale patch would undo work just done.
+   */
+  function restartRecord(event: TriggerEvent, extra: Partial<ReviewRecord> = {}): void {
+    wired.reviewStore.archiveCurrentReview(event.id);
+    progressBus.clear(event.id);
+    wired.reviewStore.upsert(event.id, {
+      summary: typeof event.data.summary === 'string' ? event.data.summary : undefined,
+      review: undefined,
+      error: undefined,
+      trigger: 'manual',
+      rejectionReason: undefined,
+      fix: undefined,
+      ...extra,
+    });
+
+    // Any fix still in the line belonged to the review being replaced. Its
+    // findings are about to stop existing, so let it go rather than spend
+    // minutes producing a patch against them.
+    queue.cancel(event.id, 'fix');
+  }
 
   app.post('/api/reviews/:issueKey/start', async (req, res) => {
     /*
@@ -1629,6 +1718,34 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired, opti
      * an issue *is* the finding. Approve and Reject are still clicks, so
      * nothing reaches Jira on this path either.
      */
+    // Repos the reviewer picked as worth having on disk. Cloning happens
+    // inside the run so its progress shows up in the step log.
+    const contextRepos = Array.isArray(req.body?.contextRepos)
+      ? req.body.contextRepos.map(String)
+      : [];
+
+    /*
+     * A local review is re-run from its directory, not from Jira.
+     *
+     * Its id is `local:<project>@<branch>` — a name, not a path — so this
+     * route used to normalize it (uppercasing it out of any possible match),
+     * fail `isIssueKey`, and answer 400. The button did nothing, and said
+     * nothing about why. The record remembers where it came from; read the
+     * directory again and build the same event typing the path would.
+     */
+    const localPath = wired.reviewStore.get(req.params.issueKey)?.localPath;
+    if (localPath) {
+      const started = await buildLocalStart(localPath, { contextRepos });
+      if (!started.ok) {
+        res.status(started.status).json({ error: started.error });
+        return;
+      }
+      lastPolled = [...lastPolled.filter((e) => e.id !== started.id), started.event];
+      restartRecord(started.event, { projectPaths: [started.change.projectPath], localPath });
+      res.json({ ok: true, position: queue.enqueue(started.event) });
+      return;
+    }
+
     const issueKey = normalizeIssueKey(req.params.issueKey);
     let event = lastPolled.find((e) => e.id === issueKey);
 
@@ -1652,41 +1769,9 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired, opti
       }
     }
 
-    // Repos the reviewer picked as worth having on disk. Cloning happens
-    // inside the run so its progress shows up in the step log.
-    const contextRepos = Array.isArray(req.body?.contextRepos)
-      ? req.body.contextRepos.map(String)
-      : [];
     event.data.contextRepos = contextRepos;
-
-    // Keep the previous run's review so it can be compared against the new
-    // one — a re-review is usually a response to something, and losing
-    // what was said last time makes it impossible to see what changed.
-    wired.reviewStore.archiveCurrentReview(event.id);
-    progressBus.clear(event.id);
-    wired.reviewStore.upsert(event.id, {
-      summary: typeof event.data.summary === 'string' ? event.data.summary : undefined,
-      review: undefined,
-      error: undefined,
-      trigger: 'manual',
-      // Belongs to the decision that just got superseded — keeping it would
-      // attach the old rejection's reason to a brand new review.
-      rejectionReason: undefined,
-      // Same reasoning, and it matters more: a patch is built from specific
-      // findings, and after a re-review nobody can tell which review it
-      // belonged to. Applying a stale one would undo work that was just done.
-      fix: undefined,
-    });
-
-    // Any fix still in the line belonged to the review being replaced. Its
-    // findings are about to stop existing, so let it go rather than spend
-    // minutes producing a patch against them.
-    queue.cancel(event.id, 'fix');
-
-    // The queue sets the status — running if it starts now, queued
-    // otherwise — and starts the run itself. The caller polls /detail.
-    const position = queue.enqueue(event);
-    res.json({ ok: true, position });
+    restartRecord(event);
+    res.json({ ok: true, position: queue.enqueue(event) });
   });
 
   /** Stops a review that is running or waiting. The record keeps whatever

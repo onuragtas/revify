@@ -512,3 +512,93 @@ describe('CodeReviewTask — what travels with the review', () => {
     expect(result.meta?.requirement).toEqual({ description: '', comments: [] });
   });
 });
+
+
+describe('CodeReviewTask — a review with no Jira issue behind it', () => {
+  const captured: { prompt?: string } = {};
+  const llm: LlmProvider = {
+    canEditFiles: false,
+    generate: async ({ prompt }) => {
+      captured.prompt = prompt;
+      return 'Verdict: Approve';
+    },
+  };
+
+  /** Started from a directory: there is no issue key, and `event.id` is the
+   * key the record is stored under. */
+  const localEvent: TriggerEvent = {
+    id: 'local:team/api@feature/x',
+    data: { repoPath: '/home/me/projects/api', summary: 'team/api · feature/x' },
+  };
+
+  const change = {
+    projectPath: 'team/api',
+    branchName: 'feature/x',
+    baseBranch: 'main',
+    diff: 'd',
+    files: [],
+    repoPath: '/home/me/projects/api',
+  };
+
+  it('calls the run by its id rather than by the word "undefined"', async () => {
+    /*
+     * `event.data.issueKey` is undefined for a local review, and it was read
+     * unconditionally. The word travelled into the prompt — the model was
+     * told "the description of undefined binds" — and into the title.
+     */
+    const result = await new CodeReviewTask(llm).run(localEvent, {
+      repoChanges: [change],
+    } as unknown as Record<string, unknown>);
+
+    expect(captured.prompt).not.toContain('undefined');
+    expect(captured.prompt).toContain('local:team/api@feature/x');
+    expect(result.title).not.toContain('undefined');
+  });
+
+  it('looks up the answers and disputes under the key the record uses', async () => {
+    // Three reviewStore lookups keyed on `undefined` meant a dispute or a
+    // "Review'i düzelt" instruction typed against a local review reached
+    // the next run as nothing at all.
+    const asked: string[] = [];
+    const reviewStore = {
+      get: (key: string) => {
+        asked.push(key);
+        return { revisionRequest: 'kısa tut' };
+      },
+    };
+
+    await new CodeReviewTask(llm, 'English', undefined, reviewStore as never).run(localEvent, {
+      repoChanges: [change],
+    } as unknown as Record<string, unknown>);
+
+    expect(asked).not.toContain(undefined);
+    expect(new Set(asked)).toEqual(new Set(['local:team/api@feature/x']));
+    expect(captured.prompt).toContain('kısa tut');
+  });
+
+  it('does not blame a Jira branch when it was handed a directory', async () => {
+    /*
+     * With `localRepoDiffContext` missing from the wiring nothing collected
+     * the directory, and the run reported "No linked GitLab branch was found
+     * for undefined via the Jira development panel" — about an issue that
+     * never existed. The reader has to be told what actually happened.
+     */
+    const result = await new CodeReviewTask(llm).run(localEvent, {
+      repoChanges: [],
+    } as unknown as Record<string, unknown>);
+
+    expect(result.markdown).not.toContain('Jira development panel');
+    expect(result.markdown).toContain('/home/me/projects/api');
+    expect(result.markdown).toContain('localRepoDiffContext');
+  });
+
+  it('still explains a Jira issue whose branch was never linked', async () => {
+    const result = await new CodeReviewTask(llm).run(
+      { id: 'BUY-1', data: { issueKey: 'BUY-1', summary: 'İade' } },
+      { repoChanges: [] } as unknown as Record<string, unknown>,
+    );
+
+    expect(result.markdown).toContain('Jira development panel');
+    expect(result.markdown).toContain('BUY-1');
+  });
+});

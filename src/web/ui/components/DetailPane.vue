@@ -148,17 +148,39 @@ onMounted(() => {
   if (fromUrl) openIssue(fromUrl);
 });
 
+const startError = ref('');
+
 async function start(): Promise<void> {
   const issueKey = state.issueKey;
   if (!issueKey) return;
+  startError.value = '';
   openIssue(issueKey, { force: true });
   showTab('process', { pin: false });
 
-  await fetch(`/api/reviews/${encodeURIComponent(issueKey)}/start`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ contextRepos: [...contextSelection.repos] }),
-  }).catch(() => {});
+  /*
+   * A refusal has to be said out loud.
+   *
+   * This used to be `.catch(() => {})` with the response thrown away, so
+   * every way the server can decline — an issue Jira does not have, a
+   * directory with nothing to review, an id it could not make sense of —
+   * produced a button that did nothing and explained nothing. That is
+   * exactly how "yeniden incele" failed silently on local reviews.
+   */
+  try {
+    const response = await fetch(`/api/reviews/${encodeURIComponent(issueKey)}/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contextRepos: [...contextSelection.repos] }),
+    });
+    const body = await response.json().catch(() => ({}));
+    if (body.error || !response.ok) {
+      startError.value = body.error ?? `İnceleme başlatılamadı (HTTP ${response.status}).`;
+      return;
+    }
+  } catch (err) {
+    startError.value = `İnceleme başlatılamadı: ${(err as Error).message}`;
+    return;
+  }
 
   // Only now is the record 'queued'. The poll openIssue started read the
   // status as it was before this request — for an issue already reviewed
@@ -292,6 +314,7 @@ function back(): void {
           click an issue that has a review and are told it has none. An empty
           state that lies is worse than a blank one.
         -->
+        <StateNote v-if="startError" kind="error">{{ startError }}</StateNote>
         <StateNote v-if="!detail" kind="loading">{{ state.issueKey }} okunuyor…</StateNote>
 
         <template v-else>

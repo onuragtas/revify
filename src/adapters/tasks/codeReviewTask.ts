@@ -367,7 +367,20 @@ export class CodeReviewTask implements AiTask {
     context: Record<string, unknown>,
     signal?: AbortSignal,
   ): Promise<TaskResult> {
-    const issueKey = event.data.issueKey as string;
+    /*
+     * What to call this run, whether or not Jira named it.
+     *
+     * A local review has no `issueKey` — it was started from a directory —
+     * and this read `event.data.issueKey` unconditionally. `undefined` then
+     * travelled everywhere: into the prompt ("the description of undefined
+     * binds"), into the review's title, into `promptStore.save`, and into
+     * the three `reviewStore.get` calls below, which is why a dispute or a
+     * "Review'i düzelt" instruction on a local review was silently ignored.
+     *
+     * `event.id` is the key the record is stored under and is always there;
+     * when Jira did name the issue the two are the same string.
+     */
+    const issueKey = (event.data.issueKey as string | undefined) ?? event.id;
     const summary = event.data.summary as string;
     const jiraIssue = context.jiraIssue as JiraIssueDetail | undefined;
     const repoChanges = (context.repoChanges as RepoChange[] | undefined) ?? [];
@@ -383,9 +396,24 @@ export class CodeReviewTask implements AiTask {
     const projectPaths = repoChanges.map((c) => c.projectPath);
 
     if (repoChanges.length === 0) {
+      /*
+       * Nothing to review, said in terms of what was actually asked.
+       *
+       * A run started from a directory has no Jira development panel and
+       * never had a linked branch, so blaming one sends the reader to look
+       * at a Jira issue that does not exist. It happened: `localRepoDiffContext`
+       * was missing from the wiring, so the collector never ran, and every
+       * local review came back reporting a GitLab branch it was never about.
+       */
+      const local = typeof event.data.repoPath === 'string';
       return {
         title: `Code review: ${issueKey} — ${summary}`,
-        markdown: `No linked GitLab branch was found for **${issueKey}** via the Jira development panel. Skipping AI review.`,
+        markdown: local
+          ? `\`${event.data.repoPath}\` için incelenecek bir değişiklik toplanamadı. ` +
+            'Dizin taban dalıyla aynı ve çalışma alanı temiz olabilir; ' +
+            "ya da `wiring.contextCollectors` listesinde `localRepoDiffContext` yok — " +
+            'o zaman yerel dizin hiç okunmaz.'
+          : `No linked GitLab branch was found for **${issueKey}** via the Jira development panel. Skipping AI review.`,
         meta: { projectPaths, repoChanges: [], requirement: toRequirement(jiraIssue?.fields.description) },
       };
     }

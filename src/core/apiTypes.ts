@@ -137,6 +137,15 @@ export interface ReviewDetail {
   /** False when this machine's provider has no file tools, or the review was
    * produced without a checkout. */
   fixAvailable: boolean;
+  /**
+   * True when this review came from a directory rather than a Jira issue.
+   *
+   * The decision means something different then: there is no issue to
+   * comment on, no status to move and nobody to reassign, so approving is a
+   * record kept here and nothing more. The buttons have to say so — naming a
+   * Jira transition that provably cannot happen is worse than saying nothing.
+   */
+  local: boolean;
   /** Where each project was last applied on this machine. */
   fixTargets: Record<string, string>;
   clarifications: Array<{ question: string; answer: string; answeredAt: string }>;
