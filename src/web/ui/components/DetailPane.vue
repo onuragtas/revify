@@ -2,10 +2,24 @@
 /**
  * One issue: what Jira says, what the reviewer said, and what happens next.
  *
- * Nothing here starts on its own. The list is a read-only poll; a review
- * begins when somebody presses a button, and approving or rejecting is
- * always a click. That is the whole safety model, so the buttons say plainly
- * what they will do.
+ * The layout answers a complaint that everything sat at the same weight —
+ * seven buttons in the header, seven tabs under it, seven Jira chips under
+ * that, and the approve/reject card at the *bottom of the review*, so on a
+ * long one you scrolled past every finding to reach the only thing the tool
+ * exists for. So:
+ *
+ *   - the decision is pinned to the foot of the panel and never scrolls;
+ *   - the header carries the one action you would take next, and the rest
+ *     live one click away in `⋯`;
+ *   - four tabs instead of seven, grouped by what you are doing: reading the
+ *     review, reading the change, handling the patch, or looking at how the
+ *     review came about;
+ *   - the Jira chips moved inside the description card they describe.
+ *
+ * Nothing was removed — every panel, button and field is still here, in the
+ * place it belongs. Nothing starts on its own either: the list is a
+ * read-only poll, a review begins when somebody presses a button, and
+ * approving or rejecting is always a click.
  */
 import { computed, onMounted, ref, watch } from 'vue';
 import { refreshList, state } from '../bridge';
@@ -15,9 +29,9 @@ import { outcomeConfig } from '../appConfig';
 import { session } from '../session';
 import { formatDate, statusLabel } from '../format';
 import StateNote from './StateNote.vue';
-import { available as fixAvailable } from '../fixState';
 
-import DecisionCard from './DecisionCard.vue';
+import ActionMenu from './ActionMenu.vue';
+import DecisionBar from './DecisionBar.vue';
 import DiffPanel from './DiffPanel.vue';
 import FixButton from './FixButton.vue';
 import FixPanel from './FixPanel.vue';
@@ -27,14 +41,21 @@ import PromptCards from './PromptCards.vue';
 import ReviewPanel from './ReviewPanel.vue';
 import VerifyPanel from './VerifyPanel.vue';
 
+/**
+ * Four tabs, and which of the panels' own counters each one speaks for.
+ *
+ * The counters are still reported per panel — VerifyPanel counts open
+ * questions, HistoryPanel counts previous reviews — so grouping them here
+ * costs nothing and no panel had to learn about tabs. `Review` shows the
+ * count that means *you have something to answer*; the notes count is
+ * informational and stays inside the notes card rather than turning the
+ * tab's badge into a number of two different things added together.
+ */
 const TABS = [
-  ['review', 'Review'],
-  ['steps', 'Adımlar'],
-  ['diff', 'Değişiklik'],
-  ['patch', 'Yama'],
-  ['verify', 'Doğrulama'],
-  ['notes', 'Notlar'],
-  ['history', 'Geçmiş'],
+  { name: 'review', label: 'Review', countKey: 'verify' },
+  { name: 'diff', label: 'Değişiklik', countKey: 'diff' },
+  { name: 'patch', label: 'Yama', countKey: 'patch' },
+  { name: 'process', label: 'Süreç', countKey: 'history' },
 ] as const;
 
 const detail = computed(() => state.detail);
@@ -116,7 +137,7 @@ watch(
   () => [detail.value?.status, Boolean(detail.value?.review)] as const,
   ([status, hasReview]) => {
     if (tabs.pinned) return;
-    if (status === 'running' || status === 'queued') showTab('steps', { pin: false });
+    if (status === 'running' || status === 'queued') showTab('process', { pin: false });
     else if (hasReview) showTab('review', { pin: false });
   },
 );
@@ -131,7 +152,7 @@ async function start(): Promise<void> {
   const issueKey = state.issueKey;
   if (!issueKey) return;
   openIssue(issueKey, { force: true });
-  showTab('steps', { pin: false });
+  showTab('process', { pin: false });
 
   await fetch(`/api/reviews/${encodeURIComponent(issueKey)}/start`, {
     method: 'POST',
@@ -191,60 +212,73 @@ function back(): void {
           </h2>
           <span class="badge" :class="`badge-${detail?.status ?? 'idle'}`">{{ badge }}</span>
           <span id="detailSummary">{{ meta?.summary ?? detail?.summary ?? '' }}</span>
-          <span class="muted stampText">{{ stamp }}</span>
           <span id="connState" class="error" role="status" aria-live="polite">
             {{ connection.error }}
           </span>
 
+          <!--
+            One action, and a menu.
+
+            Whatever the review is doing, there is a single obvious next
+            move: start it, or stop it. Everything else is occasional, and
+            putting six buttons beside the one that matters made the reader
+            re-read the row every time.
+          -->
           <div class="detail-head-actions">
-            <button class="btn btn-primary" :disabled="detail?.status === 'queued'" @click="start">
-              {{ startLabel }}
-            </button>
-            <button v-if="session.configured" class="btn" title="Bu işi bir takım arkadaşına devret" @click="openModal('assign')">
-              Ata…
-            </button>
-            <FixButton />
             <button v-if="inFlight" class="btn btn-reject" @click="stop">Durdur</button>
-            <button class="btn" @click="openModal('context')">Bağlam…</button>
-            <!-- Apart from the others: everything to its left starts or
-                 continues work, and this one throws it away. -->
-            <button
-              class="btn btn-ghost detachedAction"
-              title="Bu görevin review durumunu sıfırla"
-              @click="clear"
-            >
-              Temizle
-            </button>
+            <button v-else class="btn btn-primary" @click="start">{{ startLabel }}</button>
+
+            <ActionMenu>
+              <button v-if="inFlight" class="btn btn-ghost" :disabled="detail?.status === 'queued'" @click="start">
+                {{ startLabel }}
+              </button>
+              <FixButton />
+              <button
+                v-if="session.configured"
+                class="btn btn-ghost"
+                title="Bu işi bir takım arkadaşına devret"
+                @click="openModal('assign')"
+              >
+                Ata…
+              </button>
+              <button class="btn btn-ghost" @click="openModal('context')">Bağlam…</button>
+              <!-- Apart from the others: everything above starts or continues
+                   work, and this one throws it away. -->
+              <button
+                class="btn btn-ghost detachedAction"
+                title="Bu görevin review durumunu sıfırla"
+                @click="clear"
+              >
+                Temizle
+              </button>
+            </ActionMenu>
           </div>
         </div>
 
-        <div class="meta-chips">
-          <span v-for="[label, value] in chips" :key="label" class="meta-chip">
-            <b>{{ label }}</b>{{ value }}
-          </span>
-        </div>
-
-        <!-- Tabs, said so: without the roles a screen reader hears seven
-             unrelated buttons and no sense of which one is showing. -->
+        <!-- Tabs, said so: without the roles a screen reader hears four
+             unrelated buttons and no sense of which one is showing. The
+             timestamp rides along at the end of the row because it describes
+             the review these tabs are showing, not the issue. -->
         <nav class="tabs" role="tablist">
           <button
-            v-for="[name, label] in TABS"
-            :key="name"
+            v-for="tab in TABS"
+            :key="tab.name"
             class="tab"
-            :class="{ active: tabs.active === name }"
+            :class="{ active: tabs.active === tab.name }"
             role="tab"
-            :aria-selected="tabs.active === name"
-            @click="showTab(name)"
+            :aria-selected="tabs.active === tab.name"
+            @click="showTab(tab.name)"
           >
-            {{ label }}
+            {{ tab.label }}
             <span
-              v-if="tabs.counts[name]?.count"
+              v-if="tabs.counts[tab.countKey]?.count"
               class="tab-count"
-              :class="{ alert: tabs.counts[name].alert }"
+              :class="{ alert: tabs.counts[tab.countKey].alert }"
             >
-              {{ tabs.counts[name].count }}
+              {{ tabs.counts[tab.countKey].count }}
             </span>
           </button>
+          <span class="muted stampText">{{ stamp }}</span>
         </nav>
       </div>
 
@@ -263,6 +297,14 @@ function back(): void {
         <template v-else>
         <div v-if="detail.error" id="errorBox" role="alert">{{ detail.error }}</div>
 
+        <!--
+          Review: the findings, plus the two things you say back to them.
+
+          Doğrulama and Notlar used to be tabs of their own, which meant
+          disputing a finding happened on a screen where the finding was not
+          visible. They are sections of this panel now, below the review they
+          are about.
+        -->
         <div class="panel" :class="{ active: tabs.active === 'review' }" role="tabpanel">
           <details class="card issue-desc-card">
             <summary>Jira açıklaması</summary>
@@ -270,13 +312,30 @@ function back(): void {
                  before it answers is an answer nobody gave. -->
             <StateNote v-if="!meta && !metaError" kind="loading">Jira'dan okunuyor…</StateNote>
             <StateNote v-else-if="metaError" kind="error">{{ metaError }}</StateNote>
-            <div v-else id="issueDesc">{{ meta?.description || '(açıklama yok)' }}</div>
+            <template v-else>
+              <div class="meta-chips">
+                <span v-for="[label, value] in chips" :key="label" class="meta-chip">
+                  <b>{{ label }}</b>{{ value }}
+                </span>
+              </div>
+              <div id="issueDesc">{{ meta?.description || '(açıklama yok)' }}</div>
+            </template>
           </details>
           <ReviewPanel />
-          <DecisionCard />
+          <VerifyPanel />
+          <NotesPanel />
         </div>
 
-        <div class="panel" :class="{ active: tabs.active === 'steps' }" role="tabpanel">
+        <div class="panel" :class="{ active: tabs.active === 'diff' }" role="tabpanel"><DiffPanel /></div>
+        <div class="panel" :class="{ active: tabs.active === 'patch' }" role="tabpanel"><FixPanel /></div>
+
+        <!--
+          Süreç: how this review came to exist — the live log, the exact
+          prompts that were sent, and the reviews that came before it. All
+          three answer "why does it say that", and none of them is something
+          you read while deciding.
+        -->
+        <div class="panel" :class="{ active: tabs.active === 'process' }" role="tabpanel">
           <div class="card">
             <h3>Çalışma adımları</h3>
             <p class="card-hint">
@@ -288,15 +347,14 @@ function back(): void {
             <div id="steps" ref="stepsBox" role="log" aria-live="polite">{{ steps }}</div>
           </div>
           <div id="promptCards"><PromptCards /></div>
+          <HistoryPanel />
         </div>
-
-        <div class="panel" :class="{ active: tabs.active === 'diff' }" role="tabpanel"><DiffPanel /></div>
-        <div class="panel" :class="{ active: tabs.active === 'patch' }" role="tabpanel"><FixPanel /></div>
-        <div class="panel" :class="{ active: tabs.active === 'verify' }" role="tabpanel"><VerifyPanel /></div>
-        <div class="panel" :class="{ active: tabs.active === 'notes' }" role="tabpanel"><NotesPanel /></div>
-        <div class="panel" :class="{ active: tabs.active === 'history' }" role="tabpanel"><HistoryPanel /></div>
         </template>
       </div>
+
+      <!-- Outside the scroller on purpose: the review scrolls, the decision
+           does not. -->
+      <DecisionBar v-if="detail" />
     </div>
   </section>
 </template>

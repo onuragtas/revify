@@ -279,3 +279,64 @@ görerek doğruladım.
 Detay başlığındaki altı düğme eşit ağırlıktaydı; solundaki her şey işi
 başlatan veya sürdüren, **Temizle** ise onu atan bir eylem. Ayırıcı bir
 çizgiyle ayrıldı.
+
+## Faz 2 — düzenin kendisi
+
+Faz 1 doğruluğu düzeltti: kaybolan özellikleri geri getirdi, boş durumların
+yalan söylemesini bitirdi, erişilebilirliği tamamladı. Ama ekranda görülen
+şey aynı kaldı — *"arayüz karışık görünüyor, her şey her yerde sanki"*.
+
+Hisle değil, sayarak teşhis edildi:
+
+| | önce | sonra |
+|---|---|---|
+| Detay başlığındaki eleman | 16 | 3 (←, tek eylem, `⋯`) |
+| Detay sekmesi | 7 | 4 |
+| Başlık altındaki Jira çipi | 7 | 0 (açıklama kartının içinde) |
+| Üst bar sağ köşesindeki düğme | 6 | 3 |
+| Kenar çubuğundaki başlangıç satırı | 2 | 1 |
+| Karar (Onayla/Reddet) | review'in **altında**, kaydırma gerekli | panelin dibinde sabit |
+
+Hiçbir özellik kaldırılmadı; envanter bunu doğruluyor (28 bileşen, 6 modal,
+27 uç). Değişen tek şey nerede durdukları.
+
+### Karar öne
+
+Bu aracın tamamı "karar ver" içindir, ama Onayla/Reddet review'in en altında
+bir karttı: uzun bir review'de her bulguyu geçip kaydırman gerekiyordu, ve
+issue'yu ilk açtığında seni bekleyen bir karar olduğu hiç belli olmuyordu.
+
+Artık `.detail-scroll`'un **kardeşi**, çocuğu değil — review kayar, karar
+kaymaz. Reddet önce gerekçe kutusunu açıyor: gerekçe, değişikliği yapan
+geliştiricinin okuduğu tek şey, ve kalıcı bir textarea olarak kimse
+doldurmuyordu.
+
+### Tek eylem ve bir menü
+
+Review ne durumda olursa olsun tek bir bariz sonraki hamle var: başlat ya da
+durdur. Ata…, Düzelt…, Bağlam…, Temizle ara sıra kullanılıyor ve yanına
+konduklarında okuyucu satırı her bakışında yeniden okuyordu. Onlar `⋯`
+menüsünde. Aynı ilke üst barda da: ⚙ / ⤓ / ◐ köşede üç adsız simgeydi, yani
+üç tahmin; artık kelimeleri olan tek bir menü.
+
+### Yediden dörde
+
+Sekmeler "ne yapıyorsun"a göre gruplandı: **Review** (bulgular + doğrulama +
+notlar), **Değişiklik**, **Yama**, **Süreç** (adımlar + prompt'lar + geçmiş).
+Doğrulama ayrı bir sekmeyken bir bulguya itiraz etmek, bulgunun görünmediği
+bir ekranda oluyordu — artık itiraz ettiğin şeyin hemen altında.
+
+### Tek kutu
+
+Kenar çubuğunda "anahtarla incele" ve "dizini incele" diye iki satır vardı;
+bu, okuyucudan yazmadan önce kendi girdisini sınıflandırmasını istiyordu. Bir
+Jira anahtarı ile bir dizin birbirine benzemez, o yüzden kutu kendisi karar
+veriyor — ve hangisine karar verdiğini yazıyor, çünkü sessiz bir tahmin
+sorudan kötüdür.
+
+### Geri dönmesini engelleyen şey
+
+`density.test.ts` bileşenleri gerçekten render edip **görünen** kontrolleri
+sayıyor; `⋯` arkasındaki bir eylem ekranda değildir, ve dosyayı regex'le
+tarayan bir ölçüm bunu ayırt edemez. Tavanların içinde pay var — amaç
+tasarımı dondurmak değil, bir satırın sessizce yeniden büyümesini yakalamak.

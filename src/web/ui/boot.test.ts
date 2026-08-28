@@ -38,8 +38,21 @@ describe('the built bundle', () => {
       addEventListener: () => {},
       removeEventListener: () => {},
     }));
-    // A browser has no `process`, and neither may this.
-    Object.defineProperty(globals, 'process', { value: undefined, configurable: true, writable: true });
+    /*
+     * No `process.env`, which is the half a browser lacks.
+     *
+     * Removing `process` outright is the truer simulation, but vitest's own
+     * worker reaches for it on background ticks and dies mid-test. This keeps
+     * the one method vitest needs and nothing else: the bundle's
+     * `process.env.NODE_ENV` still throws, the module still fails to mount,
+     * and the assertion below still catches the regression.
+     */
+    const nextTick = (realProcess as { nextTick: (...a: unknown[]) => void }).nextTick;
+    Object.defineProperty(globals, 'process', {
+      value: { nextTick: nextTick.bind(realProcess) },
+      configurable: true,
+      writable: true,
+    });
 
     await import(/* @vite-ignore */ '../public/assets/ui.js' as string);
     await new Promise((resolve) => setTimeout(resolve, 50));

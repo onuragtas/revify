@@ -138,6 +138,21 @@ async function load(): Promise<void> {
     return;
   }
 
+  /*
+   * A 200 that is not the settings payload.
+   *
+   * Every read below indexes `data.settings`, so an error body — or an
+   * older server that answers a different shape — threw a TypeError out of
+   * an unawaited `onMounted`, and the dialog stayed blank with nothing but
+   * a console entry to explain it. Say what happened instead.
+   */
+  if (!data || typeof data.settings !== 'object' || data.settings === null) {
+    result.value = data?.error
+      ? `Ayarlar okunamadı: ${data.error}`
+      : 'Ayarlar okunamadı: sunucu beklenmedik bir yanıt verdi.';
+    return;
+  }
+
   settingsPath.value = data.settingsPath;
   missing.value = data.setup?.configured ? [] : (data.setup?.missing ?? []);
 

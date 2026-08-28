@@ -148,7 +148,7 @@ export function openIssue(issueKey: string, { force = false } = {}): void {
  */
 export async function startReview(issueKey: string, contextRepos: string[] = []): Promise<void> {
   openIssue(issueKey, { force: true });
-  showTab('steps', { pin: false });
+  showTab('process', { pin: false });
 
   await fetch(`/api/reviews/${encodeURIComponent(issueKey)}/start`, {
     method: 'POST',

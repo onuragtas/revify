@@ -60,8 +60,87 @@ describe('DetailPane while the first payload is in flight', () => {
     // The panel-wide note is gone; the Jira description keeps its own,
     // because that is a second request and still in flight.
     expect(wrapper.text()).not.toContain('BUY-1 okunuyor…');
-    expect(wrapper.findAll('[role="tabpanel"]').length).toBe(7);
+    expect(wrapper.findAll('[role="tabpanel"]').length).toBe(4);
     expect(wrapper.text()).toContain('AI Review');
+  });
+
+  it('groups the old seven tabs into four without dropping a panel', async () => {
+    /*
+     * The tabs went 7 → 4 because everything carried the same weight and
+     * nothing could be found. Grouping is only allowed to move a panel, not
+     * to lose one — so this asserts the four panels *and* that the sections
+     * which stopped being tabs are still rendered, under the tab they moved
+     * to.
+     */
+    const wrapper = mount(DetailPane);
+    state.detail = DETAIL;
+    await flushPromises();
+
+    expect(wrapper.findAll('[role="tab"]').map((t) => t.text().trim())).toEqual([
+      'Review',
+      'Değişiklik',
+      'Yama',
+      'Süreç',
+    ]);
+
+    // Doğrulama and Notlar are sections of Review now: disputing a finding
+    // should not happen on a screen where the finding is invisible.
+    const review = wrapper.findAll('[role="tabpanel"]')[0];
+    expect(review.text()).toContain('AI Review');
+    expect(review.text()).toContain('Review notları');
+
+    // Adımlar, the prompts and Geçmiş are all "how did this review happen".
+    const process = wrapper.findAll('[role="tabpanel"]')[3];
+    expect(process.find('#steps').exists()).toBe(true);
+    expect(process.find('#promptCards').exists()).toBe(true);
+    expect(process.text()).toContain('önceki inceleme yok');
+  });
+
+  it('keeps the decision out of the scrolling review', async () => {
+    /*
+     * Onayla/Reddet used to be a card at the bottom of the review, so a long
+     * review hid the only thing this tool exists for behind a scroll. It
+     * lives in the panel's footer now — a sibling of the scroller, not a
+     * child of it.
+     */
+    const wrapper = mount(DetailPane);
+    state.detail = DETAIL;
+    await flushPromises();
+
+    expect(wrapper.find('.decisionBar').exists()).toBe(true);
+    expect(wrapper.find('.detail-scroll .decisionBar').exists()).toBe(false);
+    expect(wrapper.find('.decisionBar').text()).toContain('Onayla');
+  });
+
+  it('shows one action and puts the rest behind a menu', async () => {
+    /*
+     * Sixteen elements shared the header row. The reader should see the next
+     * move — start the review — and find the occasional ones (Ata, Bağlam,
+     * Temizle) only when they go looking.
+     */
+    const wrapper = mount(DetailPane);
+    state.detail = DETAIL;
+    await flushPromises();
+
+    const actions = wrapper.find('.detail-head-actions');
+    expect(actions.text()).toContain('Yeniden incele');
+    expect(actions.text()).not.toContain('Bağlam…');
+
+    await wrapper.find('.actionMenu > .btn').trigger('click');
+    expect(wrapper.find('.actionMenu-list').text()).toContain('Bağlam…');
+    expect(wrapper.find('.actionMenu-list').text()).toContain('Temizle');
+  });
+
+  it('moves the Jira chips into the card that describes the issue', async () => {
+    // Seven chips under the header competed with the review for attention,
+    // while saying nothing the reader needs mid-decision.
+    meta.value = { summary: 's', description: 'd', issueType: 'Bug', assignee: 'x' };
+    const wrapper = mount(DetailPane);
+    state.detail = DETAIL;
+    await flushPromises();
+
+    expect(wrapper.find('.detail-head .meta-chips').exists()).toBe(false);
+    expect(wrapper.find('.issue-desc-card .meta-chips').text()).toContain('Bug');
   });
 
   it('says the Jira read failed rather than reporting no description', async () => {

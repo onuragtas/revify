@@ -35,13 +35,22 @@ afterEach(() => {
   state.detail = null;
 });
 
-/** Records what was sent, so the test can assert on the request rather than
- * on a mock's shape. */
+/**
+ * Records what was sent, so the test can assert on the request rather than
+ * on a mock's shape.
+ *
+ * `/detail` is answered separately. Starting a fix restarts the detail poll,
+ * and answering that with the fix response wrote `findings: 1` into
+ * `state.detail` — a shape the server cannot produce, which then threw out
+ * of a computed. A stub that answers every URL the same way tests a server
+ * that does not exist.
+ */
 function stubServer(response: unknown = { ok: true }) {
   const sent: Array<{ url: string; body: unknown }> = [];
   vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
     sent.push({ url, body: init?.body ? JSON.parse(String(init.body)) : undefined });
-    return { ok: true, json: async () => response, text: async () => 'diff --git a/x b/x\n' };
+    const body = url.endsWith('/detail') ? { ...state.detail } : response;
+    return { ok: true, json: async () => body, text: async () => 'diff --git a/x b/x\n' };
   });
   vi.stubGlobal('revifyHost', undefined);
   return sent;

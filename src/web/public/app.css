@@ -309,7 +309,7 @@
   }
   .byKey { border-top: 1px solid var(--border); }
   .byKey .input { flex: 1; min-width: 0; }
-  #byKeyResult { padding: 0 0.9rem 0.5rem; }
+  #byKeyResult { padding: 0.4rem 0.9rem 0.5rem; margin: 0; }
   .sidebar-head {
     padding: 0.7rem 0.8rem; border-bottom: 1px solid var(--border);
     display: flex; align-items: center; gap: 0.5rem; flex-shrink: 0;
@@ -383,13 +383,30 @@
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     flex: 1; min-width: 120px;
   }
-  .detail-head-actions { display: flex; gap: 0.4rem; margin-left: auto; }
+  .detail-head-actions { display: flex; align-items: center; gap: 0.4rem; margin-left: auto; }
   #backBtn { display: none; }
+
+  /* The actions that are not the next thing you would do. */
+  .actionMenu { position: relative; }
+  .actionMenu-list {
+    position: absolute; right: 0; top: calc(100% + 0.35rem); z-index: 40;
+    min-width: 12rem; padding: 0.3rem;
+    display: flex; flex-direction: column; gap: 0.1rem;
+    background: var(--surface); border: 1px solid var(--border-strong);
+    border-radius: var(--radius-lg); box-shadow: var(--shadow-lg);
+  }
+  /* Menu rows, not buttons in a row: full width, left-aligned, and a
+     disabled one still readable because its tooltip is the explanation. */
+  .actionMenu-list .btn {
+    width: 100%; justify-content: flex-start; border: 0; background: transparent;
+    padding: 0.45rem 0.6rem; font-weight: 400;
+  }
+  .actionMenu-list .btn:hover:not(:disabled) { background: var(--surface-2); }
   #connState { font-size: 0.72rem; color: var(--text-faint); }
   #connState.error { color: var(--red); }
 
   .meta-chips {
-    display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.6rem;
+    display: flex; flex-wrap: wrap; gap: 0.35rem; margin: 0.2rem 0 0.85rem;
   }
   .meta-chip {
     font-size: 0.72rem; padding: 0.15rem 0.55rem; border-radius: 999px;
@@ -398,7 +415,8 @@
   .meta-chip b { font-weight: 500; color: var(--text-faint); margin-right: 0.35rem; }
 
   /* tabs */
-  .tabs { display: flex; gap: 0.15rem; margin-top: 0.7rem; overflow-x: auto; }
+  .tabs { display: flex; align-items: center; gap: 0.15rem; margin-top: 0.7rem; overflow-x: auto; }
+  .tabs .stampText { margin-left: auto; padding: 0 0.2rem; white-space: nowrap; }
   .tab {
     cursor: pointer; font: inherit; font-size: 0.82rem; font-weight: 500;
     padding: 0.45rem 0.7rem; border: 0; background: transparent;
@@ -590,13 +608,23 @@
   .fixReport .fixed .mark { color: var(--green); }
   .fixReport .skipped .mark { color: var(--amber); }
 
-  /* decision */
-  .decision { border-color: var(--border-strong); }
-  #outcomeHint {
-    margin: 0 0 0.7rem; font-size: 0.8rem; line-height: 1.55;
-    color: var(--text-muted);
+  /* ------------------------------ decision ---------------------------
+     Outside the scroller, pinned to the foot of the panel. It used to be a
+     card at the bottom of the review, which meant scrolling past every
+     finding to reach the only thing this tool exists for. */
+  .decisionBar {
+    flex-shrink: 0; padding: 0.7rem 1.2rem;
+    background: var(--surface); border-top: 1px solid var(--border-strong);
+    box-shadow: 0 -6px 18px -14px rgba(0, 0, 0, 0.5);
   }
-  #outcomeHint.live { color: var(--text); }
+  .decisionBar-row { display: flex; align-items: center; gap: 0.5rem; }
+  .decisionBar-row .card-hint { margin: 0; }
+  .decisionBar .card-hint.live { color: var(--text); }
+  .decisionBar-reason { display: flex; flex-direction: column; gap: 0.5rem; }
+  .decisionBar-reason textarea { min-height: 3.4rem; }
+  .decisionBar-done { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+  /* Deciding is the point, so its buttons are the widest thing on the row. */
+  .decisionBar .btn-approve, .decisionBar .btn-reject { min-width: 7rem; justify-content: center; }
 
   /* ------------------------ questions & disputes ---------------------- */
 
@@ -940,7 +968,10 @@
     .detail-title-row { gap: 0.45rem; }
     #detailSummary { order: 10; width: 100%; white-space: normal; flex-basis: 100%; }
     .detail-head-actions { width: 100%; margin-left: 0; order: 20; }
-    .detail-head-actions .btn { flex: 1; justify-content: center; }
+    /* The primary action takes the width; the ⋯ button stays a square. */
+    .detail-head-actions > .btn { flex: 1; justify-content: center; }
+    .actionMenu-list .btn { flex: none; }
+    .decisionBar { padding: 0.6rem 0.9rem; }
 
     /* Side-by-side has nothing to give here: half of a phone-width column
        is a few words per line. Unified is forced, not merely preferred. */
@@ -1019,5 +1050,6 @@
 .pointer { cursor: pointer; }
 .warn { color: var(--amber); }
 
-/* The destructive action, set apart from the ones that start work. */
-.detachedAction { margin-left: 0.5rem; padding-left: 0.7rem; border-left: 1px solid var(--border); }
+/* The destructive action, set apart from the ones that start work — it is
+   the last row of the menu, so the rule goes above it rather than beside. */
+.detachedAction { margin-top: 0.3rem; padding-top: 0.4rem; border-top: 1px solid var(--border); }

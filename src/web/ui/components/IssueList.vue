@@ -25,9 +25,29 @@ const message = ref('');
  */
 const loading = ref(true);
 const filter = ref('');
-const byKey = ref('');
-const byPath = ref('');
 const hint = ref('');
+
+/* ---------------------------- start something ---------------------------- */
+
+/**
+ * One box for both ways in.
+ *
+ * There used to be two rows stacked above the list — "incele by key" and
+ * "incele by path" — which made the reader classify their own input before
+ * typing it. A Jira key and a directory do not look alike, so the box works
+ * it out and says which it decided, rather than asking.
+ */
+const startWith = ref('');
+
+const asPath = computed(() => {
+  const value = startWith.value.trim();
+  return value.startsWith('~') || value.startsWith('.') || value.includes('/');
+});
+
+const startHint = computed(() => {
+  if (!startWith.value.trim()) return '';
+  return asPath.value ? 'yerel dizin olarak incelenecek' : 'Jira anahtarı olarak incelenecek';
+});
 
 async function load(): Promise<void> {
   try {
@@ -178,8 +198,14 @@ function badge(item: IssueRow): string {
     : statusLabel(item.reviewStatus);
 }
 
+/** Whichever the box turned out to hold. */
+async function startFromBox(): Promise<void> {
+  if (!startWith.value.trim()) return;
+  await (asPath.value ? openByPath() : openByKey());
+}
+
 async function openByKey(): Promise<void> {
-  const key = byKey.value.trim().toUpperCase();
+  const key = startWith.value.trim().toUpperCase();
   if (!key) return;
   hint.value = `${key} açılıyor…`;
   try {
@@ -189,7 +215,7 @@ async function openByKey(): Promise<void> {
     return;
   }
   hint.value = '';
-  byKey.value = '';
+  startWith.value = '';
   host.openIssue(key);
   await load();
 }
@@ -202,7 +228,7 @@ async function openByKey(): Promise<void> {
  * would produce a confident review of code nobody is about to push.
  */
 async function openByPath(): Promise<void> {
-  const path = byPath.value.trim();
+  const path = startWith.value.trim();
   if (!path) return;
   hint.value = 'Dizin okunuyor…';
   let started;
@@ -213,7 +239,7 @@ async function openByPath(): Promise<void> {
     return;
   }
   hint.value = '';
-  byPath.value = '';
+  startWith.value = '';
   host.openIssue(started.issueKey);
   await load();
 }
@@ -233,27 +259,16 @@ async function openByPath(): Promise<void> {
 
   <div class="sidebar-head byKey">
     <input
-      v-model="byKey"
+      v-model="startWith"
       class="input"
       type="text"
-      placeholder="BUY-2455 — anahtarla incele"
-      @keydown.enter="openByKey"
+      placeholder="BUY-2455 ya da ~/projects/api"
+      @keydown.enter="startFromBox"
     />
-    <button class="btn small" @click="openByKey">İncele</button>
+    <button class="btn small" :disabled="!startWith.trim()" @click="startFromBox">İncele</button>
   </div>
 
-  <div class="sidebar-head byKey">
-    <input
-      v-model="byPath"
-      class="input"
-      type="text"
-      placeholder="~/projects/api — yerel dizini incele"
-      @keydown.enter="openByPath"
-    />
-    <button class="btn small" @click="openByPath">İncele</button>
-  </div>
-
-  <div v-if="hint" id="byKeyResult" class="card-hint">{{ hint }}</div>
+  <div v-if="hint || startHint" id="byKeyResult" class="card-hint">{{ hint || startHint }}</div>
 
   <div ref="listBox" class="issue-list">
     <div

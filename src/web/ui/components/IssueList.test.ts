@@ -31,7 +31,11 @@ const ITEMS = [
 function stub(byUrl: Record<string, unknown>, calls: Array<{ url: string; body: unknown }> = []) {
   vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
     calls.push({ url, body: init?.body ? JSON.parse(String(init.body)) : undefined });
-    const key = Object.keys(byUrl).find((k) => url.startsWith(k));
+    // Longest prefix wins: `/api/reviews/local` is not `/api/reviews`, and
+    // matching on declaration order would answer it with the issue list.
+    const key = Object.keys(byUrl)
+      .filter((k) => url.startsWith(k))
+      .sort((a, b) => b.length - a.length)[0];
     return { ok: true, json: async () => (key ? byUrl[key] : {}) };
   });
   return calls;
@@ -87,12 +91,45 @@ describe('IssueList', () => {
     const wrapper = mount(IssueList);
     await flushPromises();
 
-    await wrapper.findAll('input')[1].setValue('buy-9');
-    await wrapper.findAll('.byKey .btn')[0].trigger('click');
+    await wrapper.find('.byKey .input').setValue('buy-9');
+    await wrapper.find('.byKey .btn').trigger('click');
     await flushPromises();
 
     expect(calls.some((c) => c.url === '/api/reviews/BUY-9/start')).toBe(true);
     expect(state.issueKey).toBe('BUY-9');
+  });
+
+  it('works out whether it was handed a key or a directory', async () => {
+    /*
+     * There were two boxes stacked above the list, "by key" and "by path",
+     * which made the reader classify their own input before typing it. A
+     * Jira key and a directory do not look alike, so one box decides — and
+     * says which it decided, because a silent guess is worse than a question.
+     */
+    const calls = stub({
+      '/api/reviews': { items: ITEMS },
+      '/api/reviews/local': { issueKey: 'LOCAL-1' },
+    });
+    const wrapper = mount(IssueList);
+    await flushPromises();
+
+    await wrapper.find('.byKey .input').setValue('~/projects/api');
+    expect(wrapper.find('#byKeyResult').text()).toContain('dizin');
+
+    await wrapper.find('.byKey .btn').trigger('click');
+    await flushPromises();
+
+    expect(calls.some((c) => c.url === '/api/reviews/local')).toBe(true);
+    expect(state.issueKey).toBe('LOCAL-1');
+  });
+
+  it('says it read a bare word as a Jira key before acting on it', async () => {
+    stub({ '/api/reviews': { items: ITEMS } });
+    const wrapper = mount(IssueList);
+    await flushPromises();
+
+    await wrapper.find('.byKey .input').setValue('BUY-9');
+    expect(wrapper.find('#byKeyResult').text()).toContain('anahtar');
   });
 
   it('opens the settings screen when a first run has nothing to list', async () => {

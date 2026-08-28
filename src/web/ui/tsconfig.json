@@ -11,5 +11,10 @@
     "skipLibCheck": true,
     "verbatimModuleSyntax": true
   },
-  "include": ["**/*.ts", "**/*.vue"]
+  // Test files are excluded on purpose: they run under node (vitest) and
+  // reach for `node:fs`, while everything else in this directory ships to a
+  // browser. Letting node types into this project is how `process.env` got
+  // into the bundle and left the window black — see boot.test.ts.
+  "include": ["**/*.ts", "**/*.vue"],
+  "exclude": ["**/*.test.ts"]
 }

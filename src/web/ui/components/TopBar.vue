@@ -14,6 +14,7 @@ import { views, type ViewName } from '../views';
 import { refreshList, reloadView } from '../bridge';
 import { autoPrepare, outcomeConfig } from '../appConfig';
 import { formatDate } from '../format';
+import ActionMenu from './ActionMenu.vue';
 
 const theme = ref(readTheme());
 
@@ -111,10 +112,19 @@ function select(name: ViewName): void {
       <button v-if="session.configured" class="btn btn-ghost" :title="session.user ? 'Takım' : 'Sunucuya giriş yap'" @click="openModal('team')">
         {{ session.user ? session.user.name : 'Giriş yap' }}
       </button>
-      <button class="btn btn-ghost btn-icon" title="Ayarlar" @click="openModal('settings')" aria-label="Ayarlar">⚙</button>
-      <button class="btn btn-ghost btn-icon" title="Yedek al / geri yükle" @click="openModal('backup')" aria-label="Yedek al / geri yükle">⤓</button>
-      <button class="btn btn-ghost btn-icon" title="Açık / koyu tema" @click="toggleTheme" aria-label="Açık / koyu tema">◐</button>
       <button class="btn" @click="refreshList">↻ Yenile</button>
+
+      <!-- Settings, backup and theme are all "how this app is set up", and
+           none of them is something you do while reading a review. Three
+           unlabelled glyphs in the corner were three guesses; one is a
+           menu with words in it. -->
+      <ActionMenu>
+        <button class="btn btn-ghost" @click="openModal('settings')">⚙ Ayarlar</button>
+        <button class="btn btn-ghost" @click="openModal('backup')">⤓ Yedek al / geri yükle</button>
+        <button class="btn btn-ghost" @click="toggleTheme">
+          ◐ {{ theme === 'dark' ? 'Açık tema' : 'Koyu tema' }}
+        </button>
+      </ActionMenu>
     </div>
   </header>
 </template>

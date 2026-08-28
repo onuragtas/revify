@@ -6,10 +6,13 @@ Buradaki bir satırın karşılığı arayüzde yoksa, o feature **kaybolmuş** 
 Göçün nasıl yürüdüğü `ui-migration.md` içinde.
 
 - Sayfadaki inline script: **yok** · inline stil: **yok**
-- Bileşen: **27** · düğme: **69** · alan: **32** · modal: **6**
+- Bileşen: **28** · düğme: **72** · alan: **31** · modal: **6**
 - API ucu: **27**
 
 ## Bileşenler
+### `ActionMenu` — `src/web/ui/components/ActionMenu.vue`
+- [ ] düğme: ⋯
+
 ### `App` — `src/web/ui/components/App.vue`
 - _(kontrol yok)_
 
@@ -38,10 +41,12 @@ Göçün nasıl yürüdüğü `ui-migration.md` içinde.
 - [ ] alan: onay kutusu
 - [ ] alan: Proje ara…
 
-### `DecisionCard` — `src/web/ui/components/DecisionCard.vue`
-- [ ] düğme: Onayla
+### `DecisionBar` — `src/web/ui/components/DecisionBar.vue`
+- [ ] düğme: Vazgeç
 - [ ] düğme: Reddet
-- [ ] alan: Red gerekçesi (opsiyonel — yazarsan review'in üstünde Jira y
+- [ ] düğme: Reddet
+- [ ] düğme: Onayla
+- [ ] alan: Red gerekçesi (opsiyonel — review'in üstünde Jira yorumuna e
 - [ ] alan: metin kutusu
 
 ### `DecisionsView` — `src/web/ui/components/DecisionsView.vue`
@@ -49,12 +54,13 @@ Göçün nasıl yürüdüğü `ui-migration.md` içinde.
 
 ### `DetailPane` — `src/web/ui/components/DetailPane.vue`
 - [ ] düğme: ←
+- [ ] düğme: Durdur
+- [ ] düğme: {startLabel}
 - [ ] düğme: {startLabel}
 - [ ] düğme: Ata…
-- [ ] düğme: Durdur
 - [ ] düğme: Bağlam…
 - [ ] düğme: Temizle
-- [ ] düğme: {label} {tabs.counts[name].count}
+- [ ] düğme: {tab.label} {tabs.counts[tab.countKey].count}
 
 ### `DiffPanel` — `src/web/ui/components/DiffPanel.vue`
 - [ ] düğme: Yan yana
@@ -90,10 +96,8 @@ Göçün nasıl yürüdüğü `ui-migration.md` içinde.
 
 ### `IssueList` — `src/web/ui/components/IssueList.vue`
 - [ ] düğme: İncele
-- [ ] düğme: İncele
 - [ ] alan: Issue veya özet ara…  ( / )
-- [ ] alan: BUY-2455 — anahtarla incele
-- [ ] alan: ~/projects/api — yerel dizini incele
+- [ ] alan: BUY-2455 ya da ~/projects/api
 
 ### `NotesPanel` — `src/web/ui/components/NotesPanel.vue`
 - [ ] düğme: sil
@@ -149,10 +153,10 @@ Göçün nasıl yürüdüğü `ui-migration.md` içinde.
 ### `TopBar` — `src/web/ui/components/TopBar.vue`
 - [ ] düğme: {label} {views.counts[name].count}
 - [ ] düğme: {session.user}
-- [ ] düğme: ⚙
-- [ ] düğme: ⤓
-- [ ] düğme: ◐
 - [ ] düğme: ↻ Yenile
+- [ ] düğme: ⚙ Ayarlar
+- [ ] düğme: ⤓ Yedek al / geri yükle
+- [ ] düğme: ◐ {theme}
 
 ### `UpdateBanner` — `src/web/ui/components/UpdateBanner.vue`
 - [ ] düğme: {updateState.action}

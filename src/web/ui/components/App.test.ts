@@ -179,7 +179,14 @@ describe('App', () => {
     const wrapper = mount(App);
     await flushPromises();
 
-    await wrapper.findAll('.topbar-right .btn').find((b) => b.text() === '⚙')!.trigger('click');
+    // Settings, backup and theme live behind one menu now — three unlabelled
+    // glyphs in the corner were three guesses.
+    await wrapper.find('.topbar-right .actionMenu > .btn').trigger('click');
+    const menu = wrapper.find('.topbar-right .actionMenu-list');
+    expect(menu.text()).toContain('Yedek al');
+    expect(menu.text()).toContain('tema');
+
+    await menu.findAll('.btn').find((b) => b.text().includes('Ayarlar'))!.trigger('click');
     await flushPromises();
     expect(modals.settings).toBe(true);
     expect(wrapper.text()).toContain('Ayarlar');
