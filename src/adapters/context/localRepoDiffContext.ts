@@ -72,6 +72,7 @@ export class LocalRepoDiffContext implements ContextCollector {
       // The reviewer reads the directory itself: it is already the branch,
       // already has the uncommitted work, and nothing needs cloning.
       repoPath: change.path,
+      commits: change.commits,
     };
 
     return {

@@ -9,6 +9,14 @@ export interface DiffFile {
   diff: string;
 }
 
+/** One commit the branch carries that the base does not. */
+export interface BranchCommit {
+  sha: string;
+  title: string;
+  author: string;
+  date: string;
+}
+
 export interface BranchDiff {
   baseBranch: string;
   branchName: string;
@@ -17,6 +25,18 @@ export interface BranchDiff {
   /** Same content kept per file, so the UI can render a side-by-side view
    * without having to re-split the flattened blob. */
   files: DiffFile[];
+  /**
+   * The commits behind that diff, oldest first.
+   *
+   * A long-lived branch carries work that is not the ticket's — a change
+   * made months ago on another ticket, never merged to the base. The diff
+   * flattens all of it into one blob, so a review reads somebody else's
+   * commit as this ticket's doing and reports it against the wrong person.
+   * Knowing the commits lets a finding name where a hunk came from while
+   * still holding it against the merge, which is the only framing that is
+   * both true and actionable.
+   */
+  commits: BranchCommit[];
 }
 
 /** Pure so it's testable without mocking HTTP. Accepts a GitLab repository
@@ -79,11 +99,20 @@ export class GitlabClient {
   async compareBranches(projectPath: string, baseBranch: string, branchName: string): Promise<BranchDiff> {
     const projectId = encodeURIComponent(projectPath);
     const params = new URLSearchParams({ from: baseBranch, to: branchName });
-    const compare = await this.request<{ diffs: Array<{ new_path: string; diff: string }> }>(
-      `/projects/${projectId}/repository/compare?${params.toString()}`,
-    );
+    // The commits come back on the same response as the diffs, so knowing
+    // what the branch carries costs nothing extra.
+    const compare = await this.request<{
+      diffs: Array<{ new_path: string; diff: string }>;
+      commits?: Array<{ id: string; title: string; author_name: string; created_at: string }>;
+    }>(`/projects/${projectId}/repository/compare?${params.toString()}`);
     const files: DiffFile[] = compare.diffs.map((d) => ({ path: d.new_path, diff: d.diff }));
     const diff = files.map((f) => `--- ${f.path} ---\n${f.diff}`).join('\n\n');
-    return { baseBranch, branchName, diff, files };
+    const commits = (compare.commits ?? []).map((c) => ({
+      sha: c.id.slice(0, 8),
+      title: c.title,
+      author: c.author_name,
+      date: c.created_at,
+    }));
+    return { baseBranch, branchName, diff, files, commits };
   }
 }

@@ -123,6 +123,54 @@ export interface CodeReviewPromptInput {
   };
 }
 
+
+/**
+ * The commits behind a diff, and which of them are this ticket's.
+ *
+ * A branch that has been open for months carries work that was never the
+ * ticket's: a change made on another ticket, never merged to the base, still
+ * sitting on this branch. The diff flattens all of it into one blob, so the
+ * review reads a stranger's commit from nine months ago as this developer's
+ * doing and reports it against the wrong person — who then, correctly,
+ * dismisses the finding.
+ *
+ * The membership test is the issue key in the commit subject. Crude, and
+ * deliberately not load-bearing: it decides what the review is *told*, never
+ * what it may report. A hunk from an unrelated commit still lands on the
+ * base branch when this merges, and still has to be reported — with its
+ * origin named, which is the only framing that is both true and actionable.
+ */
+function commitList(
+  commits: Array<{ sha: string; title: string; author: string; date: string }> | undefined,
+  issueKey: string,
+): string {
+  if (!commits?.length) return '';
+
+  const key = issueKey.toUpperCase();
+  const belongs = (c: { title: string }) => c.title.toUpperCase().includes(key);
+  const strays = commits.filter((c) => !belongs(c));
+
+  return (
+    `**Bu dalın \`${issueKey}\` için taşıdığı commitler** (eskiden yeniye):\n\n` +
+    commits
+      .map(
+        (c) =>
+          `- \`${c.sha}\` ${c.date.slice(0, 10)} · ${c.author} · ${c.title}` +
+          (belongs(c) ? '' : '  ← **bu biletten değil**'),
+      )
+      .join('\n') +
+    '\n\n' +
+    (strays.length
+      ? 'Some of these do not name this ticket. They are still part of what merges, so a\n' +
+        'defect in one is still worth reporting — but say where it came from. "This branch\n' +
+        'deletes X" reads as an accusation to a developer who did not write it, and gets\n' +
+        'dismissed; "commit `abc1234` (2025-12-12, another ticket) deletes X, and merging\n' +
+        'this branch takes it to the base branch, where X is still in use" is the same fact\n' +
+        'and cannot be argued with. Attribute it, then hold it against the merge.\n\n'
+      : '')
+  );
+}
+
 /** Pure so it's testable without an LLM call.
  * The language instruction is repeated here, at the very end of the user
  * turn, in addition to the system prompt: the rest of this template is
@@ -157,6 +205,7 @@ export function buildPrompt(input: CodeReviewPromptInput): string {
         .map(
           (c) =>
             `### ${c.projectPath} — \`${c.branchName}\` vs \`${c.baseBranch}\`\n\n` +
+            commitList(c.commits, input.issueKey) +
             '```diff\n' +
             (c.diff || '(empty diff)') +
             '\n```\n',

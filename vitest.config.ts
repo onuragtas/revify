@@ -22,8 +22,12 @@ export default defineConfig({
      * that failed on a busy machine and passed on a quiet one. A flaky test
      * teaches people to re-run rather than to read.
      *
+     * Higher than the waits inside those suites, so a test that runs out of
+     * patience reports what it was waiting for instead of being killed
+     * mid-sentence with no diagnosis.
+     *
      * The cost is that a genuinely hung test takes this long to say so.
      */
-    testTimeout: 20_000,
+    testTimeout: 40_000,
   },
 });

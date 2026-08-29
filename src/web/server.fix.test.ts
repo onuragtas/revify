@@ -149,8 +149,10 @@ const isolated = () => ({ settingsStore: new SettingsStore(join(dir, 'settings.j
 /** The fix runs on the queue, so the response returns before it finishes. */
 async function waitForFix(status: string): Promise<void> {
   // Generous: each repository is a real git clone, and the whole suite runs
-  // in parallel. A budget tuned to an idle machine fails on a busy one.
-  for (let i = 0; i < 600; i++) {
+  // in parallel. A budget tuned to an idle machine fails on a busy one —
+  // this one was still being hit at 15s under load, so it leaves real room
+  // and `testTimeout` leaves room for it to report rather than be killed.
+  for (let i = 0; i < 1000; i++) {
     if (reviewStore.get('BUY-1')?.fix?.status === status) return;
     await new Promise((r) => setTimeout(r, 25));
   }

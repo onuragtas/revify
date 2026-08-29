@@ -125,6 +125,18 @@ function makeWired(options: { fail?: boolean } = {}): Wired {
  */
 const isolated = () => ({ settingsStore: new SettingsStore(join(dir, 'settings.json')) });
 
+/**
+ * Waits for the pipeline to get somewhere, on a machine that is busy.
+ *
+ * `vi.waitFor` gives up after one second by default, which `testTimeout`
+ * does not cover — a separate budget with a much shorter fuse. These tests
+ * drive real git and a real queue while the rest of the suite runs beside
+ * them, so a second is a coin flip: green on an idle laptop, red in CI, and
+ * a flaky test teaches people to re-run rather than to read.
+ */
+const SETTLE_MS = 20_000;
+const settles = (assertion: () => void) => vi.waitFor(assertion, { timeout: SETTLE_MS, interval: 25 });
+
 beforeEach(() => (dir = mkdtempSync(join(tmpdir(), 'srv-'))));
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -137,7 +149,7 @@ describe('server notification events', () => {
     await request(server).get('/api/reviews');
     await request(server).post('/api/reviews/BUY-1/start').send({ contextRepos: [] });
 
-    await vi.waitFor(() => expect(ready).toHaveBeenCalledTimes(1));
+    await settles(() => expect(ready).toHaveBeenCalledTimes(1));
     expect(ready.mock.calls[0][0]).toMatchObject({ issueKey: 'BUY-1', summary: 'Barcode listing' });
     // The badge counts the same thing the notification announced.
     expect(server.pendingCount()).toBe(1);
@@ -153,7 +165,7 @@ describe('server notification events', () => {
     await request(server).get('/api/reviews');
     await request(server).post('/api/reviews/BUY-1/start').send({ contextRepos: [] });
 
-    await vi.waitFor(() => expect(failed).toHaveBeenCalledTimes(1));
+    await settles(() => expect(failed).toHaveBeenCalledTimes(1));
     expect(failed.mock.calls[0][0].error).toContain('model exploded');
     // Interrupting someone for a review that does not exist is worse than
     // staying quiet.
@@ -184,10 +196,10 @@ describe('server notification events', () => {
 
     await request(server).get('/api/reviews');
     await request(server).post('/api/reviews/BUY-1/start').send({ contextRepos: [] });
-    await vi.waitFor(() => expect(wired.reviewStore.get('BUY-1')?.status).toBe('running'));
+    await settles(() => expect(wired.reviewStore.get('BUY-1')?.status).toBe('running'));
 
     await request(server).post('/api/reviews/BUY-1/stop').send();
-    await vi.waitFor(() => expect(wired.reviewStore.get('BUY-1')?.status).toBe('cancelled'));
+    await settles(() => expect(wired.reviewStore.get('BUY-1')?.status).toBe('cancelled'));
 
     // Neither a finished review nor a fault — nothing to interrupt anyone about.
     expect(ready).not.toHaveBeenCalled();
@@ -216,7 +228,7 @@ describe('update install', () => {
 
     await request(server).get('/api/reviews');
     await request(server).post('/api/reviews/BUY-1/start').send({ contextRepos: [] });
-    await vi.waitFor(() => expect(wired.reviewStore.get('BUY-1')?.status).toBe('running'));
+    await settles(() => expect(wired.reviewStore.get('BUY-1')?.status).toBe('running'));
 
     const res = await request(server).post('/api/update/install').send();
 
@@ -239,7 +251,7 @@ describe('update install', () => {
     const res = await request(server).post('/api/update/install').send();
     expect(res.status).toBe(200);
     // Deferred so the page is told before the process goes.
-    await vi.waitFor(() => expect(installed).toBe(true));
+    await settles(() => expect(installed).toBe(true));
   });
 
   it('says so plainly when the build has no updater', async () => {
@@ -297,7 +309,7 @@ describe('reviewing by issue key', () => {
     const res = await request(server).post('/api/reviews/BUY-9/start').send({ contextRepos: [] });
     expect(res.status).toBe(200);
 
-    await vi.waitFor(() => expect(ready).toHaveBeenCalledTimes(1));
+    await settles(() => expect(ready).toHaveBeenCalledTimes(1));
     expect(ready.mock.calls[0][0]).toMatchObject({ issueKey: 'BUY-9', summary: 'Typed by hand' });
 
     server.shutdown();
@@ -378,7 +390,7 @@ describe('reviewing a local directory', () => {
     expect(first.status).toBe(200);
     const id: string = first.body.issueKey;
     expect(id).toContain('local:');
-    await vi.waitFor(() => expect(wired.reviewStore.get(id)?.review).toBeDefined());
+    await settles(() => expect(wired.reviewStore.get(id)?.review).toBeDefined());
 
     // The very request the button makes, on the very id the server handed
     // back — including the '/' and ':' that survive a round trip.
@@ -386,7 +398,7 @@ describe('reviewing a local directory', () => {
     expect(again.status).toBe(200);
 
     // A re-run archives what the last one said rather than dropping it.
-    await vi.waitFor(() => expect(wired.reviewStore.get(id)?.history?.length).toBe(1));
+    await settles(() => expect(wired.reviewStore.get(id)?.history?.length).toBe(1));
     server.shutdown();
   });
 
@@ -507,7 +519,7 @@ describe('reviewing a local directory', () => {
 
     const first = await request(server).post('/api/reviews/local').send({ path: root });
     const id: string = first.body.issueKey;
-    await vi.waitFor(() => expect(wired.reviewStore.get(id)?.review).toBeDefined());
+    await settles(() => expect(wired.reviewStore.get(id)?.review).toBeDefined());
 
     // Exactly the shape found in a real store: no `localPath`, and the
     // directory on the change where the collector put it.
@@ -521,7 +533,7 @@ describe('reviewing a local directory', () => {
 
     const again = await request(server).post(`/api/reviews/${encodeURIComponent(id)}/start`).send({});
     expect(again.status).toBe(200);
-    await vi.waitFor(() => expect(wired.reviewStore.get(id)?.history?.length).toBe(1));
+    await settles(() => expect(wired.reviewStore.get(id)?.history?.length).toBe(1));
 
     // And it is a local review as far as the decision is concerned, so the
     // buttons do not promise a Jira write.
@@ -539,7 +551,7 @@ describe('reviewing a local directory', () => {
 
     const first = await request(server).post('/api/reviews/local').send({ path: root });
     const id: string = first.body.issueKey;
-    await vi.waitFor(() => expect(wired.reviewStore.get(id)?.review).toBeDefined());
+    await settles(() => expect(wired.reviewStore.get(id)?.review).toBeDefined());
     wired.reviewStore.upsert(id, {
       localPath: undefined,
       repoChanges: [
@@ -566,14 +578,14 @@ describe('reviewing a local directory', () => {
 
     const first = await request(server).post('/api/reviews/local').send({ path: root });
     const id: string = first.body.issueKey;
-    await vi.waitFor(() => expect(wired.reviewStore.get(id)?.review).toBeDefined());
+    await settles(() => expect(wired.reviewStore.get(id)?.review).toBeDefined());
 
     // Something new in the working copy, never committed.
     writeFileSync(join(root, 'b.txt'), 'sonradan\n');
 
     const again = await request(server).post(`/api/reviews/${encodeURIComponent(id)}/start`).send({});
     expect(again.status).toBe(200);
-    await vi.waitFor(() => expect(wired.reviewStore.get(id)?.history?.length).toBe(1));
+    await settles(() => expect(wired.reviewStore.get(id)?.history?.length).toBe(1));
     server.shutdown();
   });
 
@@ -592,7 +604,7 @@ describe('reviewing a local directory', () => {
 
     const first = await request(server).post('/api/reviews/local').send({ path: root });
     const id: string = first.body.issueKey;
-    await vi.waitFor(() => expect(wired.reviewStore.get(id)?.review).toBeDefined());
+    await settles(() => expect(wired.reviewStore.get(id)?.review).toBeDefined());
 
     execFileSync('git', ['checkout', '-qb', 'feature/başka'], { cwd: root });
     writeFileSync(join(root, 'a.txt'), 'yine değişti\n');
@@ -619,11 +631,11 @@ describe('reviewing a local directory', () => {
     const server = createServer(makeConfig(), wired, isolated());
 
     await request(server).post('/api/reviews/local').send({ path: root, issueKey: 'BUY-9' });
-    await vi.waitFor(() => expect(wired.reviewStore.get('BUY-9')?.review).toBeDefined());
+    await settles(() => expect(wired.reviewStore.get('BUY-9')?.review).toBeDefined());
 
     const again = await request(server).post('/api/reviews/BUY-9/start').send({ contextRepos: [] });
     expect(again.status).toBe(200);
-    await vi.waitFor(() => expect(wired.reviewStore.get('BUY-9')?.history?.length).toBe(1));
+    await settles(() => expect(wired.reviewStore.get('BUY-9')?.history?.length).toBe(1));
 
     // And it is still not a local-only review: the decision goes to Jira.
     const detail = await request(server).get('/api/reviews/BUY-9/detail');

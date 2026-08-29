@@ -167,6 +167,21 @@ For a requirement/flow finding with no single line, put the flow or the
 file that should have changed where `file:line` goes, and skip the diff
 block if there is nothing to quote.
 
+**When the defect is not on a line this change wrote, open by naming the
+line that is.** A finding about a caller, a contract or a consumer points at
+code the branch never touched, so the reader's first reaction is "I did not
+write that" — and they are right. What puts it in scope is something in the
+diff, so say that first and quote *that* line, then the code it breaks:
+
+> Bu dal `ShoppingLoanController.java`'dan `@PostMapping("/send-sms-verification")`
+> uç noktasını siliyor. EPA_API bu ucu hâlâ çağırıyor
+> (`src/Services/…::setEndpoint('/shopping-loan/send-sms-verification')`,
+> bu dalda değişmemiş).
+
+Without that opening the finding reads as a complaint about somebody else's
+code, and gets dismissed. With it, the reader can see in one line whether it
+is theirs.
+
 When the change spans more than one repository, **name the repository in the
 heading** — `### blocking — lib/HGS/Model/Payment.php:829 (EPA_API)`. The same
 path can exist in two services, and the reader (and anyone fixing it) has to

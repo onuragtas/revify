@@ -232,6 +232,85 @@ describe('buildPrompt', () => {
     expect(prompt).toContain('if this branch had never been written?');
   });
 
+  it('names the commits a branch carries, and which are not this ticket\'s', () => {
+    /*
+     * A branch open for months carries work that was never the ticket's.
+     *
+     * The diff flattens all of it into one blob, so the review read a
+     * stranger's commit from nine months ago as this developer's doing and
+     * reported it against the wrong person — who then, correctly, dismissed
+     * a finding that was materially right: the hunk still lands on the base
+     * branch when this merges.
+     */
+    const prompt = buildPrompt({
+      ...baseInput,
+      issueKey: 'BUY-1831',
+      repoChanges: [
+        {
+          ...baseInput.repoChanges[0],
+          commits: [
+            {
+              sha: '9ec6c195',
+              title: 'Add shopping loan cancellation functionality',
+              author: 'onuragtas',
+              date: '2025-12-12T17:41:00+03:00',
+            },
+            { sha: 'a11d8c8d', title: 'BUY-1831', author: 'esmanur', date: '2026-01-11T23:41:04+03:00' },
+          ],
+        },
+      ],
+    });
+
+    expect(prompt).toContain('`9ec6c195` 2025-12-12 · onuragtas · Add shopping loan cancellation');
+    // The one that does not name the ticket is called out; the one that
+    // does is left alone.
+    expect(prompt).toContain('Add shopping loan cancellation functionality  ← **bu biletten değil**');
+    expect(prompt).not.toContain('BUY-1831  ← **bu biletten değil**');
+    // Reported, but attributed — the fact is the merge, not the author.
+    expect(prompt).toContain('Attribute it, then hold it against the merge');
+  });
+
+  it('says nothing about strays when every commit is the ticket\'s', () => {
+    const prompt = buildPrompt({
+      ...baseInput,
+      issueKey: 'PROJ-123',
+      repoChanges: [
+        {
+          ...baseInput.repoChanges[0],
+          commits: [
+            { sha: 'aaa1111', title: 'PROJ-123 ilk', author: 'x', date: '2026-01-01T00:00:00Z' },
+          ],
+        },
+      ],
+    });
+
+    expect(prompt).toContain('`aaa1111` 2026-01-01');
+    expect(prompt).not.toContain('bu biletten değil');
+    expect(prompt).not.toContain('Attribute it');
+  });
+
+  it('omits the commit list when nothing supplied one', () => {
+    // The local path can have no base branch, and an older record has no
+    // commits stored at all; neither is a reason to print an empty heading.
+    expect(buildPrompt(baseInput)).not.toContain('taşıdığı commitler');
+  });
+
+  it('makes a finding show why it is in scope', () => {
+    /*
+     * A correct finding that reads as somebody else's problem.
+     *
+     * "These endpoints were deleted and EPA_API still calls them" cites the
+     * *caller* — code the branch never touched — so the reader's first
+     * reaction is "I did not write that", and they are right about the line
+     * they were shown. What puts it in scope is the deletion in their own
+     * diff, and that is what has to come first.
+     */
+    const prompt = buildPrompt(baseInput);
+
+    expect(prompt).toContain('When the defect is not on a line this change wrote');
+    expect(prompt).toContain('reads as a complaint about somebody else');
+  });
+
   it('bans preamble and padding without capping real findings', () => {
     /*
      * This asked for "Three findings at most" — and got it.

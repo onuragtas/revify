@@ -14,6 +14,10 @@ export interface RepoChange {
   baseBranch: string;
   diff: string;
   files: Array<{ path: string; diff: string }>;
+  /** The commits this branch carries that the base does not, oldest first.
+   * A long-lived branch carries work that is not the ticket's; without
+   * these the review cannot tell whose. */
+  commits?: Array<{ sha: string; title: string; author: string; date: string }>;
   repoPath: string | null;
 }
 
@@ -105,6 +109,7 @@ export class GitlabBranchDiffContext implements ContextCollector {
           branchName: branch.name,
           baseBranch: compared.baseBranch,
           diff: compared.diff,
+          commits: compared.commits,
           files: compared.files,
           repoPath,
         });

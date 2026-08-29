@@ -108,3 +108,46 @@ describe('GitlabBranchDiffContext, on a review that has both', () => {
     expect(context).toEqual({});
   });
 });
+
+describe('what the branch carries', () => {
+  it('lists the commits behind the diff, oldest first', async () => {
+    /*
+     * A branch open for months carries work that was never the ticket's —
+     * a change made on another ticket, never merged to the base, still
+     * sitting here. The diff flattens all of it into one blob, so without
+     * this the review cannot tell whose commit it is reading.
+     */
+    git('checkout', '-qb', 'feature/BUY-1');
+    writeFileSync(join(dir, 'a.ts'), 'export const rate = 2;\n');
+    git('commit', '-qam', 'eski iş, başka bilet');
+    writeFileSync(join(dir, 'a.ts'), 'export const rate = 3;\n');
+    git('commit', '-qam', 'BUY-1 asıl iş');
+
+    const context = await new LocalRepoDiffContext(gitlab()).collect(
+      { id: 'BUY-1', data: { repoPath: dir, issueKey: 'BUY-1' } },
+      {},
+    );
+
+    const [change] = context.repoChanges as RepoChange[];
+    expect(change.commits?.map((c) => c.title)).toEqual(['eski iş, başka bilet', 'BUY-1 asıl iş']);
+    expect(change.commits?.[0].author).toBe('Test');
+    expect(change.commits?.[0].date).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+
+  it('survives a commit subject containing the separator it splits on', async () => {
+    // A pipe in a subject would split one commit into two if the format
+    // used one; the record separator cannot occur in a subject line.
+    git('checkout', '-qb', 'feature/BUY-2');
+    writeFileSync(join(dir, 'a.ts'), 'export const rate = 2;\n');
+    git('commit', '-qam', 'BUY-2 | ödeme | iade akışı');
+
+    const context = await new LocalRepoDiffContext(gitlab()).collect(
+      { id: 'BUY-2', data: { repoPath: dir } },
+      {},
+    );
+
+    const [change] = context.repoChanges as RepoChange[];
+    expect(change.commits).toHaveLength(1);
+    expect(change.commits?.[0].title).toBe('BUY-2 | ödeme | iade akışı');
+  });
+});

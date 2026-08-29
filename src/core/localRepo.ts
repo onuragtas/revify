@@ -29,6 +29,10 @@ export interface LocalChange {
   committedDiff: string;
   /** Everything not committed yet — staged and unstaged, plus new files. */
   workingDiff: string;
+  /** Commits this branch carries that the base does not, oldest first. A
+   * long-lived branch carries work that is not the ticket's, and the diff
+   * flattens all of it into one blob. */
+  commits: Array<{ sha: string; title: string; author: string; date: string }>;
   files: Array<{ path: string; diff: string }>;
 }
 
@@ -166,6 +170,23 @@ export async function readLocalChange(rawPath: string): Promise<LocalChange> {
   }
   const workingDiff = [tracked, ...untracked].filter(Boolean).join('\n');
 
+  /*
+   * What the branch carries, oldest first.
+   *
+   * Same three-dot range as the diff, so the list and the diff describe
+   * exactly the same set of changes. A record separator that cannot occur
+   * in a subject line keeps a commit whose title contains a pipe from
+   * splitting into two.
+   */
+  const log = baseBranch
+    ? ((await tryGit(root, ['log', '--reverse', '--format=%h%x1f%an%x1f%aI%x1f%s', `${baseBranch}...HEAD`])) ?? '')
+    : '';
+  const commits = log
+    .split('\n')
+    .map((line) => line.split('\x1f'))
+    .filter((parts) => parts.length === 4)
+    .map(([sha, author, date, title]) => ({ sha, author, date, title }));
+
   return {
     path: root,
     projectPath,
@@ -173,6 +194,7 @@ export async function readLocalChange(rawPath: string): Promise<LocalChange> {
     baseBranch,
     committedDiff,
     workingDiff,
+    commits,
     files: splitByFile(`${committedDiff}\n${workingDiff}`),
   };
 }
