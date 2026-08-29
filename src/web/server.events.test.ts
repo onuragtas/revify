@@ -379,6 +379,23 @@ describe('reviewing by issue key', () => {
   });
 });
 
+/**
+ * Starts a local review and insists the server agreed.
+ *
+ * The status used to be ignored, so a refusal — nothing to review, not a
+ * repository — left `issueKey` undefined and the next line waited twenty
+ * seconds for a record that was never going to exist. The failure then
+ * named the wait instead of the reason, which is the diagnosis thrown away.
+ */
+async function startLocal(
+  server: ReturnType<typeof boot>,
+  body: Record<string, unknown>,
+): Promise<{ issueKey: string; local: boolean }> {
+  const res = await request(server).post('/api/reviews/local').send(body);
+  expect(res.status, `yerel review reddedildi: ${String(res.text).slice(0, 200)}`).toBe(200);
+  return res.body;
+}
+
 /** A real repository with one uncommitted change — the shape a local review
  * is actually asked about. Real git, because every question this path asks
  * is a git question and a mock would only ever agree with the code. */
@@ -411,9 +428,8 @@ describe('reviewing a local directory', () => {
     const wired = makeWired();
     const server = boot(makeConfig(), wired, isolated());
 
-    const first = await request(server).post('/api/reviews/local').send({ path: root });
-    expect(first.status).toBe(200);
-    const id: string = first.body.issueKey;
+    const first = await startLocal(server, { path: root });
+    const id: string = first.issueKey;
     expect(id).toContain('local:');
     await settles(() => expect(wired.reviewStore.get(id)?.review).toBeDefined());
 
@@ -434,8 +450,8 @@ describe('reviewing a local directory', () => {
     const wired = makeWired();
     const server = boot(makeConfig(), wired, isolated());
 
-    const first = await request(server).post('/api/reviews/local').send({ path: root });
-    const id: string = first.body.issueKey;
+    const first = await startLocal(server, { path: root });
+    const id: string = first.issueKey;
 
     execFileSync('git', ['checkout', '--', '.'], { cwd: root });
     const again = await request(server).post(`/api/reviews/${encodeURIComponent(id)}/start`).send({});
@@ -451,8 +467,8 @@ describe('reviewing a local directory', () => {
     const root = makeRepo();
     const server = boot(makeConfig(), makeWired(), isolated());
 
-    const first = await request(server).post('/api/reviews/local').send({ path: root });
-    const meta = await request(server).get(`/api/reviews/${encodeURIComponent(first.body.issueKey)}/prepare`);
+    const first = await startLocal(server, { path: root });
+    const meta = await request(server).get(`/api/reviews/${encodeURIComponent(first.issueKey)}/prepare`);
 
     expect(meta.status).toBe(200);
     expect(meta.body.description).toContain(root);
@@ -514,15 +530,15 @@ describe('reviewing a local directory', () => {
     const wired = makeWired();
     const server = boot(makeConfig(), wired, isolated());
 
-    const attached = await request(server).post('/api/reviews/local').send({ path: root, issueKey: 'BUY-9' });
+    const attached = await startLocal(server, { path: root, issueKey: 'BUY-9' });
     // The id becomes the issue's — this is a review of BUY-9 now, and the
     // decision will reach Jira like any other.
-    expect(attached.body.issueKey).toBe('BUY-9');
-    expect(attached.body.local).toBe(false);
+    expect(attached.issueKey).toBe('BUY-9');
+    expect(attached.local).toBe(false);
 
-    const plain = await request(server).post('/api/reviews/local').send({ path: root });
-    expect(plain.body.issueKey).toContain('local:');
-    expect(plain.body.local).toBe(true);
+    const plain = await startLocal(server, { path: root });
+    expect(plain.issueKey).toContain('local:');
+    expect(plain.local).toBe(true);
     server.shutdown();
   });
 
@@ -542,8 +558,8 @@ describe('reviewing a local directory', () => {
     const wired = makeWired();
     const server = boot(makeConfig(), wired, isolated());
 
-    const first = await request(server).post('/api/reviews/local').send({ path: root });
-    const id: string = first.body.issueKey;
+    const first = await startLocal(server, { path: root });
+    const id: string = first.issueKey;
     await settles(() => expect(wired.reviewStore.get(id)?.review).toBeDefined());
 
     // Exactly the shape found in a real store: no `localPath`, and the
@@ -574,8 +590,8 @@ describe('reviewing a local directory', () => {
     const wired = makeWired();
     const server = boot(makeConfig(), wired, isolated());
 
-    const first = await request(server).post('/api/reviews/local').send({ path: root });
-    const id: string = first.body.issueKey;
+    const first = await startLocal(server, { path: root });
+    const id: string = first.issueKey;
     await settles(() => expect(wired.reviewStore.get(id)?.review).toBeDefined());
     wired.reviewStore.upsert(id, {
       localPath: undefined,
@@ -601,8 +617,8 @@ describe('reviewing a local directory', () => {
     const wired = makeWired();
     const server = boot(makeConfig(), wired, isolated());
 
-    const first = await request(server).post('/api/reviews/local').send({ path: root });
-    const id: string = first.body.issueKey;
+    const first = await startLocal(server, { path: root });
+    const id: string = first.issueKey;
     await settles(() => expect(wired.reviewStore.get(id)?.review).toBeDefined());
 
     // Something new in the working copy, never committed.
@@ -627,8 +643,8 @@ describe('reviewing a local directory', () => {
     const wired = makeWired();
     const server = boot(makeConfig(), wired, isolated());
 
-    const first = await request(server).post('/api/reviews/local').send({ path: root });
-    const id: string = first.body.issueKey;
+    const first = await startLocal(server, { path: root });
+    const id: string = first.issueKey;
     await settles(() => expect(wired.reviewStore.get(id)?.review).toBeDefined());
 
     execFileSync('git', ['checkout', '-qb', 'feature/başka'], { cwd: root });
@@ -655,7 +671,7 @@ describe('reviewing a local directory', () => {
     const wired = makeWired();
     const server = boot(makeConfig(), wired, isolated());
 
-    await request(server).post('/api/reviews/local').send({ path: root, issueKey: 'BUY-9' });
+    await startLocal(server, { path: root, issueKey: 'BUY-9' });
     await settles(() => expect(wired.reviewStore.get('BUY-9')?.review).toBeDefined());
 
     const again = await request(server).post('/api/reviews/BUY-9/start').send({ contextRepos: [] });
@@ -675,7 +691,7 @@ describe('reviewing a local directory', () => {
     const root = makeRepo();
     const server = boot(makeConfig(), makeWired(), isolated());
 
-    await request(server).post('/api/reviews/local').send({ path: root, issueKey: 'BUY-9' });
+    await startLocal(server, { path: root, issueKey: 'BUY-9' });
     await request(server).get('/api/reviews');
     const meta = await request(server).get('/api/reviews/BUY-9/prepare');
 
@@ -686,6 +702,8 @@ describe('reviewing a local directory', () => {
   it('refuses a path that is not a repository, and one with nothing to review', async () => {
     const server = boot(makeConfig(), makeWired(), isolated());
 
+    // Posted directly rather than through `startLocal`: the refusal is the
+    // thing under test, so asserting a 200 first would be nonsense.
     const notRepo = await request(server).post('/api/reviews/local').send({ path: dir });
     expect(notRepo.status).toBe(400);
     expect(notRepo.body.error).toContain('git deposu değil');
@@ -697,6 +715,47 @@ describe('reviewing a local directory', () => {
   });
 });
 
+
+describe('an objection that asked something', () => {
+  it('pairs the reviewer\'s reply with the objection that drew it', async () => {
+    /*
+     * The pairing rule is a fact about the review format — an `[answer]`
+     * line opens with the finding's heading — so it lives here rather than
+     * in the browser, where a second implementation of it would be the one
+     * that drifts.
+     */
+    const wired = makeWired();
+    const server = boot(makeConfig(), wired, isolated());
+
+    wired.reviewStore.upsert('BUY-1', {
+      status: 'awaiting_approval',
+      review: {
+        title: 't',
+        markdown: [
+          'Verdict: Approve',
+          '',
+          '[answer] blocking — src/Payment.php:829 — Ediliyor ama yalnızca POST yolunda.',
+          '[answer] major — src/Bank.php:12 — Kontrol edemedim, dosya checkout dışında.',
+        ].join('\n'),
+      },
+      challenges: [
+        { finding: 'blocking — src/Payment.php:829', objection: 'Valide ediliyor değil mi?', raisedAt: '' },
+        { finding: 'minor — src/Log.php:4', objection: 'bence yanlış', raisedAt: '' },
+      ],
+    });
+
+    const detail = await request(server).get('/api/reviews/BUY-1/detail');
+    const [first, second] = detail.body.challenges;
+
+    expect(first.answer).toBe('Ediliyor ama yalnızca POST yolunda.');
+    // An objection nobody answered keeps no answer field at all.
+    expect(second.answer).toBeUndefined();
+    // The marker never reaches anything a reader sees, here or in Jira:
+    // the question was ours, and the answer is shown beside it instead.
+    expect(detail.body.review.markdown).not.toContain('[answer]');
+    expect(detail.body.reviewTail).not.toContain('[answer]');
+  });
+});
 
 describe('content security policy', () => {
   it('forbids everything by default, and allows only this origin', async () => {

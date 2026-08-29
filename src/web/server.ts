@@ -638,7 +638,21 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired, opti
       clarifications: record?.clarifications ?? [],
       rejectionReason: record?.rejectionReason ?? null,
       revisionRequest: record?.revisionRequest ?? '',
-      challenges: record?.challenges ?? [],
+      /*
+       * Each objection with the reply it drew, if it drew one.
+       *
+       * Paired here rather than in the browser because the pairing rule is
+       * a fact about the review format — an `[answer]` line opens with the
+       * finding's heading — and a second implementation of it would be the
+       * one that drifts. An answer that matches nothing is not dropped: it
+       * is still something the reviewer said, and losing it would be worse
+       * than showing it unattached.
+       */
+      challenges: (record?.challenges ?? []).map((c) => {
+        const heading = c.finding.trim();
+        const reply = (parts?.answers ?? []).find((a) => a.startsWith(heading));
+        return reply ? { ...c, answer: reply.slice(heading.length).replace(/^\s*[—–-]\s*/, '').trim() } : c;
+      }),
       withdrawn: parts?.withdrawn ?? [],
       resolved: parts?.resolved ?? [],
       error: record?.error ?? null,

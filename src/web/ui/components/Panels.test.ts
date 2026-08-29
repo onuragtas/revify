@@ -201,6 +201,39 @@ describe('VerifyPanel', () => {
     expect(wrapper.find('.findingBody').text()).toContain('transaction dışında');
   });
 
+  it("shows the reviewer's reply beside the objection that asked for it", async () => {
+    /*
+     * Beside the objection rather than in the review body, because that is
+     * where the person who asked will look — and because a question is most
+     * worth answering exactly when the finding was withdrawn, which is the
+     * case where an answer buried in the review would have disappeared with
+     * it.
+     */
+    setDetail({
+      challenges: [
+        {
+          finding: 'blocking — a.ts:1',
+          objection: 'Bu alan controller\'da zaten valide ediliyor değil mi?',
+          raisedAt: '',
+          answer: 'Ediliyor ama yalnızca POST yolunda; bu akış PaymentJob üzerinden geliyor.',
+        },
+      ],
+    });
+    await nextTick();
+
+    const wrapper = mount(VerifyPanel);
+    expect(wrapper.find('.answerNote').exists()).toBe(true);
+    expect(wrapper.find('.answerNote').text()).toContain('yalnızca POST yolunda');
+  });
+
+  it('shows no reply box for an objection that drew none', async () => {
+    setDetail({
+      challenges: [{ finding: 'blocking — a.ts:1', objection: 'yanlış', raisedAt: '' }],
+    });
+    await nextTick();
+    expect(mount(VerifyPanel).find('.answerNote').exists()).toBe(false);
+  });
+
   it('offers a dispute box for a finding the review has since dropped', async () => {
     setDetail({ challenges: [{ finding: 'blocking — gitti.ts:1', objection: 'yanlıştı', raisedAt: '' }] });
     await nextTick();

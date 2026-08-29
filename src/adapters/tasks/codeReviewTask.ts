@@ -286,6 +286,19 @@ export function buildPrompt(input: CodeReviewPromptInput): string {
       '  evidence — file, line, and what the code actually does — that answers the objection.\n' +
       '- Never settle this by reasoning alone. If you cannot find the code to check, say so\n' +
       '  in the finding rather than guessing which side is right.\n\n' +
+      '**If an objection asks something, answer it.** People write "is that field not already\n' +
+      'validated in the controller?" as often as they write "this is wrong", and a question\n' +
+      'that goes unanswered is why the same objection comes back next round. Put the answer\n' +
+      'under the verdict on its own line, opening with the finding\'s heading exactly as it\n' +
+      'appears above — that is what pairs the answer with the question:\n\n' +
+      '```\n' +
+      '[answer] blocking — src/Payment.php:829 — Evet, `validate()` çağrılıyor ama yalnızca\n' +
+      'POST yolunda; bu akış `PaymentJob` üzerinden geliyor ve orada çağrılmıyor.\n' +
+      '```\n\n' +
+      'Answer it whether or not the finding survives. A question is most worth answering\n' +
+      'precisely when you withdraw the finding — that is the case where the answer would\n' +
+      'otherwise disappear with it. Answer from the code, with file and line, or say plainly\n' +
+      'that you could not check.\n\n' +
       challenges
         .map((c) => `- **Bulgu:** ${c.finding.trim()}\n  **İtiraz:** ${c.objection.trim() || '(gerekçe yok — yine de doğrula)'}`)
         .join('\n') +

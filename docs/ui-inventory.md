@@ -182,7 +182,7 @@ Göçün nasıl yürüdüğü `ui-migration.md` içinde.
 - [ ] düğme: Kaydet ve tekrar doğrulat
 - [ ] alan: ör. 2. bulgu geçersiz, o alan controller'da zaten valide edi
 - [ ] alan: Cevabın…
-- [ ] alan: Bu bulgu neden yanlış? (boş bırakırsan itiraz yok sayılır)
+- [ ] alan: Bu bulgu neden yanlış? Soru da sorabilirsin — review cevapla
 - [ ] alan: metin kutusu
 - [ ] alan: metin kutusu
 - [ ] alan: metin kutusu

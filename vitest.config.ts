@@ -29,5 +29,22 @@ export default defineConfig({
      * The cost is that a genuinely hung test takes this long to say so.
      */
     testTimeout: 40_000,
+    /*
+     * A ceiling on workers, because these suites are not CPU-bound.
+     *
+     * The server tests drive real git and stand up an ephemeral HTTP server
+     * per request. Left to fill every core, the machine ends up with dozens
+     * of git processes and sockets in flight, and requests started failing
+     * in a way that has nothing to do with the code under test: an
+     * occasional 404 for a route that is unconditionally registered — the
+     * request never reached the app it was addressed to. Roughly one full
+     * run in nine.
+     *
+     * Four workers keeps the suite parallel where it pays (the component
+     * tests) without the contention. The wall-clock cost is small; a suite
+     * that fails one run in nine costs far more, because the failure is
+     * never where the bug is.
+     */
+    poolOptions: { threads: { maxThreads: 4 } },
   },
 });

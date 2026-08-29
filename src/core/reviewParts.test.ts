@@ -123,3 +123,33 @@ describe('[resolved] lines', () => {
     expect(splitReview('Verdict: Approve').resolved).toEqual([]);
   });
 });
+
+describe('[answer] lines', () => {
+  it('lifts the reply to an objection out of the review', () => {
+    /*
+     * An objection is not always "you are wrong" — often it is "is this
+     * really so?", and there was nowhere for the answer to go. It would
+     * land inside the finding if the finding survived, and vanish entirely
+     * if it did not, which is the case where the question mattered most.
+     */
+    const parts = splitReview(
+      [
+        'Verdict: Approve',
+        '',
+        '[answer] blocking — src/Payment.php:829 — Evet, validate() çağrılıyor ama yalnızca POST yolunda.',
+        '[withdrawn] blocking — src/Payment.php:829 — itiraz haklı, geri çekildi',
+      ].join('\n'),
+    );
+
+    expect(parts.answers).toEqual([
+      'blocking — src/Payment.php:829 — Evet, validate() çağrılıyor ama yalnızca POST yolunda.',
+    ]);
+    expect(parts.withdrawn).toHaveLength(1);
+    // Internal, like the other markers: the question was ours, not Jira's.
+    expect(parts.body).not.toContain('[answer]');
+  });
+
+  it('is empty when nothing was asked', () => {
+    expect(splitReview('Verdict: Approve').answers).toEqual([]);
+  });
+});

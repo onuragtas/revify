@@ -155,7 +155,14 @@ export interface ReviewDetail {
   clarifications: Array<{ question: string; answer: string; answeredAt: string }>;
   rejectionReason: string | null;
   revisionRequest: string;
-  challenges: Array<{ finding: string; objection: string; raisedAt: string }>;
+  challenges: Array<{
+    finding: string;
+    objection: string;
+    raisedAt: string;
+    /** The reviewer's reply, when the objection asked something. Paired
+     * server-side so the answer sits next to the question that prompted it. */
+    answer?: string;
+  }>;
   /** `[withdrawn]` lines: findings a human disputed that the reviewer then
    * re-checked and dropped. */
   withdrawn: string[];

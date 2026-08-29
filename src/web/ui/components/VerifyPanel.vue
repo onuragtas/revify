@@ -80,6 +80,23 @@ const disputable = computed(() => {
   return rows;
 });
 
+/**
+ * The reviewer's reply to an objection that asked something.
+ *
+ * Shown beside the objection rather than in the review body, because that
+ * is where the person who asked will look — and because a question is most
+ * worth answering exactly when the finding was withdrawn, which is the case
+ * where an answer buried in the review would have disappeared with it.
+ */
+const replies = computed(
+  () =>
+    new Map(
+      (detail.value?.challenges ?? [])
+        .filter((c) => c.answer?.trim())
+        .map((c) => [c.finding, c.answer!.trim()]),
+    ),
+);
+
 const objections = ref<Record<string, string>>({});
 const editingObjections = ref(false);
 
@@ -250,9 +267,12 @@ async function clearRevision(): Promise<void> {
           <div v-if="row.body" class="findingBody" v-html="renderMarkdown(row.body)"></div>
           <textarea
             v-model="objections[row.heading]"
-            placeholder="Bu bulgu neden yanlış? (boş bırakırsan itiraz yok sayılır)"
+            placeholder="Bu bulgu neden yanlış? Soru da sorabilirsin — review cevaplar."
             @focus="editingObjections = true"
           ></textarea>
+          <div v-if="replies.get(row.heading)" class="answerNote">
+            <b>Review'in cevabı:</b> {{ replies.get(row.heading) }}
+          </div>
         </div>
       </div>
       <div class="card-actions">

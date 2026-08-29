@@ -1050,6 +1050,14 @@
 .pointer { cursor: pointer; }
 .warn { color: var(--amber); }
 
+/* The reply to an objection, directly under the box that asked. */
+.answerNote {
+  margin-top: 0.5rem; padding: 0.5rem 0.7rem;
+  border-left: 2px solid var(--accent); border-radius: 0 var(--radius) var(--radius) 0;
+  background: var(--surface-2); font-size: 0.85rem; line-height: 1.55;
+}
+.answerNote b { color: var(--accent-text); }
+
 /* The select column: as narrow as a checkbox, and out of the way. */
 .pickCol { width: 1.6rem; text-align: center; }
 .pickCol input { margin: 0; cursor: pointer; }
