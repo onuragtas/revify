@@ -42,13 +42,18 @@ const HEADING = /^(#{2,6})\s*(?:\*\*)?(blocking|major|minor)(?:\*\*)?\b\s*[—�
 /**
  * What ends a finding without starting another.
  *
- * A section heading, the QA notes, or the verdict line — all of which belong
- * to the review as a whole. The verdict matters most: `codeReview.md` asks
- * for it as a bare `Verdict: …` line, so without this rule it lands inside
- * whichever finding happened to be written last, and travels to the fixer as
- * if it were part of that finding.
+ * A section heading, the verdict line, or one of the two sections that
+ * follow it — all of which belong to the review as a whole. The verdict
+ * matters most: `codeReview.md` asks for it as a bare `Verdict: …` line, so
+ * without this rule it lands inside whichever finding happened to be
+ * written last, and travels to the fixer as if it were part of that finding.
+ *
+ * The bold alternatives are here because the prompt names those sections in
+ * bold, and a model asked for a bold title sometimes writes one instead of
+ * a heading. Cheaper to accept both than to have a whole QA or deployment
+ * section swallowed by the last finding.
  */
-const SECTION_END = /^\s*(?:#{1,6}\s|\*\*"?QA|Verdict:)/i;
+const SECTION_END = /^\s*(?:#{1,6}\s|\*\*"?(?:QA|Prod)|Verdict:)/i;
 
 /**
  * Splits a review into its findings.

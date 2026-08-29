@@ -78,6 +78,62 @@ describe('parseFindings', () => {
   });
 });
 
+describe('the sections that follow the verdict', () => {
+  it('does not swallow the QA or deployment notes into the last finding', () => {
+    /*
+     * The prompt names both sections in bold, and a model asked for a bold
+     * title sometimes writes one instead of a heading. Read as ordinary
+     * text, a whole deployment checklist would travel to the fixer as part
+     * of whichever finding happened to come last.
+     */
+    const review = [
+      '### minor — src/util/log.ts:4',
+      '',
+      'Log mesajı yanıltıcı.',
+      '',
+      'Verdict: Request changes',
+      '',
+      '**QA için**',
+      '',
+      'Boş sepetle ödeme dene → uyarı görünmeli.',
+      '',
+      '**Prod öncesi**',
+      '',
+      '`refund.retry.enabled` eklenmeli, migration deploy öncesi koşmalı.',
+    ].join('\n');
+
+    const { findings, tail } = splitFindings(review);
+
+    expect(findings).toHaveLength(1);
+    expect(findings[0].body).not.toContain('QA için');
+    expect(findings[0].body).not.toContain('Prod öncesi');
+    expect(tail).toContain('refund.retry.enabled');
+  });
+
+  it('ends a finding at the deployment notes even with no QA section before them', () => {
+    // The QA section can collapse to nothing — a pure refactor has no test
+    // steps — and then this bold title is the first thing after the
+    // verdict. Without its own rule the whole checklist reads as prose
+    // belonging to the last finding.
+    const review = [
+      '### minor — src/util/log.ts:4',
+      '',
+      'Log mesajı yanıltıcı.',
+      '',
+      '**Prod öncesi**',
+      '',
+      '`refund.retry.enabled` eklenmeli.',
+    ].join('\n');
+
+    const { findings, tail } = splitFindings(review);
+
+    expect(findings).toHaveLength(1);
+    expect(findings[0].body).not.toContain('Prod öncesi');
+    expect(findings[0].body).not.toContain('refund.retry.enabled');
+    expect(tail).toContain('refund.retry.enabled');
+  });
+});
+
 describe('worstSeverity', () => {
   it('reports the heaviest finding, not the last one', () => {
     expect(worstSeverity(REVIEW)).toBe('blocking');

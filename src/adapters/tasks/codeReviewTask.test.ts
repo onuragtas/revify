@@ -166,14 +166,47 @@ describe('buildPrompt', () => {
     expect(prompt).toContain('the condition that triggers it');
   });
 
-  it('asks for QA test notes aimed at a tester, not unit tests', () => {
+  it('asks for QA notes a tester can actually run', () => {
+    /*
+     * "2–5 items, each one line" was the same disease as the three-finding
+     * cap: a limit written against padding that cut the substance instead.
+     * A payment flow needs a dozen scenarios, and trimming to five to look
+     * tidy is how a defect ships.
+     */
     const prompt = buildPrompt(baseInput);
 
     expect(prompt).toContain('QA için');
-    expect(prompt).toContain('2–5 items');
+    expect(prompt).toContain('Önkoşullar');
+    // Where a change actually bites, and where a thin note is worst.
+    expect(prompt).toContain('negative cases');
+    // Unverifiable expectations are not test steps.
+    expect(prompt).toContain('Nasıl anlaşılır');
+    expect(prompt).toContain('as many scenarios as the change deserves');
+    // Still a tester's list, not a developer's: unit tests belong in a
+    // finding, where somebody can act on them.
     expect(prompt).toContain('Do not suggest unit tests here');
-    // The risky paths are the point — a happy-path-only list is useless.
-    expect(prompt).toContain('Lead with the risky paths');
+
+    expect(prompt).not.toContain('2–5 items');
+  });
+
+  it('asks what has to happen around the code before it ships', () => {
+    /*
+     * The half nobody was writing: migrations, config keys, deploy order,
+     * whether old and new can run side by side, whether a revert is clean.
+     * None of it is in the diff, and none of it is knowable from reading
+     * the code alone — which is exactly why it is discovered at the worst
+     * possible moment.
+     */
+    const prompt = buildPrompt(baseInput);
+
+    expect(prompt).toContain('Prod öncesi');
+    expect(prompt).toContain('Migrations and data');
+    expect(prompt).toContain('Configuration');
+    expect(prompt).toContain('Deploy order');
+    expect(prompt).toContain('Backward compatibility during rollout');
+    expect(prompt).toContain('Rollback');
+    // A checklist invented to look thorough is worse than "nothing to do".
+    expect(prompt).toContain('an invented checklist is not');
   });
 
   it('bans preamble and padding without capping real findings', () => {

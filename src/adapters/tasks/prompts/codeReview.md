@@ -189,7 +189,8 @@ out. It is as long as the defects require and not one line longer.
 
 ## Verdict
 
-End with exactly one line — no closing paragraph before or after it:
+End the findings with exactly one line — no closing paragraph before it, and
+no summing-up after it. The two sections below follow it directly:
 
 `Verdict: Approve`
 `Verdict: Request changes — <one sentence naming the blocking finding(s)>`
@@ -200,24 +201,79 @@ Approve. If the diff is genuinely fine, say so in one sentence and Approve
 
 ## QA notes
 
-After the verdict, add a short section headed **"QA için"** telling the
-tester what to actually exercise. This is the part a QA engineer reads
-instead of the code, so write it in their language, not the code's.
+After the verdict, add a section headed **"QA için"** telling the tester
+what to actually exercise. This is the part a QA engineer reads instead of
+the code, so write it in their language, not the code's — screens, buttons,
+data states, and what they should see.
 
-- **2–5 items, each one line.** Scenario first, then what should happen:
-  *"Request a quote with an unmatched provider → the fallback icon should
-  show, no empty slot."*
-- **Only manual/functional checks** a person can run against the app —
-  screens, endpoints, data states. Do not suggest unit tests here.
-- **Lead with the risky paths**: the conditions your findings identified,
-  and the flows this change can break indirectly (the caller, the screen
-  downstream, the other endpoint that shares this data).
-- **Include what to check when things go wrong**, not just the happy path —
-  the empty/missing/mismatched case is usually where the change bites.
-- If a finding means something cannot be verified until a config or data
-  change lands, say so here as a precondition.
+Structure it like this, and skip a part only when there is genuinely
+nothing to put in it:
 
-If the change genuinely has nothing a tester can exercise (pure refactor
+**Önkoşullar** — what has to be true before any of it can be tested: a
+config value, a feature flag, a row that must exist, a service that must be
+up, a user with a particular role. A tester who discovers a precondition
+halfway through has already wasted the run.
+
+**Senaryolar** — one per line, scenario first, then what should happen:
+*"Eşleşmeyen sağlayıcıyla teklif iste → yedek ikon görünmeli, boş slot
+kalmamalı."* Cover, in this order:
+
+- the paths your findings identified — those are the ones most likely broken;
+- the happy path of what the issue asked for;
+- **the negative cases**: empty, missing, zero, duplicated, expired, wrong
+  type, permission denied, the second click, the concurrent one. This is
+  where a change actually bites and where a thin QA note is worst;
+- what this change can break **indirectly** — the caller, the screen
+  downstream, the other endpoint sharing this data, the scheduled job that
+  reads the same table.
+
+**Nasıl anlaşılır** — for anything a tester cannot see on screen, say where
+to look: which log line, which table and column, which response field. "It
+should work" is not checkable; "the `refund_ticket` row should reach status
+`SETTLED` within a minute" is.
+
+Write as many scenarios as the change deserves. A change touching one
+string needs two; a payment flow needs a dozen, and cutting it to five to
+look tidy is how a defect ships. Do not suggest unit tests here — those
+belong in a finding.
+
+If the change genuinely has nothing a tester can exercise (a pure refactor
 with no behavior change), write one line saying that instead of inventing
 test steps.
+
+## Before it goes to production
+
+After the QA section, add one headed **"Prod öncesi"** — everything that has
+to happen around this code for it to be deployed safely, that is not in the
+diff and that nobody would know from reading it.
+
+Go through these and report only what applies:
+
+- **Migrations and data** — schema changes, backfills, a column that must be
+  populated before the code reads it. Say the order: does the migration have
+  to land before the deploy, or after?
+- **Configuration** — new keys, environment variables, feature flags,
+  credentials. Name each one exactly as the code reads it, and say what it
+  must be set to. A default that only works on a developer's machine is a
+  finding, but the value still belongs here.
+- **Deploy order** — when the change spans services, which one goes first.
+  A caller deployed before the endpoint it calls is an outage nobody sees in
+  review.
+- **Backward compatibility during rollout** — old and new run side by side
+  for a while. Can the old version read what the new one writes? Will an
+  in-flight request, a queued message or a cached response from before the
+  deploy still be handled?
+- **Rollback** — if this is reverted an hour later, after it has written
+  data or moved a state machine, what breaks? Say so plainly when a revert
+  is not clean; that is exactly the thing discovered at the worst moment.
+- **Operational** — a queue to drain, a cache to invalidate, a scheduled job
+  to disable during deploy, an external party (bank, provider, another team)
+  to notify or coordinate with.
+
+Read the diff for this, do not guess: a new `@Value`, a new table, a new
+enum written to an existing column, a changed response shape, a new
+scheduled job — each one implies something on this list.
+
+If the change is genuinely a plain deploy with nothing around it, write one
+line saying so. That is a useful answer; an invented checklist is not.
 {{notesDisclosure}}{{languageInstruction}}
