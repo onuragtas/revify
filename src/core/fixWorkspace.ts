@@ -329,69 +329,84 @@ export async function applyFixPatch(
 
   const patchFile = join(root, '.git', `revify-fix-${Date.now()}.patch`);
   writeFileAtomic(patchFile, patch.endsWith('\n') ? patch : `${patch}\n`);
+
+  /*
+   * Four ways to put a patch in, weakest assumption last.
+   *
+   * `--3way` is the best outcome — it merges when the target has moved on
+   * — but it reads the index, and refuses with "does not match index" the
+   * moment a file it touches is modified and unstaged. That is not an edge
+   * case here: a directory review deliberately includes uncommitted work,
+   * so the very directory this patch was written for is normally in exactly
+   * that state. Plain `git apply` never looks at the index and puts the
+   * hunks straight into the working tree, which is what an editor's "apply
+   * patch" does and why one kept succeeding by hand after this failed.
+   *
+   * Nothing here fuzzes. Every attempt still requires the context to match
+   * — whitespace aside — because a hunk landing somewhere plausible but
+   * wrong is worse than one that does not land.
+   */
+  const ATTEMPTS: Array<{ args: string[]; merged: boolean; ignoredWhitespace: boolean }> = [
+    { args: ['--3way'], merged: false, ignoredWhitespace: false },
+    { args: ['--3way', '--ignore-whitespace'], merged: true, ignoredWhitespace: true },
+    { args: [], merged: false, ignoredWhitespace: false },
+    { args: ['--ignore-whitespace'], merged: false, ignoredWhitespace: true },
+  ];
+
+  let first = '';
   try {
-    // git apply says nothing on a clean apply and reports its reasoning on
-    // stderr, so the file list comes from the patch itself and the "did it
-    // have to merge" answer from what git narrated.
-    const { stdout, stderr } = await gitFull(
-      root,
-      ['apply', '--3way', '--whitespace=nowarn', '--verbose', patchFile],
-      signal,
-    );
-    return { root, files: filesInPatch(patch), merged: /fell back|3-way/i.test(`${stdout}\n${stderr}`) };
-  } catch (err) {
-    /*
-     * Second attempt, ignoring whitespace.
-     *
-     * `git apply` matches context exactly; an editor's "apply patch" does
-     * not, which is why a patch git refuses can go in cleanly by hand and
-     * be correct. The usual cause is indentation that drifted between the
-     * reviewed checkout and this one — tabs against spaces, a reformat, a
-     * trailing space — and refusing over it sends someone to do by hand
-     * exactly what this was for.
-     *
-     * Whitespace is the only thing relaxed. Reducing the required context
-     * lines would let a hunk land in the wrong place, and a patch applied
-     * somewhere plausible but wrong is worse than one that does not apply.
-     */
-    if (!signal?.aborted && !/conflict/i.test(gitError(err))) {
+    for (const attempt of ATTEMPTS) {
+      signal?.throwIfAborted();
       try {
-        await gitFull(
+        const { stdout, stderr } = await gitFull(
           root,
-          ['apply', '--3way', '--whitespace=nowarn', '--ignore-whitespace', '--verbose', patchFile],
+          ['apply', ...attempt.args, '--whitespace=nowarn', '--verbose', patchFile],
           signal,
         );
-        return { root, files: filesInPatch(patch), merged: true, ignoredWhitespace: true };
-      } catch {
-        // Report the first attempt's diagnosis: it is the one that describes
-        // the patch as it stands, not as it would be with whitespace waived.
+        return {
+          root,
+          files: filesInPatch(patch),
+          // git narrates a fallback to three-way on stderr; the file list
+          // comes from the patch itself either way.
+          merged: attempt.merged || /fell back|3-way/i.test(`${stdout}\n${stderr}`),
+          ...(attempt.ignoredWhitespace ? { ignoredWhitespace: true } : {}),
+        };
+      } catch (err) {
+        const message = gitError(err);
+        first ||= message;
+
+        /*
+         * A conflicted three-way apply exits non-zero *and* writes the
+         * merge into the working copy. Reporting it as a plain failure
+         * would send someone looking for changes already in their files,
+         * and trying the next strategy on top would apply the patch twice.
+         */
+        if (/conflict/i.test(message)) {
+          throw new Error(
+            `Yama çakışmalarla uygulandı — çalışma kopyanda çakışma işaretleri var, çözüp öyle commitle:\n${message}`,
+          );
+        }
       }
     }
 
-    const message = gitError(err);
-    // A conflicted 3-way apply exits non-zero *and* writes the merge into
-    // the working copy — reporting it as a plain failure would send someone
-    // looking for changes that are, in fact, already in their files.
-    if (/conflict/i.test(message)) {
-      throw new Error(
-        `Yama çakışmalarla uygulandı — çalışma kopyanda çakışma işaretleri var, çözüp öyle commitle:\n${message}`,
-      );
-    }
     /*
-     * The common failure, said in terms of the decision it asks for.
+     * Every strategy refused, reported as the decision it asks for.
      *
      * "patch does not apply" is true and useless: the reader wants to know
      * *which* directory is wrong and what to do about it. The patch was
-     * written against a specific branch's code, and this directory is not
-     * on it — checking that out is the fix, and applying anyway would be
-     * the wrong thing even if git could.
+     * written against a specific branch's code, and if nothing could place
+     * it, this directory is not on that code — checking it out is the fix,
+     * and applying anyway would be wrong even if git could.
+     *
+     * The first attempt's diagnosis is the one reported: it describes the
+     * patch as it stands, rather than as it would be with whitespace waived.
      */
-    const failure = applyFailure(message);
+    const failure = applyFailure(first);
     if (failure.contentDiffers) {
       throw new Error(
         `Yama bu dizine uymadı: ${root}\n` +
           (failure.files.length ? `Uymayan dosya(lar): ${failure.files.join(', ')}\n` : '') +
-          'Buradaki kod, review\'in yapıldığı koddan farklı — büyük ihtimalle başka bir dal ya da ' +
+          "Buradaki kod, review'in yapıldığı koddan farklı — büyük ihtimalle başka bir dal ya da " +
           `commit üzerindesin${branchName ? ` (yama \`${branchName}\` için üretildi)` : ''}. ` +
           'Doğru dala geçip tekrar dene.\n' +
           failure.detail,

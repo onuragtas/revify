@@ -341,6 +341,57 @@ describe('applyFixPatch — whitespace that drifted', () => {
   });
 });
 
+describe('applyFixPatch — a directory with uncommitted work', () => {
+  it('leaves unrelated work in progress alone', async () => {
+    // Dirty files git is not being asked about do not block an apply, and
+    // must come through untouched: this lands in somebody's real working
+    // copy, next to whatever they had open.
+    await createFixWorkspace({ dir: source, includeWorkingTree: false }, workspace);
+    writeFileSync(join(workspace, 'app.ts'), FILE.replace('{{rate}}', '2'));
+    const { patch } = await extractFixPatch(workspace);
+
+    // Somebody's work in progress, in another file so it cannot be mistaken
+    // for content drift under the patch itself.
+    writeFileSync(join(source, 'notes.md'), 'yarım kalmış iş\n');
+    git(source, 'add', 'notes.md');
+    writeFileSync(join(source, 'notes.md'), 'yarım kalmış iş, devamı\n');
+
+    const result = await applyFixPatch(source, patch);
+
+    expect(result.files).toEqual(['app.ts']);
+    expect(readFileSync(join(source, 'app.ts'), 'utf-8')).toBe(FILE.replace('{{rate}}', '2'));
+    // Untouched: the patch is about app.ts and nothing else.
+    expect(readFileSync(join(source, 'notes.md'), 'utf-8')).toBe('yarım kalmış iş, devamı\n');
+  });
+
+  it('applies when the patched file itself is modified and unstaged', async () => {
+    /*
+     * The normal state for this feature, not an edge case.
+     *
+     * A directory review deliberately includes uncommitted work, so the
+     * directory a patch was written for is usually one with modified,
+     * unstaged files — and `git apply --3way` reads the index and refuses
+     * exactly that: "does not match index". A plain apply never looks at
+     * the index and puts the hunks into the working tree, which is what an
+     * editor's "apply patch" does and why one kept succeeding by hand after
+     * this had refused.
+     */
+    await createFixWorkspace({ dir: source, includeWorkingTree: false }, workspace);
+    writeFileSync(join(workspace, 'app.ts'), `${FILE.replace('{{rate}}', '1')}\nexport const extra = 1;\n`);
+    const { patch } = await extractFixPatch(workspace);
+
+    // Same file, edited at the top and never staged.
+    writeFileSync(join(source, 'app.ts'), FILE.replace('{{rate}}', '9'));
+
+    const applied = await applyFixPatch(source, patch);
+
+    expect(applied.files).toEqual(['app.ts']);
+    const after = readFileSync(join(source, 'app.ts'), 'utf-8');
+    expect(after).toContain('rate = 9');
+    expect(after).toContain('export const extra = 1;');
+  });
+});
+
 describe('applyFailure', () => {
   const GIT_OUTPUT = [
     'Checking patch src/main/java/Payment.java...',
