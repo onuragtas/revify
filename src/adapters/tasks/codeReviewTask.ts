@@ -156,7 +156,7 @@ function commitList(
       .map(
         (c) =>
           `- \`${c.sha}\` ${c.date.slice(0, 10)} · ${c.author} · ${c.title}` +
-          (belongs(c) ? '' : '  ← **bu biletten değil**'),
+          (belongs(c) ? '' : '  ← **bu task\'a ait değil**'),
       )
       .join('\n') +
     '\n\n' +

@@ -126,6 +126,23 @@ function makeWired(options: { fail?: boolean } = {}): Wired {
 const isolated = () => ({ settingsStore: new SettingsStore(join(dir, 'settings.json')) });
 
 /**
+ * A server that is guaranteed to be shut down.
+ *
+ * Eight tests here created one and never stopped it, so its pollers stayed
+ * alive for the rest of the file — two of them with a task that never
+ * finishes on its own still attached. Under load that is a suite which
+ * hangs somewhere unrelated, forty seconds later, in whichever test happens
+ * to be running. Registering here means the next test cannot forget.
+ */
+const running: Array<{ shutdown: () => void }> = [];
+
+function boot(...args: Parameters<typeof createServer>): ReturnType<typeof createServer> {
+  const server = createServer(...args);
+  running.push(server);
+  return server;
+}
+
+/**
  * Waits for the pipeline to get somewhere, on a machine that is busy.
  *
  * `vi.waitFor` gives up after one second by default, which `testTimeout`
@@ -138,11 +155,15 @@ const SETTLE_MS = 20_000;
 const settles = (assertion: () => void) => vi.waitFor(assertion, { timeout: SETTLE_MS, interval: 25 });
 
 beforeEach(() => (dir = mkdtempSync(join(tmpdir(), 'srv-'))));
-afterEach(() => rmSync(dir, { recursive: true, force: true }));
+afterEach(() => {
+  // Before the directory goes: a running server writes to it.
+  while (running.length) running.pop()!.shutdown();
+  rmSync(dir, { recursive: true, force: true });
+});
 
 describe('server notification events', () => {
   it('announces a review only once it is actually waiting on a human', async () => {
-    const server = createServer(makeConfig(), makeWired(), isolated());
+    const server = boot(makeConfig(), makeWired(), isolated());
     const ready = vi.fn();
     server.events.on('review:ready', ready);
 
@@ -156,7 +177,7 @@ describe('server notification events', () => {
   });
 
   it('announces a failure instead of a ready review when the run breaks', async () => {
-    const server = createServer(makeConfig(), makeWired({ fail: true }), isolated());
+    const server = boot(makeConfig(), makeWired({ fail: true }), isolated());
     const ready = vi.fn();
     const failed = vi.fn();
     server.events.on('review:ready', ready);
@@ -188,7 +209,7 @@ describe('server notification events', () => {
         }),
     };
 
-    const server = createServer(makeConfig(), wired, isolated());
+    const server = boot(makeConfig(), wired, isolated());
     const ready = vi.fn();
     const failed = vi.fn();
     server.events.on('review:ready', ready);
@@ -220,7 +241,7 @@ describe('update install', () => {
         }),
     };
 
-    const server = createServer(makeConfig(), wired, isolated());
+    const server = boot(makeConfig(), wired, isolated());
     let installed = false;
     server.setUpdateState({ supported: true, status: 'ready' }, () => {
       installed = true;
@@ -239,10 +260,14 @@ describe('update install', () => {
     expect(installed).toBe(false);
 
     await request(server).post('/api/reviews/BUY-1/stop').send();
+    // Shut down like every other test here. A server left running keeps its
+    // pollers alive for the rest of the file — with a task that never
+    // finishes on its own attached to it.
+    server.shutdown();
   });
 
   it('installs once nothing is in flight', async () => {
-    const server = createServer(makeConfig(), makeWired(), isolated());
+    const server = boot(makeConfig(), makeWired(), isolated());
     let installed = false;
     server.setUpdateState({ supported: true, status: 'ready' }, () => {
       installed = true;
@@ -255,7 +280,7 @@ describe('update install', () => {
   });
 
   it('says so plainly when the build has no updater', async () => {
-    const server = createServer(makeConfig(), makeWired(), isolated());
+    const server = boot(makeConfig(), makeWired(), isolated());
 
     const state = await request(server).get('/api/update');
     expect(state.body).toEqual({ supported: false });
@@ -270,7 +295,7 @@ describe('automatic update install', () => {
     vi.useFakeTimers();
     try {
       const wired = makeWired();
-      const app = createServer(makeConfig(), wired, isolated());
+      const app = boot(makeConfig(), wired, isolated());
 
       let installed = false;
       app.setUpdateState({ status: 'ready', version: '1.2.3' }, () => {
@@ -299,7 +324,7 @@ describe('automatic update install', () => {
 
 describe('reviewing by issue key', () => {
   it('starts an issue the query never returned', async () => {
-    const server = createServer(makeConfig(), makeWired(), isolated());
+    const server = boot(makeConfig(), makeWired(), isolated());
     const ready = vi.fn();
     server.events.on('review:ready', ready);
 
@@ -316,14 +341,14 @@ describe('reviewing by issue key', () => {
   });
 
   it('accepts a key however it was typed', async () => {
-    const server = createServer(makeConfig(), makeWired(), isolated());
+    const server = boot(makeConfig(), makeWired(), isolated());
     const res = await request(server).post('/api/reviews/buy-9/start').send({ contextRepos: [] });
     expect(res.status).toBe(200);
     server.shutdown();
   });
 
   it('answers a typo with a sentence, not a Jira error', async () => {
-    const server = createServer(makeConfig(), makeWired(), isolated());
+    const server = boot(makeConfig(), makeWired(), isolated());
 
     const typo = await request(server).post('/api/reviews/not-a-key!/start').send({});
     expect(typo.status).toBe(400);
@@ -341,7 +366,7 @@ describe('reviewing by issue key', () => {
 
   it('keeps a hand-typed issue in the list instead of losing it on refresh', async () => {
     const wired = makeWired();
-    const server = createServer(makeConfig(), wired, isolated());
+    const server = boot(makeConfig(), wired, isolated());
     await request(server).post('/api/reviews/BUY-9/start').send({ contextRepos: [] });
 
     // The queue answers a different question and will never mention BUY-9.
@@ -384,7 +409,7 @@ describe('reviewing a local directory', () => {
      */
     const root = makeRepo();
     const wired = makeWired();
-    const server = createServer(makeConfig(), wired, isolated());
+    const server = boot(makeConfig(), wired, isolated());
 
     const first = await request(server).post('/api/reviews/local').send({ path: root });
     expect(first.status).toBe(200);
@@ -407,7 +432,7 @@ describe('reviewing a local directory', () => {
     // review; the reader has to be told that, not shown a dead button.
     const root = makeRepo();
     const wired = makeWired();
-    const server = createServer(makeConfig(), wired, isolated());
+    const server = boot(makeConfig(), wired, isolated());
 
     const first = await request(server).post('/api/reviews/local').send({ path: root });
     const id: string = first.body.issueKey;
@@ -424,7 +449,7 @@ describe('reviewing a local directory', () => {
     // Jira has no such issue, so /prepare answered 404 and the UI showed
     // "Jira detayları yüklenemedi" on a screen with no Jira behind it.
     const root = makeRepo();
-    const server = createServer(makeConfig(), makeWired(), isolated());
+    const server = boot(makeConfig(), makeWired(), isolated());
 
     const first = await request(server).post('/api/reviews/local').send({ path: root });
     const meta = await request(server).get(`/api/reviews/${encodeURIComponent(first.body.issueKey)}/prepare`);
@@ -445,7 +470,7 @@ describe('reviewing a local directory', () => {
     const root = makeRepo();
     execFileSync('git', ['checkout', '-qb', 'feature/BUY-9-km-muayene'], { cwd: root });
     const wired = makeWired();
-    const server = createServer(makeConfig(), wired, isolated());
+    const server = boot(makeConfig(), wired, isolated());
 
     const res = await request(server).post('/api/reviews/local/inspect').send({ path: root });
 
@@ -462,7 +487,7 @@ describe('reviewing a local directory', () => {
 
   it('finds no ticket in a branch that names none', async () => {
     const root = makeRepo();
-    const server = createServer(makeConfig(), makeWired(), isolated());
+    const server = boot(makeConfig(), makeWired(), isolated());
 
     const res = await request(server).post('/api/reviews/local/inspect').send({ path: root });
     expect(res.body.suggestedIssueKey).toBeNull();
@@ -470,7 +495,7 @@ describe('reviewing a local directory', () => {
   });
 
   it('answers whether a typed key is a real issue, so a typo is caught in the dialog', async () => {
-    const server = createServer(makeConfig(), makeWired(), isolated());
+    const server = boot(makeConfig(), makeWired(), isolated());
 
     const found = await request(server).get('/api/issues/buy-9/summary');
     expect(found.body).toMatchObject({ key: 'BUY-9', summary: 'Typed by hand' });
@@ -487,7 +512,7 @@ describe('reviewing a local directory', () => {
   it('attaches the review to the issue a human confirmed, and only then', async () => {
     const root = makeRepo();
     const wired = makeWired();
-    const server = createServer(makeConfig(), wired, isolated());
+    const server = boot(makeConfig(), wired, isolated());
 
     const attached = await request(server).post('/api/reviews/local').send({ path: root, issueKey: 'BUY-9' });
     // The id becomes the issue's — this is a review of BUY-9 now, and the
@@ -515,7 +540,7 @@ describe('reviewing a local directory', () => {
      */
     const root = makeRepo();
     const wired = makeWired();
-    const server = createServer(makeConfig(), wired, isolated());
+    const server = boot(makeConfig(), wired, isolated());
 
     const first = await request(server).post('/api/reviews/local').send({ path: root });
     const id: string = first.body.issueKey;
@@ -547,7 +572,7 @@ describe('reviewing a local directory', () => {
     // no Jira issue.
     const root = makeRepo();
     const wired = makeWired();
-    const server = createServer(makeConfig(), wired, isolated());
+    const server = boot(makeConfig(), wired, isolated());
 
     const first = await request(server).post('/api/reviews/local').send({ path: root });
     const id: string = first.body.issueKey;
@@ -574,7 +599,7 @@ describe('reviewing a local directory', () => {
      */
     const root = makeRepo();
     const wired = makeWired();
-    const server = createServer(makeConfig(), wired, isolated());
+    const server = boot(makeConfig(), wired, isolated());
 
     const first = await request(server).post('/api/reviews/local').send({ path: root });
     const id: string = first.body.issueKey;
@@ -600,7 +625,7 @@ describe('reviewing a local directory', () => {
      */
     const root = makeRepo();
     const wired = makeWired();
-    const server = createServer(makeConfig(), wired, isolated());
+    const server = boot(makeConfig(), wired, isolated());
 
     const first = await request(server).post('/api/reviews/local').send({ path: root });
     const id: string = first.body.issueKey;
@@ -628,7 +653,7 @@ describe('reviewing a local directory', () => {
      */
     const root = makeRepo();
     const wired = makeWired();
-    const server = createServer(makeConfig(), wired, isolated());
+    const server = boot(makeConfig(), wired, isolated());
 
     await request(server).post('/api/reviews/local').send({ path: root, issueKey: 'BUY-9' });
     await settles(() => expect(wired.reviewStore.get('BUY-9')?.review).toBeDefined());
@@ -648,7 +673,7 @@ describe('reviewing a local directory', () => {
     // It has a `localPath` — it was started from one — but it also has a
     // ticket, and the ticket is what the reader needs to see.
     const root = makeRepo();
-    const server = createServer(makeConfig(), makeWired(), isolated());
+    const server = boot(makeConfig(), makeWired(), isolated());
 
     await request(server).post('/api/reviews/local').send({ path: root, issueKey: 'BUY-9' });
     await request(server).get('/api/reviews');
@@ -659,7 +684,7 @@ describe('reviewing a local directory', () => {
   });
 
   it('refuses a path that is not a repository, and one with nothing to review', async () => {
-    const server = createServer(makeConfig(), makeWired(), isolated());
+    const server = boot(makeConfig(), makeWired(), isolated());
 
     const notRepo = await request(server).post('/api/reviews/local').send({ path: dir });
     expect(notRepo.status).toBe(400);
@@ -675,7 +700,7 @@ describe('reviewing a local directory', () => {
 
 describe('content security policy', () => {
   it('forbids everything by default, and allows only this origin', async () => {
-    const app = createServer(makeConfig(), makeWired(), isolated());
+    const app = boot(makeConfig(), makeWired(), isolated());
     const res = await request(app).get('/api/reviews');
     const policy = res.headers['content-security-policy'];
 
@@ -690,7 +715,7 @@ describe('content security policy', () => {
     // Until the UI moved to Vue this page *was* a 2000-line inline script,
     // and `script-src 'unsafe-inline'` would have made the rest close to
     // pointless. Nothing inline is left, so nothing inline may run.
-    const app = createServer(makeConfig(), makeWired(), isolated());
+    const app = boot(makeConfig(), makeWired(), isolated());
     const policy = (await request(app).get('/')).headers['content-security-policy'];
 
     expect(policy).toContain("script-src 'self'");
@@ -702,7 +727,7 @@ describe('content security policy', () => {
   });
 
   it('covers the page itself, not only the API', async () => {
-    const app = createServer(makeConfig(), makeWired(), isolated());
+    const app = boot(makeConfig(), makeWired(), isolated());
     const res = await request(app).get('/');
     expect(res.headers['content-security-policy']).toBeTruthy();
   });

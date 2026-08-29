@@ -119,7 +119,7 @@ describe('what the branch carries', () => {
      */
     git('checkout', '-qb', 'feature/BUY-1');
     writeFileSync(join(dir, 'a.ts'), 'export const rate = 2;\n');
-    git('commit', '-qam', 'eski iş, başka bilet');
+    git('commit', '-qam', 'eski iş, başka task');
     writeFileSync(join(dir, 'a.ts'), 'export const rate = 3;\n');
     git('commit', '-qam', 'BUY-1 asıl iş');
 
@@ -129,7 +129,7 @@ describe('what the branch carries', () => {
     );
 
     const [change] = context.repoChanges as RepoChange[];
-    expect(change.commits?.map((c) => c.title)).toEqual(['eski iş, başka bilet', 'BUY-1 asıl iş']);
+    expect(change.commits?.map((c) => c.title)).toEqual(['eski iş, başka task', 'BUY-1 asıl iş']);
     expect(change.commits?.[0].author).toBe('Test');
     expect(change.commits?.[0].date).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });

@@ -264,8 +264,8 @@ describe('buildPrompt', () => {
     expect(prompt).toContain('`9ec6c195` 2025-12-12 · onuragtas · Add shopping loan cancellation');
     // The one that does not name the ticket is called out; the one that
     // does is left alone.
-    expect(prompt).toContain('Add shopping loan cancellation functionality  ← **bu biletten değil**');
-    expect(prompt).not.toContain('BUY-1831  ← **bu biletten değil**');
+    expect(prompt).toContain("Add shopping loan cancellation functionality  ← **bu task'a ait değil**");
+    expect(prompt).not.toContain("BUY-1831  ← **bu task'a ait değil**");
     // Reported, but attributed — the fact is the merge, not the author.
     expect(prompt).toContain('Attribute it, then hold it against the merge');
   });
@@ -285,7 +285,7 @@ describe('buildPrompt', () => {
     });
 
     expect(prompt).toContain('`aaa1111` 2026-01-01');
-    expect(prompt).not.toContain('bu biletten değil');
+    expect(prompt).not.toContain("bu task'a ait değil");
     expect(prompt).not.toContain('Attribute it');
   });
 
