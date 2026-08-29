@@ -3,6 +3,50 @@
 {{description}}
 {{relatedSection}}{{commentsSection}}
 {{codeChangeSection}}{{repoInstruction}}
+## What is under review
+
+**The diff above, and nothing else.**
+
+You are given far more than the diff — the repository is checked out, other
+services are mounted, and you are told to read all of it. That is so you can
+*judge the change*: to see what calls the code it touches, what a function
+really returns, whether a claim holds. It is not an invitation to review the
+code you read on the way.
+
+A finding must be one of these:
+
+- **The change introduces it** — a defect in a line this diff adds or
+  modifies.
+- **The change leaves the issue unsolved** — what the ticket asked for is
+  missing, or fixed in one path while the described problem survives in
+  another.
+- **The change breaks something it does not touch** — a caller that now
+  receives a different shape, a contract this violates, a job that reads a
+  column whose meaning just changed. The defect is elsewhere; the *cause* is
+  here.
+
+Everything else is out of scope, however real it is:
+
+- A defect that was already there, on code this change does not touch and
+  does not depend on. It was wrong before this branch and will be wrong
+  after; reporting it here buries the findings that are about this work and
+  hands back a review nobody asked for. Leave it out.
+- Anything in the read-only services listed below. They are mounted so you
+  can *check* things, never as subjects of this review.
+- Commits on this branch that plainly belong to other work — a merge from
+  the base branch, another ticket's changes riding along. Do not review
+  them. If it looks accidental, say so once under the verdict as
+  `[note] <what looks unrelated>` and move on.
+
+The one exception, and it is narrow: a pre-existing defect the change
+**depends on** — the new code calls it, or the issue cannot be solved while
+it stands. Report that as a finding and open it with `Mevcut kod:` so the
+reader knows the branch did not cause it.
+
+When you are unsure whether something is in scope, ask: *would this be a
+defect if this branch had never been written?* If yes, and the change does
+not depend on it, leave it out.
+
 ## First: does this change actually do the job?
 
 Before looking for defects, judge the change against the issue. A change

@@ -209,6 +209,29 @@ describe('buildPrompt', () => {
     expect(prompt).toContain('an invented checklist is not');
   });
 
+  it('scopes a finding to the change, not to everything it read', () => {
+    /*
+     * The review is handed the whole checkout and the neighbouring services
+     * and told to read all of it — so it can *judge the change*: what calls
+     * this, what that really returns, whether a claim holds. Nothing said
+     * that a finding had to be *about* the change, so defects it met along
+     * the way came back as findings on a ticket that never touched them.
+     */
+    const prompt = buildPrompt(baseInput);
+
+    expect(prompt).toContain('What is under review');
+    expect(prompt).toContain('The diff above, and nothing else');
+    expect(prompt).toContain('It was wrong before this branch and will be wrong');
+    // The mounted services are for checking claims, never subjects.
+    expect(prompt).toContain('never as subjects of this review');
+    // A branch can carry a merge or another ticket's commits.
+    expect(prompt).toContain('belong to other work');
+    // The narrow exception, kept: the change depends on it.
+    expect(prompt).toContain('Mevcut kod:');
+    // The test a reviewer can apply themselves.
+    expect(prompt).toContain('if this branch had never been written?');
+  });
+
   it('bans preamble and padding without capping real findings', () => {
     /*
      * This asked for "Three findings at most" — and got it.
@@ -462,10 +485,21 @@ describe('buildPrompt — related issues', () => {
 
     expect(prompt).toContain('BUY-2424 — Shipping & Delivery Rollout');
     expect(prompt).toContain('(parent, Epic, Backlog)');
-    // The whole risk: an epic describes a programme many tickets share. If it
-    // read as a spec, every small task would be "missing" most of it.
-    expect(prompt).toContain('They are not requirements');
-    expect(prompt).toContain('Only\nthe description, comments and acceptance criteria of BUY-2455 itself bind.');
+    /*
+     * Two risks, and they run in opposite directions.
+     *
+     * An epic describes a programme many tickets share: read as a spec,
+     * every small task would be "missing" most of it. And a sibling's work
+     * can sit in the same repository: read as code under review, its
+     * defects come back as findings on a ticket that never touched it.
+     * Background means neither binding nor subject.
+     */
+    expect(prompt).toContain('Background is all they are');
+    expect(prompt).toContain('missing from this\n  change');
+    expect(prompt).toContain('Never report a finding about code that belongs to one of them');
+    expect(prompt).toContain(
+      'Only the description, comments and acceptance criteria of BUY-2455 itself\nbind',
+    );
   });
 
   it('caps a long epic so background cannot outweigh the issue under review', () => {
