@@ -146,6 +146,38 @@ function seedReview(): void {
  */
 const isolated = () => ({ settingsStore: new SettingsStore(join(dir, 'settings.json')) });
 
+/**
+ * A server that is guaranteed to be shut down.
+ *
+ * Nineteen tests here created one and none stopped it, so every server's
+ * queue and pollers stayed alive for the rest of the file, all of them
+ * pointed at the same review store. A run leaking out of one test can
+ * rewrite the record another is about to act on — which shows up as a
+ * refusal in a later test that nobody reads, and then a 25-second wait for
+ * something that was never going to happen.
+ */
+const running: Array<{ shutdown: () => void }> = [];
+
+function boot(...args: Parameters<typeof createServer>): ReturnType<typeof createServer> {
+  const server = createServer(...args);
+  running.push(server);
+  return server;
+}
+
+/**
+ * Asks for a fix and insists the server agreed.
+ *
+ * The status used to be ignored, so a refusal — no review to take findings
+ * from, one already running — became a silent no-op followed by
+ * `waitForFix` spinning until its budget ran out. The failure then named
+ * the wait instead of the reason, which is the diagnosis thrown away.
+ */
+async function startFix(app: ReturnType<typeof createServer>, body: unknown = {}) {
+  const res = await request(app).post('/api/reviews/BUY-1/fix').send(body as object);
+  expect(res.status, `fix reddedildi: ${JSON.stringify(res.body)}`).toBe(200);
+  return res;
+}
+
 /** The fix runs on the queue, so the response returns before it finishes. */
 async function waitForFix(status: string): Promise<void> {
   // Generous: each repository is a real git clone, and the whole suite runs
@@ -172,18 +204,22 @@ beforeEach(() => {
 
   reviewStore = new ReviewStore(join(dir, 'reviews.json'));
 });
-afterEach(() => rmSync(dir, { recursive: true, force: true }));
+afterEach(() => {
+  // Before the directory goes: a running server writes into it.
+  while (running.length) running.pop()!.shutdown();
+  rmSync(dir, { recursive: true, force: true });
+});
 
 describe('fix', () => {
   it('produces a patch without touching the reviewed working copy', async () => {
-    const app = createServer(
+    const app = boot(
       makeConfig(),
       makeWired(fixingProvider((workdir) => writeFileSync(join(workdir, 'app.ts'), 'export const rate = config.rate;\n'))),
       isolated(),
     );
     seedReview();
 
-    const started = await request(app).post('/api/reviews/BUY-1/fix').send({});
+    const started = await startFix(app);
     expect(started.status).toBe(200);
     await waitForFix('ready');
 
@@ -198,7 +234,7 @@ describe('fix', () => {
 
   it('defaults to the blocking and major findings, leaving nits alone', async () => {
     let seen = '';
-    const app = createServer(
+    const app = boot(
       makeConfig(),
       makeWired({
         canEditFiles: true,
@@ -212,7 +248,7 @@ describe('fix', () => {
     );
     seedReview();
 
-    await request(app).post('/api/reviews/BUY-1/fix').send({});
+    await startFix(app);
     await waitForFix('ready');
 
     expect(seen).toContain('Oran sabit yazılmış');
@@ -224,7 +260,7 @@ describe('fix', () => {
 
   it('gives the fixer the review\'s own reading of the ask, not a fresh one', async () => {
     let seen = '';
-    const app = createServer(
+    const app = boot(
       makeConfig(),
       makeWired({
         canEditFiles: true,
@@ -238,7 +274,7 @@ describe('fix', () => {
     );
     seedReview();
 
-    await request(app).post('/api/reviews/BUY-1/fix').send({});
+    await startFix(app);
     await waitForFix('ready');
 
     // The requirement a "not implemented" finding refers to…
@@ -261,23 +297,23 @@ describe('fix', () => {
       },
     });
     wired.notesStore.add({ scope: 'repo', projectPath: 'team/orders', text: 'Log için yalnızca AppLogger.' });
-    const app = createServer(makeConfig(), wired, isolated());
+    const app = boot(makeConfig(), wired, isolated());
     seedReview();
 
-    await request(app).post('/api/reviews/BUY-1/fix').send({});
+    await startFix(app);
     await waitForFix('ready');
 
     expect(seen).toContain('Log için yalnızca AppLogger.');
   });
 
   it('keeps the patch out of the polled detail payload but serves it on its own', async () => {
-    const app = createServer(
+    const app = boot(
       makeConfig(),
       makeWired(fixingProvider((workdir) => writeFileSync(join(workdir, 'app.ts'), 'export const rate = 2;\n'))),
       isolated(),
     );
     seedReview();
-    await request(app).post('/api/reviews/BUY-1/fix').send({});
+    await startFix(app);
     await waitForFix('ready');
 
     const detail = await request(app).get('/api/reviews/BUY-1/detail');
@@ -290,13 +326,13 @@ describe('fix', () => {
   });
 
   it('applies a patch to a directory the caller names, uncommitted', async () => {
-    const app = createServer(
+    const app = boot(
       makeConfig(),
       makeWired(fixingProvider((workdir) => writeFileSync(join(workdir, 'app.ts'), 'export const rate = 2;\n'))),
       isolated(),
     );
     seedReview();
-    await request(app).post('/api/reviews/BUY-1/fix').send({});
+    await startFix(app);
     await waitForFix('ready');
 
     const applied = await request(app)
@@ -321,7 +357,7 @@ describe('fix', () => {
      */
     const gateway = makeSecondRepo();
     let seen = '';
-    const app = createServer(
+    const app = boot(
       makeConfig(),
       makeWired({
         canEditFiles: true,
@@ -350,7 +386,7 @@ describe('fix', () => {
       ],
     });
 
-    await request(app).post('/api/reviews/BUY-1/fix').send({});
+    await startFix(app);
     await waitForFix('ready');
 
     const fix = reviewStore.get('BUY-1')!.fix!;
@@ -365,7 +401,7 @@ describe('fix', () => {
   it('patches the repositories it could prepare and reports the one it could not', async () => {
     // One unreachable service must not cost the patch for the ready ones.
     let seen = '';
-    const app = createServer(
+    const app = boot(
       makeConfig(),
       makeWired({
         canEditFiles: true,
@@ -392,7 +428,7 @@ describe('fix', () => {
       ],
     });
 
-    await request(app).post('/api/reviews/BUY-1/fix').send({});
+    await startFix(app);
     await waitForFix('ready');
 
     const fix = reviewStore.get('BUY-1')!.fix!;
@@ -407,7 +443,7 @@ describe('fix', () => {
     // way to reach the patch: an objection and a revision request both land
     // on the next review instead.
     let seen = '';
-    const app = createServer(
+    const app = boot(
       makeConfig(),
       makeWired({
         canEditFiles: true,
@@ -434,7 +470,7 @@ describe('fix', () => {
 
   it('ignores an instruction for a finding nobody selected', async () => {
     let seen = '';
-    const app = createServer(
+    const app = boot(
       makeConfig(),
       makeWired({
         canEditFiles: true,
@@ -459,7 +495,7 @@ describe('fix', () => {
   it('keeps the text the fixer was given, and serves it on request', async () => {
     // A patch nobody expected is only judgeable against what the fixer was
     // actually told — which instruction went in, which note was in force.
-    const app = createServer(
+    const app = boot(
       makeConfig(),
       makeWired(fixingProvider((workdir) => writeFileSync(join(workdir, 'app.ts'), 'export const rate = 2;\n'))),
       isolated(),
@@ -484,20 +520,20 @@ describe('fix', () => {
   });
 
   it('says so rather than guessing when a prompt was never kept', async () => {
-    const app = createServer(makeConfig(), makeWired(fixingProvider(() => {})), isolated());
+    const app = boot(makeConfig(), makeWired(fixingProvider(() => {})), isolated());
     seedReview();
     const res = await request(app).get('/api/reviews/BUY-1/prompt?kind=review');
     expect(res.status).toBe(404);
   });
 
   it('forgets the prompts when the task is cleared', async () => {
-    const app = createServer(
+    const app = boot(
       makeConfig(),
       makeWired(fixingProvider((workdir) => writeFileSync(join(workdir, 'app.ts'), 'export const rate = 2;\n'))),
       isolated(),
     );
     seedReview();
-    await request(app).post('/api/reviews/BUY-1/fix').send({});
+    await startFix(app);
     await waitForFix('ready');
 
     await request(app).delete('/api/reviews/BUY-1');
@@ -510,7 +546,7 @@ describe('fix', () => {
     // An objection is a human saying the finding is wrong. It only lands on
     // the next review — until then, writing code to satisfy the finding
     // would be the tool arguing with the person using it.
-    const app = createServer(
+    const app = boot(
       makeConfig(),
       makeWired(fixingProvider((workdir) => writeFileSync(join(workdir, 'app.ts'), 'export const rate = 2;\n'))),
       isolated(),
@@ -522,6 +558,8 @@ describe('fix', () => {
       ],
     });
 
+    // Posted directly rather than through `startFix`: the refusal is the
+    // thing under test, so asserting a 200 first would be nonsense.
     const res = await request(app).post('/api/reviews/BUY-1/fix').send({});
     // Nothing left to fix by default: the only non-minor finding is disputed.
     expect(res.status).toBe(400);
@@ -531,7 +569,7 @@ describe('fix', () => {
 
   it('still fixes a disputed finding when a human names it anyway', async () => {
     // The choice stays theirs — the default is a default, not a veto.
-    const app = createServer(
+    const app = boot(
       makeConfig(),
       makeWired(fixingProvider((workdir) => writeFileSync(join(workdir, 'app.ts'), 'export const rate = 2;\n'))),
       isolated(),
@@ -543,19 +581,20 @@ describe('fix', () => {
       ],
     });
 
-    await request(app).post('/api/reviews/BUY-1/fix').send({ findings: ['f0'] });
+    await startFix(app, { findings: ['f0'] });
     await waitForFix('ready');
     expect(reviewStore.get('BUY-1')!.fix!.patches[0].files).toEqual(['app.ts']);
   });
 
   it('refuses when the provider cannot edit files, instead of running for nothing', async () => {
-    const app = createServer(
+    const app = boot(
       makeConfig(),
       makeWired({ canEditFiles: false, generate: async () => 'bir şey yapamam' }),
       isolated(),
     );
     seedReview();
 
+    // Same: the refusal is the point.
     const res = await request(app).post('/api/reviews/BUY-1/fix').send({});
     expect(res.status).toBe(409);
     expect(res.body.error).toContain('claude');
@@ -563,13 +602,13 @@ describe('fix', () => {
   });
 
   it('refuses when there is no review to take findings from', async () => {
-    const app = createServer(makeConfig(), makeWired(fixingProvider(() => {})), isolated());
+    const app = boot(makeConfig(), makeWired(fixingProvider(() => {})), isolated());
     const res = await request(app).post('/api/reviews/BUY-9/fix').send({});
     expect(res.status).toBe(409);
   });
 
   it('records a failure against the repository rather than losing the run', async () => {
-    const app = createServer(
+    const app = boot(
       makeConfig(),
       makeWired({
         canEditFiles: true,
@@ -581,7 +620,7 @@ describe('fix', () => {
     );
     seedReview();
 
-    await request(app).post('/api/reviews/BUY-1/fix').send({});
+    await startFix(app);
     await waitForFix('failed');
     expect(reviewStore.get('BUY-1')!.fix!.error).toContain('model patladı');
     // The review it belongs to is untouched — a fix is not a decision.
@@ -589,13 +628,13 @@ describe('fix', () => {
   });
 
   it('throws the patch away when the review is run again', async () => {
-    const app = createServer(
+    const app = boot(
       makeConfig(),
       makeWired(fixingProvider((workdir) => writeFileSync(join(workdir, 'app.ts'), 'export const rate = 2;\n'))),
       isolated(),
     );
     seedReview();
-    await request(app).post('/api/reviews/BUY-1/fix').send({});
+    await startFix(app);
     await waitForFix('ready');
 
     // A patch built from findings that no longer exist would undo work that

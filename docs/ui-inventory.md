@@ -6,7 +6,7 @@ Buradaki bir satırın karşılığı arayüzde yoksa, o feature **kaybolmuş** 
 Göçün nasıl yürüdüğü `ui-migration.md` içinde.
 
 - Sayfadaki inline script: **yok** · inline stil: **yok**
-- Bileşen: **29** · düğme: **75** · alan: **33** · modal: **7**
+- Bileşen: **29** · düğme: **76** · alan: **35** · modal: **7**
 - API ucu: **29**
 
 ## Bileşenler
@@ -119,7 +119,10 @@ Göçün nasıl yürüdüğü `ui-migration.md` içinde.
 - _(kontrol yok)_
 
 ### `PendingView` — `src/web/ui/components/PendingView.vue`
+- [ ] düğme: {picked.size} işi temizle
 - [ ] düğme: ↻ Yenile
+- [ ] alan: onay kutusu
+- [ ] alan: onay kutusu
 
 ### `PromptCards` — `src/web/ui/components/PromptCards.vue`
 - [ ] düğme: {copied}

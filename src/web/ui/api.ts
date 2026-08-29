@@ -171,6 +171,17 @@ export function readIssues(): Promise<{ items: IssueRow[]; error?: string; setup
   return fetch('/api/reviews').then((res) => res.json());
 }
 
+/**
+ * Wipes a task's review state — the same act as "Temizle" in the detail
+ * header, and named once so both callers cannot drift.
+ *
+ * The cloned repositories survive: they are shared across tasks and
+ * expensive to rebuild.
+ */
+export function deleteReview(issueKey: string): Promise<unknown> {
+  return json(review(issueKey), { method: 'DELETE' });
+}
+
 export function startReviewByKey(issueKey: string): Promise<unknown> {
   return json(`${review(issueKey)}/start`, {
     method: 'POST',

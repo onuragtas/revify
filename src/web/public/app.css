@@ -1050,6 +1050,11 @@
 .pointer { cursor: pointer; }
 .warn { color: var(--amber); }
 
+/* The select column: as narrow as a checkbox, and out of the way. */
+.pickCol { width: 1.6rem; text-align: center; }
+.pickCol input { margin: 0; cursor: pointer; }
+table.decisions tr.picked td { background: var(--accent-soft); }
+
 /* Closed findings: green, and quieter than the open ones — good news that
    does not compete with the work still to do. */
 .resolvedCard { border-color: var(--green); }
