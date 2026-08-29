@@ -1050,6 +1050,12 @@
 .pointer { cursor: pointer; }
 .warn { color: var(--amber); }
 
+/* The depth choice: one control naming its own state, quieter than the
+   action beside it — it configures the press, it is not the press. */
+.scanPick { font-size: 0.76rem; white-space: nowrap; }
+.scanPick.deep { background: var(--accent-soft); color: var(--accent-text); }
+.scanSize { font-size: 0.72rem; white-space: nowrap; }
+
 /* The reply to an objection, directly under the box that asked. */
 .answerNote {
   margin-top: 0.5rem; padding: 0.5rem 0.7rem;

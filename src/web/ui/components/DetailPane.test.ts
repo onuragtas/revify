@@ -199,6 +199,64 @@ describe('the step log', () => {
   });
 });
 
+describe('how deeply to scan', () => {
+  it('offers the choice before the run, with the size that makes it a choice', async () => {
+    /*
+     * Per run rather than a stored setting: the person pressing the button
+     * knows whether this is a fifty-file change they want gone over
+     * properly or a two-line one they want an answer to now. The size
+     * beside it is what makes the decision possible — "bölerek" means
+     * nothing on three files and everything on fifty.
+     */
+    const wrapper = mount(DetailPane);
+    state.detail = {
+      ...DETAIL,
+      repoChanges: [
+        {
+          projectPath: 'team/api',
+          baseBranch: 'master',
+          branchName: 'feature/BUY-1',
+          files: [{ path: 'a.ts', diff: 'x'.repeat(40_000) }],
+        },
+      ],
+    } as never;
+    await flushPromises();
+
+    expect(wrapper.find('.scanPick').text()).toContain('tek geçiş');
+    expect(wrapper.text()).toContain('1 dosya · 40k');
+    expect(wrapper.text()).toContain('tek geçiş bu boyutta eksik tarar');
+  });
+
+  it('sends the chosen depth with the run', async () => {
+    const sent: Array<{ url: string; body: unknown }> = [];
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      sent.push({ url: String(url), body: init?.body ? JSON.parse(String(init.body)) : undefined });
+      return { ok: true, json: async () => ({ ok: true }) };
+    });
+
+    const wrapper = mount(DetailPane);
+    state.detail = DETAIL;
+    await flushPromises();
+
+    await wrapper.find('.scanPick').trigger('click');
+    expect(wrapper.find('.scanPick').text()).toContain('bölerek');
+
+    await wrapper.find('.detail-head-actions .btn-primary').trigger('click');
+    await flushPromises();
+
+    expect(sent.find((s) => s.url.endsWith('/start'))!.body).toMatchObject({ scanMode: 'deep' });
+  });
+
+  it('is out of the way while a run is going', async () => {
+    // Nothing to configure about a run that has already started.
+    const wrapper = mount(DetailPane);
+    state.detail = { ...DETAIL, status: 'running' } as never;
+    await flushPromises();
+
+    expect(wrapper.find('.scanPick').exists()).toBe(false);
+  });
+});
+
 describe('starting a review', () => {
   it('says why the server refused, instead of a button that does nothing', async () => {
     /*

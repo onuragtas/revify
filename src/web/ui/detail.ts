@@ -152,6 +152,16 @@ export function openIssue(issueKey: string, { force = false } = {}): void {
  * Throws with the server's own sentence when it is refused; the caller
  * decides where to show it.
  */
+/**
+ * How thoroughly the next run should read, chosen before it starts.
+ *
+ * Per run rather than a stored setting: the person pressing the button
+ * knows whether this is a fifty-file change they want gone over properly or
+ * a two-line one they want an answer to now. `auto` reads a change one pass
+ * can cover in one pass, and slices the ones it cannot.
+ */
+export const scan = reactive({ mode: 'auto' as 'auto' | 'single' | 'deep' });
+
 export async function startReview(issueKey: string, contextRepos: string[] = []): Promise<void> {
   openIssue(issueKey, { force: true });
   showTab('process', { pin: false });
@@ -161,7 +171,7 @@ export async function startReview(issueKey: string, contextRepos: string[] = [])
     response = await fetch(`/api/reviews/${encodeURIComponent(issueKey)}/start`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contextRepos }),
+      body: JSON.stringify({ contextRepos, scanMode: scan.mode }),
     });
   } catch (err) {
     throw new Error(`İnceleme başlatılamadı: ${(err as Error).message}`);

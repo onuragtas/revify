@@ -6,7 +6,7 @@ Buradaki bir satırın karşılığı arayüzde yoksa, o feature **kaybolmuş** 
 Göçün nasıl yürüdüğü `ui-migration.md` içinde.
 
 - Sayfadaki inline script: **yok** · inline stil: **yok**
-- Bileşen: **29** · düğme: **76** · alan: **35** · modal: **7**
+- Bileşen: **29** · düğme: **77** · alan: **35** · modal: **7**
 - API ucu: **29**
 
 ## Bileşenler
@@ -54,6 +54,7 @@ Göçün nasıl yürüdüğü `ui-migration.md` içinde.
 
 ### `DetailPane` — `src/web/ui/components/DetailPane.vue`
 - [ ] düğme: ←
+- [ ] düğme: Tarama: {scan.mode}
 - [ ] düğme: Durdur
 - [ ] düğme: {startLabel}
 - [ ] düğme: {startLabel}

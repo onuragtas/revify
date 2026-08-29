@@ -11,6 +11,8 @@ export default defineConfig({
     // meant to run here.
     include: ['src/**/*.test.ts'],
     exclude: ['node_modules/**', 'dist/**', 'data/**'],
+    // Why: see the file. Applied globally so no suite can forget it.
+    setupFiles: ['src/testSetup.ts'],
     /*
      * Long enough for the tests that shell out to git.
      *
@@ -32,19 +34,21 @@ export default defineConfig({
     /*
      * A ceiling on workers, because these suites are not CPU-bound.
      *
-     * The server tests drive real git and stand up an ephemeral HTTP server
-     * per request. Left to fill every core, the machine ends up with dozens
-     * of git processes and sockets in flight, and requests started failing
-     * in a way that has nothing to do with the code under test: an
-     * occasional 404 for a route that is unconditionally registered — the
-     * request never reached the app it was addressed to. Roughly one full
-     * run in nine.
+     * The server suites drive real git and stand up real HTTP listeners.
+     * Left to fill every core, requests between a test and its own server
+     * started coming back corrupted — a mangled path answered with
+     * Express's own 404, a truncated body answered with a bare 400, and
+     * once a response that was not HTTP at all. None of it had anything to
+     * do with the code under test, and all of it was read as a product bug
+     * for a while.
      *
-     * Four workers keeps the suite parallel where it pays (the component
-     * tests) without the contention. The wall-clock cost is small; a suite
-     * that fails one run in nine costs far more, because the failure is
-     * never where the bug is.
+     * Serialising every file removes it entirely and costs 87 seconds a
+     * run instead of 9, which is not a trade worth making — the two suites
+     * that talk over a socket retry once instead, see `vi.setConfig` there.
+     *
+     * (`poolOptions.threads.maxThreads` is the Vitest 3 spelling and was
+     * silently ignored here for a while — it was removed in 4.)
      */
-    poolOptions: { threads: { maxThreads: 4 } },
+    maxWorkers: 3,
   },
 });

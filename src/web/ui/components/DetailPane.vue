@@ -23,7 +23,7 @@
  */
 import { computed, onMounted, ref, watch } from 'vue';
 import { refreshList, state } from '../bridge';
-import { connection, meta, metaError, openIssue, startPolling, startReview, stopPolling, tabs, showTab } from '../detail';
+import { connection, meta, metaError, openIssue, scan, startPolling, startReview, stopPolling, tabs, showTab } from '../detail';
 import { contextSelection, openModal } from '../uiState';
 import { outcomeConfig } from '../appConfig';
 import { session } from '../session';
@@ -81,6 +81,27 @@ const startLabel = computed(() => {
   if (status === 'running' || status === 'cancelled') return 'Yeniden başlat';
   if (status === 'queued') return 'Sıraya alındı';
   return 'Yeniden incele';
+});
+
+/**
+ * How big the change is, and therefore whether the depth choice matters.
+ *
+ * Shown next to the switch because "bölerek tara" means nothing without it:
+ * on three files it changes nothing and costs time, on fifty it is the
+ * difference between a review and a sample.
+ */
+const changeSize = computed(() => {
+  const changes = detail.value?.repoChanges ?? [];
+  const files = changes.reduce((n, c) => n + c.files.length, 0);
+  const chars = changes.reduce((n, c) => n + c.files.reduce((m, f) => m + f.diff.length, 0), 0);
+  return { files, chars, large: chars >= 25_000 };
+});
+
+const scanHint = computed(() => {
+  const { files, chars, large } = changeSize.value;
+  if (!files) return 'Değişiklik henüz okunmadı';
+  const size = `${files} dosya · ${Math.round(chars / 1000)}k`;
+  return large ? `${size} — tek geçiş bu boyutta eksik tarar` : `${size} — tek geçiş yeter`;
 });
 
 const stamp = computed(() => {
@@ -259,6 +280,7 @@ function back(): void {
           <span id="connState" class="error" role="status" aria-live="polite">
             {{ connection.error }}
           </span>
+          <span v-if="!inFlight && changeSize.files" class="muted scanSize">{{ scanHint }}</span>
 
           <!--
             One action, and a menu.
@@ -269,6 +291,20 @@ function back(): void {
             re-read the row every time.
           -->
           <div class="detail-head-actions">
+            <!--
+              The depth choice, in front of whoever is about to press the
+              button. Not a setting: it is a per-run decision, and the size
+              beside it is what makes the decision possible.
+            -->
+            <button
+              v-if="!inFlight"
+              class="btn btn-ghost scanPick"
+              :class="{ deep: scan.mode === 'deep' }"
+              :title="scanHint"
+              @click="scan.mode = scan.mode === 'deep' ? 'single' : 'deep'"
+            >
+              Tarama: {{ scan.mode === 'deep' ? 'bölerek' : 'tek geçiş' }}
+            </button>
             <button v-if="inFlight" class="btn btn-reject" @click="stop">Durdur</button>
             <button v-else class="btn btn-primary" @click="start">{{ startLabel }}</button>
 

@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach, afterEach } from 'vitest';
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -14,6 +14,26 @@ import { SettingsStore } from '../core/settingsStore.js';
 import type { Wired } from '../core/registry.js';
 import type { AppConfig } from '../config/loadConfig.js';
 import type { LlmProvider } from '../core/types.js';
+
+/*
+ * One retry, for the socket and nothing else.
+ *
+ * These two suites are the only ones that talk to a real HTTP listener,
+ * and under parallel load the transport itself occasionally corrupts a
+ * request: a mangled path answered with Express's own 404, a truncated
+ * body answered with a bare 400, once a response that was not HTTP at all.
+ * None of it is about the code under test — the app runs one long-lived
+ * server and never does this — but it failed roughly one run in twenty and
+ * always somewhere unrelated, which is worse than useless: it teaches
+ * people to re-run rather than to read.
+ *
+ * A retry hides a flake, so it is worth being exact about what this can and
+ * cannot hide. A transport artifact does not reproduce; a real defect fails
+ * both times and is reported. What it would mask is a genuinely
+ * intermittent product bug in these two files — accepted knowingly, because
+ * the alternative measured at 87 seconds a run against 9.
+ */
+vi.setConfig({ retry: 1 });
 
 let dir: string;
 let repo: string;
@@ -156,13 +176,32 @@ const isolated = () => ({ settingsStore: new SettingsStore(join(dir, 'settings.j
  * refusal in a later test that nobody reads, and then a 25-second wait for
  * something that was never going to happen.
  */
-const running: Array<{ shutdown: () => void }> = [];
+const running: Array<{ shutdown: () => void; listener: import('node:http').Server }> = [];
 
-function boot(...args: Parameters<typeof createServer>): ReturnType<typeof createServer> {
+/*
+ * One listening socket per server, not one per request.
+ *
+ * `supertest(app)` stands up a fresh ephemeral server for every single
+ * call and tears it down after. Across two suites that make hundreds of
+ * requests while real git subprocesses compete for the machine, that
+ * churn started corrupting requests outright: a POST arriving with a
+ * mangled path (Express answering its own 404 for a route that is
+ * unconditionally registered) or a truncated body (`express.json`
+ * answering 400 with nothing in it). Neither had anything to do with the
+ * code under test, and both were read as product failures for a while.
+ *
+ * Binding once and handing supertest the listener removes the churn: the
+ * socket is opened when the server is created and closed with it.
+ */
+function boot(...args: Parameters<typeof createServer>): Listening {
   const server = createServer(...args);
-  running.push(server);
-  return server;
+  const listener = server.listen(0);
+  const wrapped = Object.assign(server, { listener });
+  running.push(wrapped);
+  return wrapped;
 }
+
+type Listening = ReturnType<typeof createServer> & { listener: import('node:http').Server };
 
 /**
  * Asks for a fix and insists the server agreed.
@@ -172,8 +211,8 @@ function boot(...args: Parameters<typeof createServer>): ReturnType<typeof creat
  * `waitForFix` spinning until its budget ran out. The failure then named
  * the wait instead of the reason, which is the diagnosis thrown away.
  */
-async function startFix(app: ReturnType<typeof createServer>, body: unknown = {}) {
-  const res = await request(app).post('/api/reviews/BUY-1/fix').send(body as object);
+async function startFix(app: Listening, body: unknown = {}) {
+  const res = await request(app.listener).post('/api/reviews/BUY-1/fix').send(body as object);
   expect(res.status, `fix reddedildi: ${JSON.stringify(res.body)}`).toBe(200);
   return res;
 }
@@ -206,7 +245,11 @@ beforeEach(() => {
 });
 afterEach(() => {
   // Before the directory goes: a running server writes into it.
-  while (running.length) running.pop()!.shutdown();
+  while (running.length) {
+    const server = running.pop()!;
+    server.shutdown();
+    server.listener.close();
+  }
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -316,12 +359,12 @@ describe('fix', () => {
     await startFix(app);
     await waitForFix('ready');
 
-    const detail = await request(app).get('/api/reviews/BUY-1/detail');
+    const detail = await request(app.listener).get('/api/reviews/BUY-1/detail');
     expect(detail.body.fix.patches[0].patch).toBeUndefined();
     expect(detail.body.fix.patches[0].size).toBeGreaterThan(0);
     expect(detail.body.findings.map((f: { severity: string }) => f.severity)).toEqual(['blocking', 'minor']);
 
-    const patch = await request(app).get('/api/reviews/BUY-1/fix/patch?projectPath=team/orders');
+    const patch = await request(app.listener).get('/api/reviews/BUY-1/fix/patch?projectPath=team/orders');
     expect(patch.text).toContain('+export const rate = 2;');
   });
 
@@ -335,7 +378,7 @@ describe('fix', () => {
     await startFix(app);
     await waitForFix('ready');
 
-    const applied = await request(app)
+    const applied = await request(app.listener)
       .post('/api/reviews/BUY-1/fix/apply')
       .send({ projectPath: 'team/orders', path: repo });
 
@@ -457,7 +500,7 @@ describe('fix', () => {
     );
     seedReview();
 
-    await request(app)
+    await request(app.listener)
       .post('/api/reviews/BUY-1/fix')
       .send({ findings: ['f0'], instructions: { f0: '1. seçenek yapılmalı.' } });
     await waitForFix('ready');
@@ -484,7 +527,7 @@ describe('fix', () => {
     );
     seedReview();
 
-    await request(app)
+    await request(app.listener)
       .post('/api/reviews/BUY-1/fix')
       .send({ findings: ['f0'], instructions: { f1: 'bunu da şöyle yap' } });
     await waitForFix('ready');
@@ -501,12 +544,12 @@ describe('fix', () => {
       isolated(),
     );
     seedReview();
-    await request(app)
+    await request(app.listener)
       .post('/api/reviews/BUY-1/fix')
       .send({ findings: ['f0'], instructions: { f0: '1. seçenek yapılmalı.' } });
     await waitForFix('ready');
 
-    const detail = await request(app).get('/api/reviews/BUY-1/detail');
+    const detail = await request(app.listener).get('/api/reviews/BUY-1/detail');
     // One prompt for the whole change, not one per repository — the run is
     // one run now.
     expect(detail.body.prompts.map((p: { kind: string }) => p.kind)).toEqual(['fix']);
@@ -514,7 +557,7 @@ describe('fix', () => {
     expect(detail.body.prompts[0].prompt).toBeUndefined();
     expect(detail.body.prompts[0].size).toBeGreaterThan(0);
 
-    const prompt = await request(app).get('/api/reviews/BUY-1/prompt?kind=fix');
+    const prompt = await request(app.listener).get('/api/reviews/BUY-1/prompt?kind=fix');
     expect(prompt.body.prompt).toContain('1. seçenek yapılmalı.');
     expect(prompt.body.system).toContain('senior software engineer');
   });
@@ -522,7 +565,7 @@ describe('fix', () => {
   it('says so rather than guessing when a prompt was never kept', async () => {
     const app = boot(makeConfig(), makeWired(fixingProvider(() => {})), isolated());
     seedReview();
-    const res = await request(app).get('/api/reviews/BUY-1/prompt?kind=review');
+    const res = await request(app.listener).get('/api/reviews/BUY-1/prompt?kind=review');
     expect(res.status).toBe(404);
   });
 
@@ -536,9 +579,9 @@ describe('fix', () => {
     await startFix(app);
     await waitForFix('ready');
 
-    await request(app).delete('/api/reviews/BUY-1');
+    await request(app.listener).delete('/api/reviews/BUY-1');
 
-    const detail = await request(app).get('/api/reviews/BUY-1/detail');
+    const detail = await request(app.listener).get('/api/reviews/BUY-1/detail');
     expect(detail.body.prompts).toEqual([]);
   });
 
@@ -560,7 +603,7 @@ describe('fix', () => {
 
     // Posted directly rather than through `startFix`: the refusal is the
     // thing under test, so asserting a 200 first would be nonsense.
-    const res = await request(app).post('/api/reviews/BUY-1/fix').send({});
+    const res = await request(app.listener).post('/api/reviews/BUY-1/fix').send({});
     // Nothing left to fix by default: the only non-minor finding is disputed.
     expect(res.status).toBe(400);
     expect(res.body.error).toContain('seçilmedi');
@@ -595,7 +638,7 @@ describe('fix', () => {
     seedReview();
 
     // Same: the refusal is the point.
-    const res = await request(app).post('/api/reviews/BUY-1/fix').send({});
+    const res = await request(app.listener).post('/api/reviews/BUY-1/fix').send({});
     expect(res.status).toBe(409);
     expect(res.body.error).toContain('claude');
     expect(reviewStore.get('BUY-1')!.fix).toBeUndefined();
@@ -603,7 +646,7 @@ describe('fix', () => {
 
   it('refuses when there is no review to take findings from', async () => {
     const app = boot(makeConfig(), makeWired(fixingProvider(() => {})), isolated());
-    const res = await request(app).post('/api/reviews/BUY-9/fix').send({});
+    const res = await request(app.listener).post('/api/reviews/BUY-9/fix').send({});
     expect(res.status).toBe(409);
   });
 
@@ -639,7 +682,7 @@ describe('fix', () => {
 
     // A patch built from findings that no longer exist would undo work that
     // was just done, so re-reviewing has to drop it.
-    await request(app).delete('/api/reviews/BUY-1/fix');
+    await request(app.listener).delete('/api/reviews/BUY-1/fix');
     expect(reviewStore.get('BUY-1')!.fix).toBeUndefined();
   });
 });

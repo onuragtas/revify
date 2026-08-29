@@ -59,14 +59,22 @@ afterEach(() => {
 });
 
 describe('how crowded the screen is at rest', () => {
-  it('keeps the detail header to one action and a menu', async () => {
-    // Was: 7 buttons — İncele, Ata…, Düzelt…, Durdur, Bağlam…, Temizle, ←.
+  it('keeps the detail header to one action, its depth, and a menu', async () => {
+    /*
+     * Was: 7 buttons — İncele, Ata…, Düzelt…, Durdur, Bağlam…, Temizle, ←.
+     *
+     * Four now: back, how deep to scan, the action, and the overflow. The
+     * depth is deliberately one control rather than a pair of options — it
+     * configures the press rather than being one, and a two-element switch
+     * here would be the first of the sixteen coming back. The ceiling has
+     * room for exactly this and nothing more.
+     */
     const wrapper = mount(DetailPane);
     state.detail = DETAIL;
     await flushPromises();
 
     const head = wrapper.find('.detail-title-row').html();
-    expect(visibleControls(head)).toBeLessThanOrEqual(3); // ←, the action, ⋯
+    expect(visibleControls(head)).toBeLessThanOrEqual(4);
     expect(wrapper.find('.actionMenu-list').exists()).toBe(false);
   });
 

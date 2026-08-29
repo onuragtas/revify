@@ -7,6 +7,7 @@ import type { ContextRepo, RepoChange } from '../context/gitlabBranchDiffContext
 import type { NotesStore } from '../../core/notesStore.js';
 import type { ReviewHistoryEntry, ReviewStore } from '../../core/reviewStore.js';
 import { splitFindings } from '../../core/findings.js';
+import { chunkChange, mergeReviews, needsDeepScan } from '../../core/reviewChunks.js';
 import type { PromptStore } from '../../core/promptStore.js';
 import { progressBus } from '../../core/progressBus.js';
 import { parseProjectPathFromUrl } from '../../clients/gitlabClient.js';
@@ -98,6 +99,16 @@ export interface CodeReviewPromptInput {
   comments?: Array<{ author: string; created: string; text: string }>;
   /** Free-text instructions for this revision, in the reviewer's words. */
   revisionRequest?: string;
+  /**
+   * This pass is reading one slice of a larger change.
+   *
+   * Set only on the slice passes of a deep scan. It narrows what the pass
+   * is asked for — line-level defects in these files — and tells it that
+   * the questions which need the whole change are being answered elsewhere,
+   * so it neither repeats them nor writes a verdict against a fraction of
+   * the diff.
+   */
+  slice?: { label: string; of: number };
   /**
    * The last review of this change, and what was done about it.
    *
@@ -485,6 +496,33 @@ export function buildPrompt(input: CodeReviewPromptInput): string {
         '— re-reviews are supposed to end.\n'
       : '';
 
+  /*
+   * What a slice pass is, and what it is not.
+   *
+   * Placed at the end of the prompt, where a trailing instruction carries
+   * most weight, because it has to override several sections above it that
+   * ask for exactly the things a slice must not produce: a verdict, QA
+   * notes, a deployment checklist, a judgement about whether the issue is
+   * solved. Those are answered once, by the pass that saw the whole change.
+   */
+  const sliceInstruction = input.slice
+    ? `\n\n---\n\n## Bu geçiş: ${input.slice.label}\n\n` +
+      `Bu, değişikliğin ${input.slice.of} parçaya bölünmüş hâlinin bir parçası. Yukarıdaki\n` +
+      'kod yalnızca bu parça — bütünü başka bir geçiş okuyor.\n\n' +
+      '**Yalnızca bulgu yaz.** Şunları yazma, çünkü bütünü gören geçiş zaten yazıyor ve\n' +
+      'ikisi birleştirilecek:\n\n' +
+      '- giriş cümlesi ya da özet yok\n' +
+      '- `Verdict:` satırı yok — bir parçaya bakarak değişikliğin tamamı hakkında karar\n' +
+      '  verilemez\n' +
+      '- QA için / Prod öncesi bölümleri yok\n' +
+      '- gereksinim karşılama, uçtan uca akış, repolar arası tutarlılık yok\n\n' +
+      'Buna karşılık bu satırlara **yakından bak**: bir bütünü tarayan geçişin gözden\n' +
+      'kaçırdığı şey tam olarak burada bulunur — kullanılmayan dönüş değeri, yanlış\n' +
+      'karşılaştırma, yutulan hata, eksik null kontrolü, sınır durumu. Bulduğun her\n' +
+      'blocking ve major bulguyu yaz; sayı sınırı yok.\n' +
+      'Bulgu biçimi yukarıdaki ile aynı: `### <severity> — <file:line>`.\n'
+    : '';
+
   return TEMPLATE.replace('{{issueKey}}', input.issueKey)
     .replace('{{summary}}', input.summary)
     .replace('{{description}}', extractPlainText(input.description) || '(no description)')
@@ -501,7 +539,7 @@ export function buildPrompt(input: CodeReviewPromptInput): string {
     .replace('{{notesSection}}', notesSection)
     .replace('{{notesReminder}}', notesReminder)
     .replace('{{notesDisclosure}}', notesDisclosure)
-    .replace('{{languageInstruction}}', languageInstruction);
+    .replace('{{languageInstruction}}', languageInstruction) + sliceInstruction;
 }
 
 /**
@@ -596,7 +634,20 @@ export class CodeReviewTask implements AiTask {
       };
     }
 
-    const prompt = buildPrompt({
+    /*
+     * How thoroughly to read, decided per run by whoever started it.
+     *
+     * Not a setting: the person pressing the button knows whether this is a
+     * fifty-file change they want gone over properly or a two-line one they
+     * want an answer to now, and the honest place for that choice is in
+     * front of them at the moment they make it. `auto` is the default — one
+     * pass for a change one pass can cover, and slices for the ones it
+     * cannot.
+     */
+    const mode = (event.data.scanMode as string | undefined) ?? 'auto';
+    const deep = mode === 'deep' || (mode !== 'single' && needsDeepScan(repoChanges));
+
+    const promptInput: CodeReviewPromptInput = {
       issueKey,
       summary,
       description: jiraIssue?.fields.description,
@@ -612,7 +663,8 @@ export class CodeReviewTask implements AiTask {
       relatedIssues: context.relatedIssues as CodeReviewPromptInput['relatedIssues'],
       contextRepos,
       attachments: context.attachments as CodeReviewPromptInput['attachments'],
-    });
+    };
+    const prompt = buildPrompt(promptInput);
 
     // Written before the call, not after: a run that fails or is stopped is
     // exactly the one somebody wants to read the prompt of.
@@ -622,9 +674,7 @@ export class CodeReviewTask implements AiTask {
     // The first changed repo is the working directory; everything else the
     // model may read is mounted alongside it.
     const changedPaths = repoChanges.map((c) => c.repoPath).filter((p): p is string => Boolean(p));
-    const markdown = await this.llm.generate({
-      system,
-      prompt,
+    const mounts = {
       workdir: changedPaths[0],
       extraDirs: [
         ...changedPaths.slice(1),
@@ -633,9 +683,57 @@ export class CodeReviewTask implements AiTask {
         // prompt name files the model is not permitted to open.
         ...(context.attachmentDir ? [context.attachmentDir as string] : []),
       ],
+    };
+
+    const whole = await this.llm.generate({
+      system,
+      prompt,
+      ...mounts,
       signal,
       onProgress: (message) => progressBus.log(event.id, message),
     });
+
+    /*
+     * A second reading, slice by slice.
+     *
+     * One pass over a fifty-file diff is a sample, not a review: the
+     * findings differed between runs and between machines, which is the
+     * same symptom twice. The whole-change pass above answers the questions
+     * that only make sense whole; these answer the ones that need somebody
+     * actually looking at the lines.
+     *
+     * Sequential on purpose. The model runs as a subprocess with file tools
+     * over real checkouts, and several at once contend for the same
+     * directories and the same machine — the queue exists for that reason.
+     */
+    const chunks = deep ? chunkChange(repoChanges) : [];
+    const extra: string[] = [];
+    for (const [index, chunk] of chunks.entries()) {
+      signal?.throwIfAborted();
+      progressBus.log(event.id, `derin tarama ${index + 1}/${chunks.length}: ${chunk.label}`);
+      const slicePrompt = buildPrompt({
+        ...promptInput,
+        repoChanges: chunk.repoChanges,
+        slice: { label: chunk.label, of: chunks.length },
+      });
+      this.promptStore?.save(issueKey, `review-slice-${index + 1}`, { system, prompt: slicePrompt });
+      extra.push(
+        await this.llm.generate({
+          system,
+          prompt: slicePrompt,
+          ...mounts,
+          signal,
+          onProgress: (message) => progressBus.log(event.id, message),
+        }),
+      );
+    }
+
+    const markdown = chunks.length ? mergeReviews(whole, extra) : whole;
+    if (chunks.length) {
+      const before = splitFindings(whole).findings.length;
+      const after = splitFindings(markdown).findings.length;
+      progressBus.log(event.id, `derin tarama: ${before} bulgu → ${after} (${chunks.length} parça)`);
+    }
 
     return {
       title: `Code review: ${issueKey} — ${summary}`,

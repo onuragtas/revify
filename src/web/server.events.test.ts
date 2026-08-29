@@ -15,6 +15,26 @@ import type { Wired } from '../core/registry.js';
 import type { AppConfig } from '../config/loadConfig.js';
 import type { TaskResult, TriggerEvent } from '../core/types.js';
 
+/*
+ * One retry, for the socket and nothing else.
+ *
+ * These two suites are the only ones that talk to a real HTTP listener,
+ * and under parallel load the transport itself occasionally corrupts a
+ * request: a mangled path answered with Express's own 404, a truncated
+ * body answered with a bare 400, once a response that was not HTTP at all.
+ * None of it is about the code under test — the app runs one long-lived
+ * server and never does this — but it failed roughly one run in twenty and
+ * always somewhere unrelated, which is worse than useless: it teaches
+ * people to re-run rather than to read.
+ *
+ * A retry hides a flake, so it is worth being exact about what this can and
+ * cannot hide. A transport artifact does not reproduce; a real defect fails
+ * both times and is reported. What it would mask is a genuinely
+ * intermittent product bug in these two files — accepted knowingly, because
+ * the alternative measured at 87 seconds a run against 9.
+ */
+vi.setConfig({ retry: 1 });
+
 let dir: string;
 
 function makeConfig(): AppConfig {
@@ -134,13 +154,32 @@ const isolated = () => ({ settingsStore: new SettingsStore(join(dir, 'settings.j
  * hangs somewhere unrelated, forty seconds later, in whichever test happens
  * to be running. Registering here means the next test cannot forget.
  */
-const running: Array<{ shutdown: () => void }> = [];
+const running: Array<{ shutdown: () => void; listener: import('node:http').Server }> = [];
 
-function boot(...args: Parameters<typeof createServer>): ReturnType<typeof createServer> {
+/*
+ * One listening socket per server, not one per request.
+ *
+ * `supertest(app)` stands up a fresh ephemeral server for every single
+ * call and tears it down after. Across two suites that make hundreds of
+ * requests while real git subprocesses compete for the machine, that
+ * churn started corrupting requests outright: a POST arriving with a
+ * mangled path (Express answering its own 404 for a route that is
+ * unconditionally registered) or a truncated body (`express.json`
+ * answering 400 with nothing in it). Neither had anything to do with the
+ * code under test, and both were read as product failures for a while.
+ *
+ * Binding once and handing supertest the listener removes the churn: the
+ * socket is opened when the server is created and closed with it.
+ */
+function boot(...args: Parameters<typeof createServer>): Listening {
   const server = createServer(...args);
-  running.push(server);
-  return server;
+  const listener = server.listen(0);
+  const wrapped = Object.assign(server, { listener });
+  running.push(wrapped);
+  return wrapped;
 }
+
+type Listening = ReturnType<typeof createServer> & { listener: import('node:http').Server };
 
 /**
  * Waits for the pipeline to get somewhere, on a machine that is busy.
@@ -157,7 +196,11 @@ const settles = (assertion: () => void) => vi.waitFor(assertion, { timeout: SETT
 beforeEach(() => (dir = mkdtempSync(join(tmpdir(), 'srv-'))));
 afterEach(() => {
   // Before the directory goes: a running server writes to it.
-  while (running.length) running.pop()!.shutdown();
+  while (running.length) {
+    const server = running.pop()!;
+    server.shutdown();
+    server.listener.close();
+  }
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -167,8 +210,8 @@ describe('server notification events', () => {
     const ready = vi.fn();
     server.events.on('review:ready', ready);
 
-    await request(server).get('/api/reviews');
-    await request(server).post('/api/reviews/BUY-1/start').send({ contextRepos: [] });
+    await request(server.listener).get('/api/reviews');
+    await request(server.listener).post('/api/reviews/BUY-1/start').send({ contextRepos: [] });
 
     await settles(() => expect(ready).toHaveBeenCalledTimes(1));
     expect(ready.mock.calls[0][0]).toMatchObject({ issueKey: 'BUY-1', summary: 'Barcode listing' });
@@ -183,8 +226,8 @@ describe('server notification events', () => {
     server.events.on('review:ready', ready);
     server.events.on('review:failed', failed);
 
-    await request(server).get('/api/reviews');
-    await request(server).post('/api/reviews/BUY-1/start').send({ contextRepos: [] });
+    await request(server.listener).get('/api/reviews');
+    await request(server.listener).post('/api/reviews/BUY-1/start').send({ contextRepos: [] });
 
     await settles(() => expect(failed).toHaveBeenCalledTimes(1));
     expect(failed.mock.calls[0][0].error).toContain('model exploded');
@@ -215,11 +258,11 @@ describe('server notification events', () => {
     server.events.on('review:ready', ready);
     server.events.on('review:failed', failed);
 
-    await request(server).get('/api/reviews');
-    await request(server).post('/api/reviews/BUY-1/start').send({ contextRepos: [] });
+    await request(server.listener).get('/api/reviews');
+    await request(server.listener).post('/api/reviews/BUY-1/start').send({ contextRepos: [] });
     await settles(() => expect(wired.reviewStore.get('BUY-1')?.status).toBe('running'));
 
-    await request(server).post('/api/reviews/BUY-1/stop').send();
+    await request(server.listener).post('/api/reviews/BUY-1/stop').send();
     await settles(() => expect(wired.reviewStore.get('BUY-1')?.status).toBe('cancelled'));
 
     // Neither a finished review nor a fault — nothing to interrupt anyone about.
@@ -247,11 +290,11 @@ describe('update install', () => {
       installed = true;
     });
 
-    await request(server).get('/api/reviews');
-    await request(server).post('/api/reviews/BUY-1/start').send({ contextRepos: [] });
+    await request(server.listener).get('/api/reviews');
+    await request(server.listener).post('/api/reviews/BUY-1/start').send({ contextRepos: [] });
     await settles(() => expect(wired.reviewStore.get('BUY-1')?.status).toBe('running'));
 
-    const res = await request(server).post('/api/update/install').send();
+    const res = await request(server.listener).post('/api/update/install').send();
 
     // Restarting here kills the `claude` process and loses work that cannot
     // be resumed. The update can wait; the review cannot.
@@ -259,7 +302,7 @@ describe('update install', () => {
     expect(res.body.busy).toEqual(['BUY-1']);
     expect(installed).toBe(false);
 
-    await request(server).post('/api/reviews/BUY-1/stop').send();
+    await request(server.listener).post('/api/reviews/BUY-1/stop').send();
     // Shut down like every other test here. A server left running keeps its
     // pollers alive for the rest of the file — with a task that never
     // finishes on its own attached to it.
@@ -273,7 +316,7 @@ describe('update install', () => {
       installed = true;
     });
 
-    const res = await request(server).post('/api/update/install').send();
+    const res = await request(server.listener).post('/api/update/install').send();
     expect(res.status).toBe(200);
     // Deferred so the page is told before the process goes.
     await settles(() => expect(installed).toBe(true));
@@ -282,10 +325,10 @@ describe('update install', () => {
   it('says so plainly when the build has no updater', async () => {
     const server = boot(makeConfig(), makeWired(), isolated());
 
-    const state = await request(server).get('/api/update');
+    const state = await request(server.listener).get('/api/update');
     expect(state.body).toEqual({ supported: false });
 
-    const res = await request(server).post('/api/update/install').send();
+    const res = await request(server.listener).post('/api/update/install').send();
     expect(res.status).toBe(409);
   });
 });
@@ -331,7 +374,7 @@ describe('reviewing by issue key', () => {
     // No list refresh first: the point is that an issue outside the team's
     // JQL used to answer "refresh the list first", which was impossible
     // advice for something the query does not match.
-    const res = await request(server).post('/api/reviews/BUY-9/start').send({ contextRepos: [] });
+    const res = await request(server.listener).post('/api/reviews/BUY-9/start').send({ contextRepos: [] });
     expect(res.status).toBe(200);
 
     await settles(() => expect(ready).toHaveBeenCalledTimes(1));
@@ -342,7 +385,7 @@ describe('reviewing by issue key', () => {
 
   it('accepts a key however it was typed', async () => {
     const server = boot(makeConfig(), makeWired(), isolated());
-    const res = await request(server).post('/api/reviews/buy-9/start').send({ contextRepos: [] });
+    const res = await request(server.listener).post('/api/reviews/buy-9/start').send({ contextRepos: [] });
     expect(res.status).toBe(200);
     server.shutdown();
   });
@@ -350,14 +393,14 @@ describe('reviewing by issue key', () => {
   it('answers a typo with a sentence, not a Jira error', async () => {
     const server = boot(makeConfig(), makeWired(), isolated());
 
-    const typo = await request(server).post('/api/reviews/not-a-key!/start').send({});
+    const typo = await request(server.listener).post('/api/reviews/not-a-key!/start').send({});
     expect(typo.status).toBe(400);
     expect(typo.body.error).toContain('BUY-2455');
 
     // Jira returns 404 both for "no such issue" and "not yours to see",
     // so the message has to cover both or it sends someone hunting for a
     // typo that isn't there.
-    const missing = await request(server).post('/api/reviews/BUY-404/start').send({});
+    const missing = await request(server.listener).post('/api/reviews/BUY-404/start').send({});
     expect(missing.status).toBe(404);
     expect(missing.body.error).toContain('erişimin olmayabilir');
 
@@ -378,10 +421,10 @@ describe('reviewing by issue key', () => {
      */
     const wired = makeWired();
     const server = boot(makeConfig(), wired, isolated());
-    await request(server).post('/api/reviews/BUY-9/start').send({ contextRepos: [] });
+    await request(server.listener).post('/api/reviews/BUY-9/start').send({ contextRepos: [] });
     wired.reviewStore.upsert('local:work@main', { status: 'failed', summary: 'work · main' });
 
-    const list = await request(server).get('/api/reviews');
+    const list = await request(server.listener).get('/api/reviews');
     const keys = list.body.items.map((i: { issueKey: string }) => i.issueKey);
 
     // BUY-1 is what the query returns; the other two are this machine's.
@@ -397,7 +440,7 @@ describe('reviewing by issue key', () => {
     const server = boot(makeConfig(), wired, isolated());
     wired.reviewStore.upsert('BUY-1', { status: 'awaiting_approval', reviewedAt: '2026-08-28T10:00:00Z' });
 
-    const list = await request(server).get('/api/reviews');
+    const list = await request(server.listener).get('/api/reviews');
 
     expect(list.body.items[0]).toMatchObject({
       issueKey: 'BUY-1',
@@ -419,10 +462,10 @@ describe('reviewing by issue key', () => {
  * named the wait instead of the reason, which is the diagnosis thrown away.
  */
 async function startLocal(
-  server: ReturnType<typeof boot>,
+  server: Listening,
   body: Record<string, unknown>,
 ): Promise<{ issueKey: string; local: boolean }> {
-  const res = await request(server).post('/api/reviews/local').send(body);
+  const res = await request(server.listener).post('/api/reviews/local').send(body);
   expect(res.status, `yerel review reddedildi: ${String(res.text).slice(0, 200)}`).toBe(200);
   return res.body;
 }
@@ -466,7 +509,7 @@ describe('reviewing a local directory', () => {
 
     // The very request the button makes, on the very id the server handed
     // back — including the '/' and ':' that survive a round trip.
-    const again = await request(server).post(`/api/reviews/${encodeURIComponent(id)}/start`).send({ contextRepos: [] });
+    const again = await request(server.listener).post(`/api/reviews/${encodeURIComponent(id)}/start`).send({ contextRepos: [] });
     expect(again.status).toBe(200);
 
     // A re-run archives what the last one said rather than dropping it.
@@ -485,7 +528,7 @@ describe('reviewing a local directory', () => {
     const id: string = first.issueKey;
 
     execFileSync('git', ['checkout', '--', '.'], { cwd: root });
-    const again = await request(server).post(`/api/reviews/${encodeURIComponent(id)}/start`).send({});
+    const again = await request(server.listener).post(`/api/reviews/${encodeURIComponent(id)}/start`).send({});
 
     expect(again.status).toBe(409);
     expect(again.body.error).toContain('incelenecek değişiklik yok');
@@ -499,7 +542,7 @@ describe('reviewing a local directory', () => {
     const server = boot(makeConfig(), makeWired(), isolated());
 
     const first = await startLocal(server, { path: root });
-    const meta = await request(server).get(`/api/reviews/${encodeURIComponent(first.issueKey)}/prepare`);
+    const meta = await request(server.listener).get(`/api/reviews/${encodeURIComponent(first.issueKey)}/prepare`);
 
     expect(meta.status).toBe(200);
     expect(meta.body.description).toContain(root);
@@ -519,7 +562,7 @@ describe('reviewing a local directory', () => {
     const wired = makeWired();
     const server = boot(makeConfig(), wired, isolated());
 
-    const res = await request(server).post('/api/reviews/local/inspect').send({ path: root });
+    const res = await request(server.listener).post('/api/reviews/local/inspect').send({ path: root });
 
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({
@@ -536,7 +579,7 @@ describe('reviewing a local directory', () => {
     const root = makeRepo();
     const server = boot(makeConfig(), makeWired(), isolated());
 
-    const res = await request(server).post('/api/reviews/local/inspect').send({ path: root });
+    const res = await request(server.listener).post('/api/reviews/local/inspect').send({ path: root });
     expect(res.body.suggestedIssueKey).toBeNull();
     server.shutdown();
   });
@@ -544,14 +587,14 @@ describe('reviewing a local directory', () => {
   it('answers whether a typed key is a real issue, so a typo is caught in the dialog', async () => {
     const server = boot(makeConfig(), makeWired(), isolated());
 
-    const found = await request(server).get('/api/issues/buy-9/summary');
+    const found = await request(server.listener).get('/api/issues/buy-9/summary');
     expect(found.body).toMatchObject({ key: 'BUY-9', summary: 'Typed by hand' });
 
     // Jira answers 404 both for "no such issue" and "not yours to see".
-    const missing = await request(server).get('/api/issues/BUY-404/summary');
+    const missing = await request(server.listener).get('/api/issues/BUY-404/summary');
     expect(missing.body.error).toContain('BUY-404');
 
-    const typo = await request(server).get('/api/issues/not-a-key/summary');
+    const typo = await request(server.listener).get('/api/issues/not-a-key/summary');
     expect(typo.status).toBe(400);
     server.shutdown();
   });
@@ -603,13 +646,13 @@ describe('reviewing a local directory', () => {
     });
     expect(wired.reviewStore.get(id)?.localPath).toBeUndefined();
 
-    const again = await request(server).post(`/api/reviews/${encodeURIComponent(id)}/start`).send({});
+    const again = await request(server.listener).post(`/api/reviews/${encodeURIComponent(id)}/start`).send({});
     expect(again.status).toBe(200);
     await settles(() => expect(wired.reviewStore.get(id)?.history?.length).toBe(1));
 
     // And it is a local review as far as the decision is concerned, so the
     // buttons do not promise a Jira write.
-    const detail = await request(server).get(`/api/reviews/${encodeURIComponent(id)}/detail`);
+    const detail = await request(server.listener).get(`/api/reviews/${encodeURIComponent(id)}/detail`);
     expect(detail.body.local).toBe(true);
     server.shutdown();
   });
@@ -631,7 +674,7 @@ describe('reviewing a local directory', () => {
       ],
     });
 
-    const meta = await request(server).get(`/api/reviews/${encodeURIComponent(id)}/prepare`);
+    const meta = await request(server.listener).get(`/api/reviews/${encodeURIComponent(id)}/prepare`);
     expect(meta.status).toBe(200);
     expect(meta.body.description).toContain(root);
     server.shutdown();
@@ -655,7 +698,7 @@ describe('reviewing a local directory', () => {
     // Something new in the working copy, never committed.
     writeFileSync(join(root, 'b.txt'), 'sonradan\n');
 
-    const again = await request(server).post(`/api/reviews/${encodeURIComponent(id)}/start`).send({});
+    const again = await request(server.listener).post(`/api/reviews/${encodeURIComponent(id)}/start`).send({});
     expect(again.status).toBe(200);
     await settles(() => expect(wired.reviewStore.get(id)?.history?.length).toBe(1));
     server.shutdown();
@@ -681,7 +724,7 @@ describe('reviewing a local directory', () => {
     execFileSync('git', ['checkout', '-qb', 'feature/başka'], { cwd: root });
     writeFileSync(join(root, 'a.txt'), 'yine değişti\n');
 
-    const again = await request(server).post(`/api/reviews/${encodeURIComponent(id)}/start`).send({});
+    const again = await request(server.listener).post(`/api/reviews/${encodeURIComponent(id)}/start`).send({});
 
     expect(again.status).toBe(409);
     expect(again.body.error).toContain('feature/başka');
@@ -705,12 +748,12 @@ describe('reviewing a local directory', () => {
     await startLocal(server, { path: root, issueKey: 'BUY-9' });
     await settles(() => expect(wired.reviewStore.get('BUY-9')?.review).toBeDefined());
 
-    const again = await request(server).post('/api/reviews/BUY-9/start').send({ contextRepos: [] });
+    const again = await request(server.listener).post('/api/reviews/BUY-9/start').send({ contextRepos: [] });
     expect(again.status).toBe(200);
     await settles(() => expect(wired.reviewStore.get('BUY-9')?.history?.length).toBe(1));
 
     // And it is still not a local-only review: the decision goes to Jira.
-    const detail = await request(server).get('/api/reviews/BUY-9/detail');
+    const detail = await request(server.listener).get('/api/reviews/BUY-9/detail');
     expect(detail.body.local).toBe(false);
     expect(wired.reviewStore.get('local:')).toBeUndefined();
     server.shutdown();
@@ -723,8 +766,8 @@ describe('reviewing a local directory', () => {
     const server = boot(makeConfig(), makeWired(), isolated());
 
     await startLocal(server, { path: root, issueKey: 'BUY-9' });
-    await request(server).get('/api/reviews');
-    const meta = await request(server).get('/api/reviews/BUY-9/prepare');
+    await request(server.listener).get('/api/reviews');
+    const meta = await request(server.listener).get('/api/reviews/BUY-9/prepare');
 
     expect(meta.body.issueType).not.toBe('Yerel dizin');
     server.shutdown();
@@ -735,11 +778,11 @@ describe('reviewing a local directory', () => {
 
     // Posted directly rather than through `startLocal`: the refusal is the
     // thing under test, so asserting a 200 first would be nonsense.
-    const notRepo = await request(server).post('/api/reviews/local').send({ path: dir });
+    const notRepo = await request(server.listener).post('/api/reviews/local').send({ path: dir });
     expect(notRepo.status).toBe(400);
     expect(notRepo.body.error).toContain('git deposu değil');
 
-    const empty = await request(server).post('/api/reviews/local').send({ path: '' });
+    const empty = await request(server.listener).post('/api/reviews/local').send({ path: '' });
     expect(empty.status).toBe(400);
 
     server.shutdown();
@@ -775,7 +818,7 @@ describe('an objection that asked something', () => {
       ],
     });
 
-    const detail = await request(server).get('/api/reviews/BUY-1/detail');
+    const detail = await request(server.listener).get('/api/reviews/BUY-1/detail');
     const [first, second] = detail.body.challenges;
 
     expect(first.answer).toBe('Ediliyor ama yalnızca POST yolunda.');
@@ -791,7 +834,7 @@ describe('an objection that asked something', () => {
 describe('content security policy', () => {
   it('forbids everything by default, and allows only this origin', async () => {
     const app = boot(makeConfig(), makeWired(), isolated());
-    const res = await request(app).get('/api/reviews');
+    const res = await request(app.listener).get('/api/reviews');
     const policy = res.headers['content-security-policy'];
 
     expect(policy).toContain("default-src 'none'");
@@ -806,7 +849,7 @@ describe('content security policy', () => {
     // and `script-src 'unsafe-inline'` would have made the rest close to
     // pointless. Nothing inline is left, so nothing inline may run.
     const app = boot(makeConfig(), makeWired(), isolated());
-    const policy = (await request(app).get('/')).headers['content-security-policy'];
+    const policy = (await request(app.listener).get('/')).headers['content-security-policy'];
 
     expect(policy).toContain("script-src 'self'");
     expect(policy).toContain("style-src 'self'");
@@ -818,7 +861,7 @@ describe('content security policy', () => {
 
   it('covers the page itself, not only the API', async () => {
     const app = boot(makeConfig(), makeWired(), isolated());
-    const res = await request(app).get('/');
+    const res = await request(app.listener).get('/');
     expect(res.headers['content-security-policy']).toBeTruthy();
   });
 });

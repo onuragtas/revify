@@ -1614,7 +1614,7 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired, opti
 
   async function buildLocalStart(
     path: string,
-    { issueKey = '', contextRepos = [] as string[] } = {},
+    { issueKey = '', contextRepos = [] as string[], scanMode = 'auto' } = {},
   ): Promise<LocalStart> {
     if (!path) return { ok: false, status: 400, error: 'Bir dizin yolu gerekli.' };
 
@@ -1658,6 +1658,7 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired, opti
         data: {
           repoPath: change.path,
           contextRepos,
+          scanMode,
           summary,
           ...(issueKey ? { issueKey } : {}),
         },
@@ -1770,6 +1771,9 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired, opti
     const started = await buildLocalStart(String(req.body?.path ?? '').trim(), {
       issueKey: String(req.body?.issueKey ?? '').trim().toUpperCase(),
       contextRepos: Array.isArray(req.body?.contextRepos) ? req.body.contextRepos.map(String) : [],
+      scanMode: ['single', 'deep', 'auto'].includes(String(req.body?.scanMode))
+        ? String(req.body.scanMode)
+        : 'auto',
     });
     if (!started.ok) {
       res.status(started.status).json({ error: started.error });
@@ -1844,6 +1848,11 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired, opti
     const contextRepos = Array.isArray(req.body?.contextRepos)
       ? req.body.contextRepos.map(String)
       : [];
+    /** How thoroughly to read: chosen per run, in front of the person who
+     * started it. See CodeReviewTask. */
+    const scanMode = ['single', 'deep', 'auto'].includes(String(req.body?.scanMode))
+      ? String(req.body.scanMode)
+      : 'auto';
 
     /*
      * A local review is re-run from its directory, not from Jira.
@@ -1861,7 +1870,7 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired, opti
       // a review of BUY-2397 back into `local:...` and take its decision
       // path away with it.
       const attached = isIssueKey(req.params.issueKey) ? normalizeIssueKey(req.params.issueKey) : '';
-      const started = await buildLocalStart(localPath, { issueKey: attached, contextRepos });
+      const started = await buildLocalStart(localPath, { issueKey: attached, contextRepos, scanMode });
       if (!started.ok) {
         res.status(started.status).json({ error: started.error });
         return;
@@ -1925,6 +1934,7 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired, opti
     }
 
     event.data.contextRepos = contextRepos;
+    event.data.scanMode = scanMode;
     restartRecord(event);
     res.json({ ok: true, position: queue.enqueue(event) });
   });

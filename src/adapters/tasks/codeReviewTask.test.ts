@@ -945,3 +945,106 @@ describe('previousReview', () => {
     ).toBeUndefined();
   });
 });
+
+
+describe('CodeReviewTask — reading a large change in slices', () => {
+  const change = (path: string, files: Array<{ path: string; diff: string }>) => ({
+    projectPath: path,
+    branchName: 'feature/BUY-1',
+    baseBranch: 'master',
+    diff: files.map((f) => `--- ${f.path} ---\n${f.diff}`).join('\n\n'),
+    files,
+    repoPath: null,
+  });
+
+  const big = [
+    change('team/api', [
+      { path: 'a.ts', diff: 'a'.repeat(28_000) },
+      { path: 'b.ts', diff: 'b'.repeat(28_000) },
+    ]),
+  ];
+
+  /** Answers the whole-change pass one way and every slice another, so the
+   * merge is visible in the result. */
+  function llmFor(whole: string, slices: string[]): { llm: LlmProvider; prompts: string[] } {
+    const prompts: string[] = [];
+    let n = 0;
+    return {
+      prompts,
+      llm: {
+        canEditFiles: false,
+        generate: async ({ prompt }) => {
+          prompts.push(prompt);
+          return n++ === 0 ? whole : (slices[n - 2] ?? '');
+        },
+      },
+    };
+  }
+
+  it('reads a big change whole and then slice by slice, and merges', async () => {
+    /*
+     * One pass over a fifty-file diff is a sample, not a review — the
+     * findings differed between runs and between machines, which is the
+     * same symptom twice. The whole pass answers what only makes sense
+     * whole; the slices find what needs somebody looking at the lines.
+     */
+    const { llm, prompts } = llmFor(
+      'Giriş.\n\n### blocking — a.ts:1\n\nBir.\n\nVerdict: Request changes — a',
+      ['### major — b.ts:9\n\nİki.'],
+    );
+
+    const result = await new CodeReviewTask(llm).run(
+      { id: 'BUY-1', data: { issueKey: 'BUY-1', summary: 's', scanMode: 'deep' } },
+      { repoChanges: big } as unknown as Record<string, unknown>,
+    );
+
+    // Three passes: the whole change, then one per slice.
+    expect(prompts).toHaveLength(3);
+    expect(prompts[1]).toContain('Bu geçiş: team/api · 1');
+    expect(prompts[1]).toContain('Yalnızca bulgu yaz');
+    // Both findings survive, and the spine's own sections come through.
+    expect(result.markdown).toContain('a.ts:1');
+    expect(result.markdown).toContain('b.ts:9');
+    expect(result.markdown).toContain('Verdict: Request changes');
+  });
+
+  it('reads a small change in one pass, as before', async () => {
+    // Splitting a three-file change costs time and buys nothing.
+    const { llm, prompts } = llmFor('Sağlam.\n\nVerdict: Approve', []);
+
+    await new CodeReviewTask(llm).run(
+      { id: 'BUY-1', data: { issueKey: 'BUY-1', summary: 's' } },
+      {
+        repoChanges: [change('team/api', [{ path: 'a.ts', diff: 'x'.repeat(500) }])],
+      } as unknown as Record<string, unknown>,
+    );
+
+    expect(prompts).toHaveLength(1);
+  });
+
+  it('honours a request for one pass even on a change that would be split', async () => {
+    // The choice is the reader's: sometimes an answer now beats a thorough
+    // one later.
+    const { llm, prompts } = llmFor('Verdict: Approve', []);
+
+    await new CodeReviewTask(llm).run(
+      { id: 'BUY-1', data: { issueKey: 'BUY-1', summary: 's', scanMode: 'single' } },
+      { repoChanges: big } as unknown as Record<string, unknown>,
+    );
+
+    expect(prompts).toHaveLength(1);
+  });
+
+  it('splits a large change without being asked, when nobody chose', async () => {
+    // `auto` is the default, and a change one pass cannot cover is exactly
+    // the case where the default should not be the fast one.
+    const { llm, prompts } = llmFor('Verdict: Approve', ['', '']);
+
+    await new CodeReviewTask(llm).run(
+      { id: 'BUY-1', data: { issueKey: 'BUY-1', summary: 's' } },
+      { repoChanges: big } as unknown as Record<string, unknown>,
+    );
+
+    expect(prompts.length).toBeGreaterThan(1);
+  });
+});
