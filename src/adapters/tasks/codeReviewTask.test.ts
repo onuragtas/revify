@@ -502,6 +502,61 @@ describe('buildPrompt — related issues', () => {
     );
   });
 
+  it('names a neighbour\'s in-flight branch, so an absence is a question and not a finding', () => {
+    /*
+     * The false blocking finding this exists to stop: a sibling ticket is
+     * adding the endpoint right now, on a branch that is not merged, so the
+     * reviewer reads the default branch, does not find it, and reports the
+     * work as unimplemented.
+     *
+     * Named, never checked out. An unmerged branch cannot settle anything —
+     * it may change and it may never land — but knowing it exists turns a
+     * wrong finding into a question a human answers once.
+     */
+    const prompt = buildPrompt({
+      ...base,
+      relatedIssues: [
+        {
+          key: 'BUY-2401',
+          relation: 'linked',
+          issueType: 'Task',
+          status: 'In Progress',
+          summary: 'Ödeme ucu',
+          description: 'Yeni uç eklenecek',
+          branches: [
+            { name: 'feature/BUY-2401', repositoryUrl: 'https://gitlab.example.com/team/payment-gateway' },
+          ],
+        },
+      ],
+    });
+
+    expect(prompt).toContain('Üzerinde çalışılan dal(lar):');
+    expect(prompt).toContain('`feature/BUY-2401` (team/payment-gateway)');
+    expect(prompt).toContain('do not report it as unimplemented');
+    expect(prompt).toContain('raise one `[?]`');
+  });
+
+  it('says nothing about branches for a neighbour that has none', () => {
+    // Most neighbours are just background; the rule only appears when there
+    // is actually work in flight to hedge against.
+    const prompt = buildPrompt({
+      ...base,
+      relatedIssues: [
+        {
+          key: 'BUY-2424',
+          relation: 'parent',
+          issueType: 'Epic',
+          status: 'Backlog',
+          summary: 'Rollout',
+          description: 'x',
+        },
+      ],
+    });
+
+    expect(prompt).not.toContain('Üzerinde çalışılan dal');
+    expect(prompt).not.toContain('work in flight');
+  });
+
   it('caps a long epic so background cannot outweigh the issue under review', () => {
     const prompt = buildPrompt({
       ...base,

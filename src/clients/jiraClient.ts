@@ -45,6 +45,9 @@ export interface JiraComment {
 
 export interface JiraRelatedIssue {
   key: string;
+  /** Jira's internal id — the only thing the development panel can be
+   * queried by, so it is kept even though nothing displays it. */
+  id: string;
   /** How it relates: 'parent', 'subtask', or the Jira link phrase. */
   relation: string;
   issueType: string | null;
@@ -404,11 +407,12 @@ export class JiraClient {
       'status',
     ]);
     const data = await this.request<{
-      issues: Array<{ key: string; fields: Record<string, any> }>;
+      issues: Array<{ key: string; id: string; fields: Record<string, any> }>;
     }>(url);
 
     return (data.issues ?? []).map((i) => ({
       key: i.key,
+      id: i.id,
       relation: relations.get(i.key) ?? 'linked',
       issueType: i.fields.issuetype?.name ?? null,
       status: i.fields.status?.name ?? null,

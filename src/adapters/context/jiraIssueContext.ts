@@ -66,6 +66,38 @@ export class JiraIssueContext implements ContextCollector {
       progressBus.log(event.id, `related issues: ${related.map((r) => `${r.key} (${r.relation})`).join(', ')}`);
     }
 
+    /*
+     * Which neighbours have work in flight.
+     *
+     * Not to review it — an unmerged branch is not the truth about
+     * production, and mounting one would put somebody's half-finished work
+     * where the next review reads it as live. Only to *name* it, so the
+     * review stops reporting "this endpoint does not exist" about something
+     * a sibling ticket is adding right now. A dependency that is genuinely
+     * in flight is a question for a human, not a blocking finding.
+     *
+     * Best effort per neighbour: a ticket with no branch, or a dev panel we
+     * cannot read, must not cost the review.
+     */
+    const relatedWithBranches = await Promise.all(
+      related.map(async (neighbour) => {
+        try {
+          const branches = await this.jiraClient.getLinkedBranches(neighbour.id);
+          return branches.length ? { ...neighbour, branches } : neighbour;
+        } catch {
+          return neighbour;
+        }
+      }),
+    );
+
+    const inFlight = relatedWithBranches.filter((r) => 'branches' in r);
+    if (inFlight.length) {
+      progressBus.log(
+        event.id,
+        `in-flight branches on related issues: ${inFlight.map((r) => r.key).join(', ')}`,
+      );
+    }
+
     if (!issueId) {
       // Said plainly rather than as "no linked branch": nothing was asked.
       progressBus.log(event.id, 'yerel dizin incelemesi — Jira dev-status sorgulanmadı');
@@ -114,7 +146,7 @@ export class JiraIssueContext implements ContextCollector {
       jiraIssue: issue,
       linkedBranches,
       jiraComments: comments,
-      relatedIssues: related,
+      relatedIssues: relatedWithBranches,
       attachments: attachmentPlan,
       attachmentDir: attachmentPlan.fetched.length ? join(this.attachmentDir!, issueKey) : undefined,
     };

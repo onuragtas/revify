@@ -9,6 +9,7 @@ import type { ReviewHistoryEntry, ReviewStore } from '../../core/reviewStore.js'
 import { splitFindings } from '../../core/findings.js';
 import type { PromptStore } from '../../core/promptStore.js';
 import { progressBus } from '../../core/progressBus.js';
+import { parseProjectPathFromUrl } from '../../clients/gitlabClient.js';
 import {
   extractPlainText,
   renderComments,
@@ -82,6 +83,15 @@ export interface CodeReviewPromptInput {
     status: string | null;
     summary: string;
     description: string;
+    /**
+     * Branches Jira links to *that* issue, when it has work in flight.
+     *
+     * Named, never checked out. An unmerged branch is not the truth about
+     * production, so it cannot settle anything — but knowing it exists is
+     * what stops a review reporting "this endpoint does not exist" about
+     * something a sibling ticket is adding right now.
+     */
+    branches?: Array<{ name: string; repositoryUrl: string }>;
   }>;
   /** The issue's Jira comments, oldest first — acceptance criteria and
    * previously requested changes live here as often as in the description. */
@@ -259,9 +269,25 @@ export function buildPrompt(input: CodeReviewPromptInput): string {
           // pull the whole review off target.
           const text = r.description.length > 700 ? `${r.description.slice(0, 700)}\n[…kısaltıldı]` : r.description;
           const kind = [r.relation, r.issueType, r.status].filter(Boolean).join(', ');
-          return `### ${r.key} — ${r.summary}\n_(${kind})_\n\n${text || '(açıklama yok)'}\n`;
+          const branches = (r.branches ?? [])
+            .map((b) => `\`${b.name}\` (${parseProjectPathFromUrl(b.repositoryUrl) ?? b.repositoryUrl})`)
+            .join(', ');
+          return (
+            `### ${r.key} — ${r.summary}\n_(${kind})_\n\n` +
+            (branches ? `**Üzerinde çalışılan dal(lar):** ${branches}\n\n` : '') +
+            `${text || '(açıklama yok)'}\n`
+          );
         })
         .join('\n') +
+      (related.some((r) => r.branches?.length)
+        ? '\n**Some of these have work in flight.** A branch listed above exists and is not\n' +
+          'merged; you cannot read it and it settles nothing — it may change, and it may never\n' +
+          'land. But it changes what you do with an absence: when this change depends on\n' +
+          'something that is missing, and a neighbour\'s in-flight branch looks like the thing\n' +
+          'adding it, do not report it as unimplemented. Say which ticket appears to be adding\n' +
+          'it and raise one `[?]` asking whether it is in place. A blocking finding about work\n' +
+          'somebody is doing right now costs the reader more than the question does.\n'
+        : '') +
       '\n'
     : '';
 

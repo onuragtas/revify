@@ -14,6 +14,16 @@ function client(over: Partial<Record<keyof JiraClient, unknown>> = {}) {
   } as unknown as JiraClient;
 }
 
+const neighbour = {
+  key: 'BUY-2401',
+  id: '2401',
+  relation: 'linked',
+  issueType: 'Task',
+  status: 'In Progress',
+  summary: 'Ödeme ucu',
+  description: 'x',
+};
+
 describe('JiraIssueContext', () => {
   it('does not ask the development panel about an issue it has no id for', async () => {
     /*
@@ -56,5 +66,56 @@ describe('JiraIssueContext', () => {
 
     expect(context).toEqual({});
     expect(jira.getLinkedBranches).not.toHaveBeenCalled();
+  });
+});
+
+describe('a neighbour with work in flight', () => {
+  it('names the branch, so an absence becomes a question rather than a finding', async () => {
+    /*
+     * The false blocking finding this exists to stop: a sibling ticket is
+     * adding the endpoint right now, on a branch that is not merged, so the
+     * reviewer reads the default branch, does not find it, and reports the
+     * work as unimplemented.
+     */
+    const jira = client({
+      getRelatedIssues: async () => [neighbour],
+      getLinkedBranches: vi.fn(async (id: string) =>
+        id === '2401'
+          ? [{ name: 'feature/BUY-2401', repositoryUrl: 'https://gitlab/team/payment-gateway' }]
+          : [],
+      ),
+    });
+
+    const context = await new JiraIssueContext(jira).collect({
+      id: 'BUY-9',
+      data: { issueKey: 'BUY-9', issueId: '9009' },
+    });
+
+    const [related] = context.relatedIssues as Array<{ key: string; branches?: unknown[] }>;
+    expect(related.key).toBe('BUY-2401');
+    expect(related.branches).toEqual([
+      { name: 'feature/BUY-2401', repositoryUrl: 'https://gitlab/team/payment-gateway' },
+    ]);
+  });
+
+  it('costs the review nothing when a neighbour\'s dev panel cannot be read', async () => {
+    // Background is background: a ticket with no branch, or one whose panel
+    // is unreadable, must not stop a review.
+    const jira = client({
+      getRelatedIssues: async () => [neighbour],
+      getLinkedBranches: vi.fn(async (id: string) => {
+        if (id === '2401') throw new Error('Jira API 403');
+        return [];
+      }),
+    });
+
+    const context = await new JiraIssueContext(jira).collect({
+      id: 'BUY-9',
+      data: { issueKey: 'BUY-9', issueId: '9009' },
+    });
+
+    const [related] = context.relatedIssues as Array<{ key: string; branches?: unknown[] }>;
+    expect(related.key).toBe('BUY-2401');
+    expect(related.branches).toBeUndefined();
   });
 });
