@@ -87,6 +87,26 @@ export class SettingsStore {
   private settings: Settings;
 
   constructor(private readonly filePath: string = SETTINGS_FILE) {
+    /*
+     * A test may never open the real one.
+     *
+     * This file holds the running developer's credentials and their own
+     * per-machine switches, and the default path points straight at it — so
+     * a test that builds a server and forgets to inject a store writes into
+     * a live install. That has happened twice: once storing timeouts, once
+     * leaving a temp directory in `fixTargets`, both found only because
+     * somebody noticed something odd on their own screen.
+     *
+     * Refusing here rather than trusting every call site is the difference
+     * between a rule and a habit. Nothing about production changes: the
+     * variable is set by vitest and by nothing else.
+     */
+    if (process.env.VITEST && filePath === SETTINGS_FILE) {
+      throw new Error(
+        'SettingsStore: testler gerçek ~/.revify/settings.json dosyasını açamaz — ' +
+          'geçici bir yol ver (server testlerinde `isolated()`).',
+      );
+    }
     this.settings = this.load();
   }
 

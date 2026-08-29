@@ -364,16 +364,47 @@ describe('reviewing by issue key', () => {
     server.shutdown();
   });
 
-  it('keeps a hand-typed issue in the list instead of losing it on refresh', async () => {
+  it('lists the team\'s query and nothing else', async () => {
+    /*
+     * This used to append every local record the query did not match, so a
+     * hand-typed review would not vanish on the next refresh. The cost was
+     * a list that accumulated everything the machine had ever touched —
+     * reviews of local directories, tickets that left the query weeks ago,
+     * rows nobody could explain.
+     *
+     * The two screens that answer those questions do it on purpose: Onay
+     * bekleyenler reads the store, Kararlar reads the decisions. This one
+     * answers "what is the team working on".
+     */
     const wired = makeWired();
     const server = boot(makeConfig(), wired, isolated());
     await request(server).post('/api/reviews/BUY-9/start').send({ contextRepos: [] });
+    wired.reviewStore.upsert('local:work@main', { status: 'failed', summary: 'work · main' });
 
-    // The queue answers a different question and will never mention BUY-9.
     const list = await request(server).get('/api/reviews');
-    const row = list.body.items.find((i: { issueKey: string }) => i.issueKey === 'BUY-9');
-    expect(row).toBeDefined();
-    expect(row.manual).toBe(true);
+    const keys = list.body.items.map((i: { issueKey: string }) => i.issueKey);
+
+    // BUY-1 is what the query returns; the other two are this machine's.
+    expect(keys).toEqual(['BUY-1']);
+
+    server.shutdown();
+  });
+
+  it('merges what this machine knows into the rows the query returned', async () => {
+    // Jira says which issues are in review; the local store says how far
+    // each one has got. A row with neither half is not worth showing.
+    const wired = makeWired();
+    const server = boot(makeConfig(), wired, isolated());
+    wired.reviewStore.upsert('BUY-1', { status: 'awaiting_approval', reviewedAt: '2026-08-28T10:00:00Z' });
+
+    const list = await request(server).get('/api/reviews');
+
+    expect(list.body.items[0]).toMatchObject({
+      issueKey: 'BUY-1',
+      summary: 'Barcode listing',
+      reviewStatus: 'awaiting_approval',
+      reviewedAt: '2026-08-28T10:00:00Z',
+    });
 
     server.shutdown();
   });

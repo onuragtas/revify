@@ -513,7 +513,23 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired, opti
       return;
     }
 
-    const row = (event: TriggerEvent, manual: boolean) => {
+    /*
+     * The team's query, with what this machine knows about each row merged
+     * in — Jira says which issues are in review, the local store says how
+     * far each one has got.
+     *
+     * Nothing else. Records the query does not match used to be appended
+     * here so that an issue reviewed by key would not vanish on the next
+     * refresh, and the cost was a list that accumulated everything this
+     * machine had ever touched: reviews of local directories, tickets that
+     * left the query weeks ago, rows whose presence nobody could explain.
+     * The two screens that answer "what is on me" and "what did we decide"
+     * do it better and on purpose — Onay bekleyenler reads the store, and
+     * Kararlar reads the decisions. This one answers "what is the team
+     * working on", and an answer to one question is worth more than three
+     * questions half-answered.
+     */
+    const items = lastPolled.map((event) => {
       const record = wired.reviewStore.get(event.id);
       return {
         issueKey: event.id,
@@ -527,31 +543,10 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired, opti
         reviewedAt: record?.reviewedAt ?? null,
         review: record?.review ?? null,
         error: record?.error ?? null,
-        manual,
       };
-    };
+    });
 
-    const items = lastPolled.map((event) => row(event, false));
-
-    /*
-     * Issues reviewed by key, which the query does not match.
-     *
-     * Without this they vanish the moment the list refreshes: you type a
-     * key, the review starts, and the row it is running in disappears
-     * because Jira's answer to a different question does not mention it.
-     */
-    const inQueue = new Set(lastPolled.map((e) => e.id));
-    const manual = wired.reviewStore
-      .list()
-      .filter((r) => !inQueue.has(r.issueKey))
-      .filter((r) => r.status && r.status !== 'idle')
-      .sort((a, b) => (b.reviewedAt ?? b.updatedAt).localeCompare(a.reviewedAt ?? a.updatedAt))
-      .slice(0, 30)
-      .map((r) =>
-        row({ id: r.issueKey, data: { summary: r.summary ?? null } }, true),
-      );
-
-    res.json({ items: [...items, ...manual], queueReady: true });
+    res.json({ items, queueReady: true });
   });
 
   /**

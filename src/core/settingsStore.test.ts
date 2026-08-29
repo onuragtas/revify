@@ -66,3 +66,19 @@ describe('the fields the settings screen writes', () => {
     expect(redacted.jiraApiToken).toBe(true);
   });
 });
+
+describe('the real settings file', () => {
+  it('cannot be opened from a test', () => {
+    /*
+     * It holds the running developer's credentials and their own
+     * per-machine switches, and the default path points straight at it — so
+     * a test that builds a server and forgets to inject a store writes into
+     * a live install. That happened twice, and both times it was found
+     * because somebody noticed something odd on their own screen rather
+     * than because anything failed.
+     *
+     * Refusing is the difference between a rule and a habit.
+     */
+    expect(() => new SettingsStore()).toThrow(/gerçek ~\/\.revify/);
+  });
+});
