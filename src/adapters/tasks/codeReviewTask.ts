@@ -647,6 +647,22 @@ export class CodeReviewTask implements AiTask {
     const mode = (event.data.scanMode as string | undefined) ?? 'auto';
     const deep = mode === 'deep' || (mode !== 'single' && needsDeepScan(repoChanges));
 
+    /*
+     * Said out loud, including when it decided to do the cheap thing.
+     *
+     * `auto` cannot be decided when the button is pressed — nobody knows
+     * how big the change is until the collectors have fetched it — so the
+     * choice happens here, and the only way anyone can see what it chose is
+     * if it says. Logging only the deep path would leave "it read this in
+     * one pass" indistinguishable from "it never considered anything else".
+     */
+    const diffChars = repoChanges.reduce((n, c) => n + c.diff.length, 0);
+    progressBus.log(
+      event.id,
+      `tarama: ${deep ? 'bölerek' : 'tek geçiş'} · ${repoChanges.length} repo · ` +
+        `${Math.round(diffChars / 1000)}k karakter · ${mode === 'auto' ? 'otomatik seçildi' : `${mode} istendi`}`,
+    );
+
     const promptInput: CodeReviewPromptInput = {
       issueKey,
       summary,

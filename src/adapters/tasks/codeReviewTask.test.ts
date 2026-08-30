@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { CodeReviewTask, buildPrompt, buildSystemPrompt, previousReview } from './codeReviewTask.js';
+import { progressBus } from '../../core/progressBus.js';
 import type { LlmProvider, TriggerEvent } from '../../core/types.js';
 
 describe('buildSystemPrompt', () => {
@@ -1006,6 +1007,30 @@ describe('CodeReviewTask — reading a large change in slices', () => {
     expect(result.markdown).toContain('a.ts:1');
     expect(result.markdown).toContain('b.ts:9');
     expect(result.markdown).toContain('Verdict: Request changes');
+  });
+
+  it('says which way it went, including when it chose the cheap one', async () => {
+    /*
+     * `auto` cannot be decided when the button is pressed — nobody knows
+     * how big the change is until the collectors have fetched it — so the
+     * choice happens mid-run. Logging only the deep path would leave "it
+     * read this in one pass" indistinguishable from "it never considered
+     * anything else".
+     */
+    const lines: string[] = [];
+    const listen = (e: { message: string }) => lines.push(e.message);
+    progressBus.on('progress', listen);
+    const { llm } = llmFor('Verdict: Approve', []);
+
+    await new CodeReviewTask(llm).run(
+      { id: 'BUY-1', data: { issueKey: 'BUY-1', summary: 's' } },
+      {
+        repoChanges: [change('team/api', [{ path: 'a.ts', diff: 'x'.repeat(500) }])],
+      } as unknown as Record<string, unknown>,
+    );
+
+    progressBus.off('progress', listen);
+    expect(lines.some((l) => l.startsWith('tarama: tek geçiş') && l.includes('otomatik seçildi'))).toBe(true);
   });
 
   it('reads a small change in one pass, as before', async () => {
