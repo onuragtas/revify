@@ -7,7 +7,7 @@ import type { ContextRepo, RepoChange } from '../context/gitlabBranchDiffContext
 import type { NotesStore } from '../../core/notesStore.js';
 import type { ReviewHistoryEntry, ReviewStore } from '../../core/reviewStore.js';
 import { splitFindings } from '../../core/findings.js';
-import { chunkChange, mergeReviews, needsDeepScan } from '../../core/reviewChunks.js';
+import { chunkChange, mergeReviews, needsDeepScan, type ReviewChunk } from '../../core/reviewChunks.js';
 import type { PromptStore } from '../../core/promptStore.js';
 import { progressBus } from '../../core/progressBus.js';
 import { parseProjectPathFromUrl } from '../../clients/gitlabClient.js';
@@ -567,6 +567,73 @@ export function previousReview(
   return { findings, fixReport: last.fixReport };
 }
 
+/**
+ * One retry for a model call that failed outright — a dropped connection,
+ * an overloaded API, a CLI that exited nonzero for no reason the next
+ * attempt will repeat. Not for a stop: `signal.aborted` means the run was
+ * told to end, and retrying it would spawn a second process nobody asked
+ * for, so an `AbortError` is rethrown untouched.
+ *
+ * A single retry, not a loop — a review call costs real minutes and real
+ * usage, and a failure that survives one retry is telling you something a
+ * third attempt is unlikely to fix.
+ */
+async function withRetry<T>(run: () => Promise<T>, onRetry: (err: Error) => void): Promise<T> {
+  try {
+    return await run();
+  } catch (err) {
+    if (err instanceof Error && err.name === 'AbortError') throw err;
+    onRetry(err instanceof Error ? err : new Error(String(err)));
+    return run();
+  }
+}
+
+/** How many of the whole-pass-plus-slices calls may run at once.
+ *
+ * They read the same checkout with read-only tools and never see each
+ * other's output, so nothing about the work itself requires a queue of
+ * one. What does is the account behind `claude`: every call is a request
+ * against its own concurrency limit, not this process's, and firing all of
+ * them at once trades a slow success for a pile of rate-limit failures.
+ * Low and fixed rather than tuned per run — the failure mode on the other
+ * side of "too high" is worse than the win on the other side of "too low". */
+const REVIEW_CONCURRENCY = 3;
+
+/**
+ * Runs `jobs` with at most `concurrency` in flight, in submission order.
+ *
+ * A worker pool rather than chunked batches of `concurrency` at a time:
+ * batching would let the slowest job in a batch hold up starting the next
+ * batch's jobs even while other slots sit idle. Here a slot picks up the
+ * next job the moment it frees up.
+ *
+ * Stops handing out new jobs after the first failure — already-running
+ * jobs finish (there is no way to cancel a CLI subprocess mid-call without
+ * the caller's own abort signal), but a fatal failure does not go on to
+ * start work nobody will read the result of.
+ */
+async function runWithConcurrency<T>(concurrency: number, jobs: Array<() => Promise<T>>): Promise<T[]> {
+  const results: T[] = new Array(jobs.length);
+  let next = 0;
+  let firstError: unknown;
+  const worker = async () => {
+    for (;;) {
+      if (firstError !== undefined) return;
+      const index = next++;
+      if (index >= jobs.length) return;
+      try {
+        results[index] = await jobs[index]();
+      } catch (err) {
+        if (firstError === undefined) firstError = err;
+        return;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, jobs.length) }, worker));
+  if (firstError !== undefined) throw firstError;
+  return results;
+}
+
 export class CodeReviewTask implements AiTask {
   constructor(
     private readonly llm: LlmProvider,
@@ -701,30 +768,39 @@ export class CodeReviewTask implements AiTask {
       ],
     };
 
-    const whole = await this.llm.generate({
-      system,
-      prompt,
-      ...mounts,
-      signal,
-      onProgress: (message) => progressBus.log(event.id, message),
-    });
-
     /*
-     * A second reading, slice by slice.
+     * A second reading, slice by slice, run alongside the whole-pass rather
+     * than after it.
      *
      * One pass over a fifty-file diff is a sample, not a review: the
      * findings differed between runs and between machines, which is the
-     * same symptom twice. The whole-change pass above answers the questions
-     * that only make sense whole; these answer the ones that need somebody
-     * actually looking at the lines.
-     *
-     * Sequential on purpose. The model runs as a subprocess with file tools
-     * over real checkouts, and several at once contend for the same
-     * directories and the same machine — the queue exists for that reason.
+     * same symptom twice. The whole-change pass answers the questions that
+     * only make sense whole; the slices answer the ones that need somebody
+     * actually looking at the lines. Neither reads the other's output —
+     * mergeReviews() below takes the whole pass as a spine and the slices
+     * as additions — so there is nothing that requires them to run one
+     * after another; only REVIEW_CONCURRENCY's bound on the account's own
+     * request limit does.
      */
     const chunks = deep ? chunkChange(repoChanges) : [];
-    const extra: string[] = [];
-    for (const [index, chunk] of chunks.entries()) {
+    const extra: string[] = new Array(chunks.length);
+    let whole = '';
+
+    const wholeJob = async () => {
+      whole = await withRetry(
+        () =>
+          this.llm.generate({
+            system,
+            prompt,
+            ...mounts,
+            signal,
+            onProgress: (message) => progressBus.log(event.id, `[tek geçiş] ${message}`),
+          }),
+        (err) => progressBus.log(event.id, `tek geçiş hata verdi, tekrar deneniyor: ${err.message}`),
+      );
+    };
+
+    const sliceJob = (index: number, chunk: ReviewChunk) => async () => {
       signal?.throwIfAborted();
       progressBus.log(event.id, `derin tarama ${index + 1}/${chunks.length}: ${chunk.label}`);
       const slicePrompt = buildPrompt({
@@ -733,18 +809,42 @@ export class CodeReviewTask implements AiTask {
         slice: { label: chunk.label, of: chunks.length },
       });
       this.promptStore?.save(issueKey, `review-slice-${index + 1}`, { system, prompt: slicePrompt });
-      extra.push(
-        await this.llm.generate({
-          system,
-          prompt: slicePrompt,
-          ...mounts,
-          signal,
-          onProgress: (message) => progressBus.log(event.id, message),
-        }),
-      );
-    }
+      // A slice is supplementary coverage, not the review itself —
+      // mergeReviews() already treats `extra` as best-effort additions to
+      // the whole-pass spine. So a slice that still fails after a retry is
+      // skipped rather than thrown: losing that slice's extra findings is
+      // a fair trade against discarding the whole review over one flaky
+      // call.
+      try {
+        extra[index] = await withRetry(
+          () =>
+            this.llm.generate({
+              system,
+              prompt: slicePrompt,
+              ...mounts,
+              signal,
+              onProgress: (message) =>
+                progressBus.log(event.id, `[dilim ${index + 1}/${chunks.length}] ${message}`),
+            }),
+          (err) =>
+            progressBus.log(
+              event.id,
+              `derin tarama ${index + 1}/${chunks.length} hata verdi, tekrar deneniyor: ${err.message}`,
+            ),
+        );
+      } catch (err) {
+        if (err instanceof Error && err.name === 'AbortError') throw err;
+        const message = err instanceof Error ? err.message : String(err);
+        progressBus.log(event.id, `derin tarama ${index + 1}/${chunks.length} atlandı: ${message}`);
+      }
+    };
 
-    const markdown = chunks.length ? mergeReviews(whole, extra) : whole;
+    await runWithConcurrency(REVIEW_CONCURRENCY, [
+      wholeJob,
+      ...chunks.map((chunk, index) => sliceJob(index, chunk)),
+    ]);
+
+    const markdown = chunks.length ? mergeReviews(whole, extra.filter((e): e is string => e !== undefined)) : whole;
     if (chunks.length) {
       const before = splitFindings(whole).findings.length;
       const after = splitFindings(markdown).findings.length;

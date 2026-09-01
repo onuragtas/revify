@@ -385,6 +385,12 @@ export class ClaudeCliProvider implements LlmProvider {
     const started = Date.now();
     let lastNews = started;
     let answer: string | null = null;
+    // Kept apart from `answer` on purpose: a result event carries either a
+    // real answer or an error, never both, and folding the error into
+    // `answer` (as `typeof event.result === 'string'` alone would) means an
+    // error result that happens to exit 0 gets returned as if it were a
+    // review. Kept around instead to explain *why* there was no answer.
+    let lastErrorMessage: string | null = null;
     let toolCalls = 0;
 
     const heartbeat = onProgress
@@ -414,7 +420,16 @@ export class ClaudeCliProvider implements LlmProvider {
           }
           // The answer arrives in the final result event, not on stdout as
           // plain text — stream-json's output is events all the way down.
-          if (event?.type === 'result' && typeof event.result === 'string') answer = event.result;
+          if (event?.type === 'result') {
+            if (event.is_error) {
+              lastErrorMessage =
+                typeof event.result === 'string' && event.result
+                  ? event.result
+                  : `hata alt türü: ${event.subtype ?? 'bilinmiyor'}`;
+            } else if (typeof event.result === 'string') {
+              answer = event.result;
+            }
+          }
 
           // After a stop, the CLI's dying breath includes an error result.
           // Reporting it would blame the model for a shutdown we ordered.
@@ -430,12 +445,26 @@ export class ClaudeCliProvider implements LlmProvider {
       if (stderr.trim()) {
         console.warn('[claudeCli] stderr:', stderr.trim());
       }
+    } catch (err) {
+      // `stderr` is where a crashed process explains itself; a result event
+      // with `is_error` is where a process that exited "cleanly" explains
+      // itself instead. Without this, a nonzero exit on an empty stderr
+      // reads as "claude exited with code 1" and nothing else — true, and
+      // useless for telling a rate limit apart from a context-length error.
+      if (lastErrorMessage && err instanceof Error) {
+        throw new Error(`${err.message} — model: ${lastErrorMessage}`);
+      }
+      throw err;
     } finally {
       if (heartbeat) clearInterval(heartbeat);
     }
 
     if (answer === null) {
-      throw new Error('claude produced no result event — the review came back empty');
+      throw new Error(
+        lastErrorMessage
+          ? `claude bir hata sonucu döndürdü: ${lastErrorMessage}`
+          : 'claude produced no result event — the review came back empty',
+      );
     }
     onProgress?.(`model bitirdi · ${Math.round((Date.now() - started) / 1000)} sn, ${toolCalls} araç çağrısı`);
     return String(answer).trim();
