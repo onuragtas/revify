@@ -33,8 +33,15 @@ function* jsFiles(dir) {
 }
 
 /** `import x from 'y'`, `import('y')` and `require('y')` alike — a dynamic
- * import fails just as hard as a static one when the package is absent. */
-const SPECIFIER = /(?:from\s*|import\s*\(\s*|require\s*\(\s*)['"]([^'"]+)['"]/g;
+ * import fails just as hard as a static one when the package is absent.
+ *
+ * The captured specifier excludes whitespace on purpose: a real module path
+ * or package name never contains any, while a preserved comment quoting a
+ * sentence — "...indistinguishable from "it never considered anything
+ * else"." is one that shipped — reliably does. That difference is what
+ * keeps this matching only real imports without having to parse comments
+ * out of the source first. */
+const SPECIFIER = /(?:from\s*|import\s*\(\s*|require\s*\(\s*)['"]([^'"\s]+)['"]/g;
 
 const missing = new Map();
 for (const file of jsFiles('dist')) {
