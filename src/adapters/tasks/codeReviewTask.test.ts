@@ -233,15 +233,18 @@ describe('buildPrompt', () => {
     expect(prompt).toContain('if this branch had never been written?');
   });
 
-  it('names the commits a branch carries, and which are not this ticket\'s', () => {
+  it('names the commits a branch carries, and which were left out of the diff', () => {
     /*
-     * A branch open for months carries work that was never the ticket's.
+     * A branch open for months carries work that was never the ticket's,
+     * and the review used to report it against the developer who did not
+     * write it. Those files are now taken out of the diff upstream; the
+     * list is what makes the removal visible rather than mysterious.
      *
-     * The diff flattens all of it into one blob, so the review read a
-     * stranger's commit from nine months ago as this developer's doing and
-     * reported it against the wrong person — who then, correctly, dismissed
-     * a finding that was materially right: the hunk still lands on the base
-     * branch when this merges.
+     * Note which commit is marked. `9ec6c195` names no ticket at all and is
+     * *kept* — developers write "fix null check" on their own work all day,
+     * and now that this decides what gets deleted from the diff, guessing
+     * would silently gut the review. Only a commit that names a sibling
+     * ticket is provably somebody else's.
      */
     const prompt = buildPrompt({
       ...baseInput,
@@ -256,6 +259,7 @@ describe('buildPrompt', () => {
               author: 'onuragtas',
               date: '2025-12-12T17:41:00+03:00',
             },
+            { sha: 'b22e7f01', title: 'BUY-1799: payment retry', author: 'onuragtas', date: '2025-12-13T10:00:00+03:00' },
             { sha: 'a11d8c8d', title: 'BUY-1831', author: 'esmanur', date: '2026-01-11T23:41:04+03:00' },
           ],
         },
@@ -263,12 +267,13 @@ describe('buildPrompt', () => {
     });
 
     expect(prompt).toContain('`9ec6c195` 2025-12-12 · onuragtas · Add shopping loan cancellation');
-    // The one that does not name the ticket is called out; the one that
-    // does is left alone.
-    expect(prompt).toContain("Add shopping loan cancellation functionality  ← **bu task'a ait değil**");
-    expect(prompt).not.toContain("BUY-1831  ← **bu task'a ait değil**");
-    // Reported, but attributed — the fact is the merge, not the author.
-    expect(prompt).toContain('Attribute it, then hold it against the merge');
+    // Named a sibling ticket: excluded, and said so.
+    expect(prompt).toContain("BUY-1799: payment retry  ← **başka task — diff dışı bırakıldı**");
+    // Names no ticket, and this one names ours: both left alone.
+    expect(prompt).not.toContain("Add shopping loan cancellation functionality  ← **başka task");
+    expect(prompt).not.toContain("BUY-1831  ← **başka task");
+    // And the instruction is now the opposite of what it used to be.
+    expect(prompt).toContain('Do not report findings about them');
   });
 
   it('says nothing about strays when every commit is the ticket\'s', () => {

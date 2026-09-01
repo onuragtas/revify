@@ -8,6 +8,7 @@ import type { NotesStore } from '../../core/notesStore.js';
 import type { ReviewHistoryEntry, ReviewStore } from '../../core/reviewStore.js';
 import { splitFindings } from '../../core/findings.js';
 import { chunkChange, mergeReviews, needsDeepScan, type ReviewChunk } from '../../core/reviewChunks.js';
+import { splitCommitsByOwnership } from '../../core/changeScope.js';
 import type { PromptStore } from '../../core/promptStore.js';
 import { progressBus } from '../../core/progressBus.js';
 import { parseProjectPathFromUrl } from '../../clients/gitlabClient.js';
@@ -145,11 +146,11 @@ export interface CodeReviewPromptInput {
  * doing and reports it against the wrong person — who then, correctly,
  * dismisses the finding.
  *
- * The membership test is the issue key in the commit subject. Crude, and
- * deliberately not load-bearing: it decides what the review is *told*, never
- * what it may report. A hunk from an unrelated commit still lands on the
- * base branch when this merges, and still has to be reported — with its
- * origin named, which is the only framing that is both true and actionable.
+ * The membership test is `core/changeScope.ts`, the same one that already
+ * took those commits' files out of the diff. This list is what makes that
+ * removal visible: the reader sees which commits were set aside, and the
+ * model is told plainly that they are not its subject — rather than being
+ * left to wonder why a commit it can see produced no hunks it can read.
  */
 function commitList(
   commits: Array<{ sha: string; title: string; author: string; date: string }> | undefined,
@@ -157,9 +158,8 @@ function commitList(
 ): string {
   if (!commits?.length) return '';
 
-  const key = issueKey.toUpperCase();
-  const belongs = (c: { title: string }) => c.title.toUpperCase().includes(key);
-  const strays = commits.filter((c) => !belongs(c));
+  const { foreign } = splitCommitsByOwnership(commits, issueKey);
+  const isForeign = (c: { sha: string }) => foreign.some((f) => f.sha === c.sha);
 
   return (
     `**Bu dalın \`${issueKey}\` için taşıdığı commitler** (eskiden yeniye):\n\n` +
@@ -167,17 +167,19 @@ function commitList(
       .map(
         (c) =>
           `- \`${c.sha}\` ${c.date.slice(0, 10)} · ${c.author} · ${c.title}` +
-          (belongs(c) ? '' : '  ← **bu task\'a ait değil**'),
+          (isForeign(c) ? '  ← **başka task — diff dışı bırakıldı**' : ''),
       )
       .join('\n') +
     '\n\n' +
-    (strays.length
-      ? 'Some of these do not name this ticket. They are still part of what merges, so a\n' +
-        'defect in one is still worth reporting — but say where it came from. "This branch\n' +
-        'deletes X" reads as an accusation to a developer who did not write it, and gets\n' +
-        'dismissed; "commit `abc1234` (2025-12-12, another ticket) deletes X, and merging\n' +
-        'this branch takes it to the base branch, where X is still in use" is the same fact\n' +
-        'and cannot be argued with. Attribute it, then hold it against the merge.\n\n'
+    (foreign.length
+      ? 'The marked commits name a different ticket, so **the files only they touched have\n' +
+        'already been removed from the diff above.** They are listed only so you know why\n' +
+        'the diff does not account for every commit on the branch.\n\n' +
+        '**Do not report findings about them.** They are not this developer\'s work and not\n' +
+        'this review\'s subject; a finding about one gets dismissed by the person who reads\n' +
+        'it, and buries the findings that are about the work under review. If one of them\n' +
+        'touched a file this ticket also changed, that file is still shown whole — judge the\n' +
+        'hunks this ticket is responsible for, and leave the rest alone.\n\n'
       : '')
   );
 }

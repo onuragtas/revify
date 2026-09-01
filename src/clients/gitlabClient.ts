@@ -115,4 +115,24 @@ export class GitlabClient {
     }));
     return { baseBranch, branchName, diff, files, commits };
   }
+
+  /**
+   * The paths one commit touched.
+   *
+   * Both sides of a rename are returned: a file that a foreign commit moved
+   * is the same file under either name, and keeping only the new path would
+   * leave the old one looking untouched by anybody.
+   */
+  async commitFiles(projectPath: string, sha: string): Promise<string[]> {
+    const projectId = encodeURIComponent(projectPath);
+    const diffs = await this.request<Array<{ new_path?: string; old_path?: string }>>(
+      `/projects/${projectId}/repository/commits/${encodeURIComponent(sha)}/diff`,
+    );
+    const paths = new Set<string>();
+    for (const d of diffs) {
+      if (d.new_path) paths.add(d.new_path);
+      if (d.old_path) paths.add(d.old_path);
+    }
+    return [...paths];
+  }
 }

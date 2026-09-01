@@ -2,6 +2,12 @@ import type { ContextCollector, TriggerEvent } from '../../core/types.js';
 import { GitlabClient, parseProjectPathFromUrl } from '../../clients/gitlabClient.js';
 import type { RepoCache } from '../../clients/repoCache.js';
 import { progressBus } from '../../core/progressBus.js';
+import {
+  dropForeignOnlyFiles,
+  joinFileDiffs,
+  splitCommitsByOwnership,
+  type ScopeCommit,
+} from '../../core/changeScope.js';
 import { mountContextRepos, type ContextRepo } from './contextRepos.js';
 
 /** One repository the change touches: its diff against that repo's own
@@ -103,14 +109,18 @@ export class GitlabBranchDiffContext implements ContextCollector {
           }
         }
 
+        // Everything another ticket put on this branch comes off before the
+        // review ever sees it — see core/changeScope.ts.
+        const scoped = await this.scopeToIssue(event, projectPath, compared);
+
         changedProjects.add(projectPath);
         repoChanges.push({
           projectPath,
           branchName: branch.name,
           baseBranch: compared.baseBranch,
-          diff: compared.diff,
+          diff: scoped.diff,
           commits: compared.commits,
-          files: compared.files,
+          files: scoped.files,
           repoPath,
         });
       } catch (err) {
@@ -148,4 +158,55 @@ export class GitlabBranchDiffContext implements ContextCollector {
    * change touches (already checked out at their branch by the caller).
    */
 
+  /**
+   * Takes another ticket's files out of the diff.
+   *
+   * Costs one API call per commit, and only when the branch actually
+   * carries a commit naming a sibling ticket — the common branch, whose
+   * commits are all its own, pays nothing.
+   *
+   * Failure here is not fatal: a diff that could not be narrowed is the
+   * diff we have always sent, so an unreachable endpoint costs precision
+   * rather than the review.
+   */
+  private async scopeToIssue(
+    event: TriggerEvent,
+    projectPath: string,
+    compared: { diff: string; files: Array<{ path: string; diff: string }>; commits: ScopeCommit[] },
+  ): Promise<{ diff: string; files: Array<{ path: string; diff: string }> }> {
+    const issueKey = (event.data.issueKey as string | undefined) ?? event.id;
+    const { own, foreign } = splitCommitsByOwnership(compared.commits, issueKey);
+    if (!foreign.length) return { diff: compared.diff, files: compared.files };
+
+    try {
+      const pathsOf = async (commits: ScopeCommit[]) => {
+        const set = new Set<string>();
+        for (const commit of commits) {
+          for (const path of await this.gitlabClient.commitFiles(projectPath, commit.sha)) {
+            set.add(path);
+          }
+        }
+        return set;
+      };
+
+      const { files, dropped } = dropForeignOnlyFiles(
+        compared.files,
+        await pathsOf(own),
+        await pathsOf(foreign),
+      );
+      if (!dropped.length) return { diff: compared.diff, files: compared.files };
+
+      const diff = joinFileDiffs(files);
+      progressBus.log(
+        event.id,
+        `${projectPath}: ${dropped.length} dosya başka task'ın commitine ait, diff dışı ` +
+          `(${foreign.length} yabancı commit) — diff ${compared.diff.length} → ${diff.length} karakter`,
+      );
+      return { diff, files };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      progressBus.log(event.id, `${projectPath}: commit dosyaları alınamadı (${message}), diff daraltılmadı`);
+      return { diff: compared.diff, files: compared.files };
+    }
+  }
 }
