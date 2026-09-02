@@ -1263,8 +1263,15 @@ export function createServer(initialConfig: AppConfig, initialWired: Wired, opti
   app.get('/api/backend/users', backendRoute(async (req) =>
     ({ items: await backend.searchUsers(String(req.query.q ?? '')) })));
 
-  app.post('/api/backend/teams/:teamId/members', backendRoute(async (req) =>
-    ({ member: await backend.addMember(req.params.teamId, String(req.body?.userId ?? '')) })));
+  /* Checked here rather than passed on: an empty `userId` is a caller that
+   * sent the wrong field, and forwarding it spends a round trip to come back
+   * with the backend's own "Kullanıcı seçilmedi." — a message that describes
+   * the symptom and hides which field was missing. */
+  app.post('/api/backend/teams/:teamId/members', backendRoute(async (req) => {
+    const userId = String(req.body?.userId ?? '').trim();
+    if (!userId) throw new BackendError('Üye eklemek için `userId` gerekiyor.', 400);
+    return { member: await backend.addMember(req.params.teamId, userId) };
+  }));
 
   app.get('/api/backend/assignments', backendRoute(async () => ({ items: await backend.myAssignments() })));
 

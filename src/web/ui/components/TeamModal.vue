@@ -130,7 +130,11 @@ async function addMember(user: Member): Promise<void> {
       await fetch(`/api/backend/teams/${encodeURIComponent(team.value.id)}/members`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: user.email }),
+        // `userId`, not the email it used to send: that is what the route
+        // reads and what the backend identifies a person by. The email went
+        // through as an empty `userId` and came back "Kullanıcı seçilmedi.",
+        // so adding a member never worked at all.
+        body: JSON.stringify({ userId: user.id }),
       })
     ).json();
   } catch (err) {

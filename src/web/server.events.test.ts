@@ -831,6 +831,37 @@ describe('an objection that asked something', () => {
   });
 });
 
+describe('adding a team member', () => {
+  /*
+   * The page sent `{ email }` while the route read `userId`, so every add
+   * went out with an empty id and came back "Kullanıcı seçilmedi." — the
+   * backend's own words for a field this side never filled in. Nobody could
+   * add a member at all, and the message named neither the field nor the
+   * side that was wrong.
+   *
+   * Answered here rather than forwarded: a round trip to be told the caller
+   * sent the wrong field is a round trip that proves nothing.
+   */
+  it('refuses a body with no userId, and says which field is missing', async () => {
+    const app = boot(makeConfig(), makeWired(), isolated());
+    const res = await request(app.listener)
+      .post('/api/backend/teams/team-1/members')
+      .send({ email: 'esma.coskun@pttem.com' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('userId');
+  });
+
+  it('refuses a userId that is only whitespace', async () => {
+    const app = boot(makeConfig(), makeWired(), isolated());
+    const res = await request(app.listener)
+      .post('/api/backend/teams/team-1/members')
+      .send({ userId: '   ' });
+
+    expect(res.status).toBe(400);
+  });
+});
+
 describe('content security policy', () => {
   it('forbids everything by default, and allows only this origin', async () => {
     const app = boot(makeConfig(), makeWired(), isolated());
