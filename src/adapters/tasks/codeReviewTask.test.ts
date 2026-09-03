@@ -94,6 +94,53 @@ describe('buildPrompt', () => {
     expect(slice).toContain('## Answers from the team');
   });
 
+  /*
+   * The pass should never have to find its own checkout.
+   *
+   * A two-repo change checks both out, but only the first is the working
+   * directory; the second used to be mounted and never named. The model
+   * went looking — globbing the home directory, listing the repo cache,
+   * reading `.git/config` files to work out where it was — once per pass,
+   * for a path this prompt was already holding.
+   */
+  it('names the on-disk path of every repository under review', () => {
+    const prompt = buildPrompt({
+      ...baseInput,
+      hasRepoAccess: true,
+      repoChanges: [
+        { ...baseInput.repoChanges[0], repoPath: '/cache/team__app' },
+        {
+          ...baseInput.repoChanges[0],
+          projectPath: 'team/other',
+          repoPath: '/cache/team__other',
+        },
+      ],
+    });
+
+    expect(prompt).toContain('Checked out at `/cache/team__app`');
+    expect(prompt).toContain('Checked out at `/cache/team__other`');
+    // "the repository is in your working directory" is true of one repo and
+    // a wrong turn for the second, so a multi-repo change is not told that.
+    expect(prompt).not.toContain('The full repository is checked out at this branch in your working directory');
+    expect(prompt).toContain('each one named');
+  });
+
+  it('still calls it the working directory when only one repo is checked out', () => {
+    const prompt = buildPrompt({
+      ...baseInput,
+      hasRepoAccess: true,
+      repoChanges: [{ ...baseInput.repoChanges[0], repoPath: '/cache/team__app' }],
+    });
+
+    expect(prompt).toContain('in your working directory');
+    expect(prompt).toContain('Checked out at `/cache/team__app`');
+  });
+
+  it('says nothing about paths when there is no checkout to name', () => {
+    const prompt = buildPrompt(baseInput);
+    expect(prompt).not.toContain('Checked out at');
+  });
+
   it('interpolates issue and branch-diff fields into the template', () => {
     const prompt = buildPrompt(baseInput);
 

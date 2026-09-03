@@ -197,12 +197,28 @@ export function buildPrompt(input: CodeReviewPromptInput): string {
       : `\nWrite your entire response in ${language}, including the final recommendation. ` +
         'Keep code identifiers, file paths, and quoted diff snippets exactly as they appear above.';
 
+  /*
+   * "Your working directory" is only true when the change touches one repo.
+   *
+   * A task spanning two services checks both out, but only the first is the
+   * process's working directory — the second is mounted and, until the
+   * heading below started naming its path, never located. The model went
+   * looking for it: globbing the home directory, listing the cache root,
+   * reading `.git/config` files to work out which checkout it had landed
+   * in. Once per pass, for a fact this prompt already had.
+   */
+  const checkedOut = (input.repoChanges ?? []).filter((c) => c.repoPath);
   const repoInstruction = input.hasRepoAccess
-    ? '\nThe full repository is checked out at this branch in your working directory, and you have\n' +
-      'read-only tools (Read, Glob, Grep). Open the files the diff touches and read the surrounding\n' +
-      'code before judging a hunk — check how the changed symbols are declared and used elsewhere,\n' +
-      'and search for other call sites. Verify your findings against the real code rather than\n' +
-      'assuming from the diff; do not report a finding as uncertain when you can simply go check it.\n'
+    ? '\n' +
+      (checkedOut.length > 1
+        ? 'Every repository this change touches is checked out at its own branch, each one named\n' +
+          'above with the path it lives at — open them there rather than searching for them.\n'
+        : 'The full repository is checked out at this branch in your working directory.\n') +
+      'You have read-only tools (Read, Glob, Grep). Open the files the diff touches and read the\n' +
+      'surrounding code before judging a hunk — check how the changed symbols are declared and used\n' +
+      'elsewhere, and search for other call sites. Verify your findings against the real code rather\n' +
+      'than assuming from the diff; do not report a finding as uncertain when you can simply go\n' +
+      'check it.\n'
     : '';
 
   // The change itself. A task can span services, so each repo gets its own
@@ -218,6 +234,8 @@ export function buildPrompt(input: CodeReviewPromptInput): string {
         .map(
           (c) =>
             `### ${c.projectPath} — \`${c.branchName}\` vs \`${c.baseBranch}\`\n\n` +
+            // The one line that stops a pass hunting for its own checkout.
+            (c.repoPath ? `Checked out at \`${c.repoPath}\` — read this repository there.\n\n` : '') +
             commitList(c.commits, input.issueKey) +
             '```diff\n' +
             (c.diff || '(empty diff)') +
