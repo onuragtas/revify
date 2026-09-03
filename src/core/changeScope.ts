@@ -20,6 +20,8 @@
  * ambiguous stays in.
  */
 
+import { splitFindings, type Finding } from './findings.js';
+
 export interface ScopeCommit {
   sha: string;
   title: string;
@@ -102,4 +104,100 @@ export function dropForeignOnlyFiles(
  * system already parses. */
 export function joinFileDiffs(files: Array<{ path: string; diff: string }>): string {
   return files.map((f) => `--- ${f.path} ---\n${f.diff}`).join('\n\n');
+}
+
+/*
+ * The same narrowing, one level up: the findings themselves.
+ *
+ * Filtering the diff stops a review being *given* another ticket's code. It
+ * does not stop a review reporting the code it read on the way — and with a
+ * deep scan that is the larger problem, because the per-pass limits are
+ * per-pass. "Minor findings: three at most" is three per slice, so eleven
+ * slices carry a budget of thirty-three, and blocking and major have no
+ * limit at all by design. Measured across real reviews: a single pass
+ * returns four or five findings, an eleven-slice run returned fifty-seven.
+ *
+ * The rule the prompt already states is that a finding must be caused by
+ * the change — either it is on a line the diff wrote, or the diff broke
+ * something elsewhere. This enforces that instead of asking for it: a
+ * finding that points at a file outside the diff has to name something
+ * inside the diff somewhere in its body, which is exactly what the prompt
+ * requires it to open with. One that names nothing is a finding about code
+ * the branch never touched.
+ *
+ * Requirement and flow findings are protected, and deliberately: the prompt
+ * tells the reviewer to put a flow — not a file — where `file:line` goes
+ * when the defect is "the issue is not implemented". Those name no file at
+ * all, they are the most valuable findings a review produces, and a filter
+ * that reads "no file cited" as "out of scope" would delete exactly them.
+ */
+
+/** A path-ish token: `src/a.php`, `Payment.java`, `config/app.yaml:12`. */
+const NAMES_A_FILE = /[A-Za-z0-9_@./+-]*[A-Za-z0-9_]\.[A-Za-z0-9]{1,10}\b/;
+
+/**
+ * Every way the change can be referred to: the full path as the diff lists
+ * it, and the bare file name, which is how a finding usually cites it.
+ */
+function changedNames(changedPaths: string[]): Set<string> {
+  const names = new Set<string>();
+  for (const path of changedPaths) {
+    const lower = path.toLowerCase().trim();
+    if (!lower) continue;
+    names.add(lower);
+    const base = lower.split('/').pop();
+    if (base) names.add(base);
+  }
+  return names;
+}
+
+export interface ScopedReview {
+  markdown: string;
+  dropped: Finding[];
+}
+
+/**
+ * Removes findings that point outside the change and never say what in the
+ * change causes them.
+ *
+ * The verdict is left exactly as written. Dropping a finding the verdict
+ * rests on and then rewriting that verdict to `Approve` would be this tool
+ * silently approving a change on the strength of a heuristic — the one
+ * mistake here that costs more than the noise it is cleaning up. Instead
+ * every removal is disclosed under the verdict as a `[note]` line, so a
+ * filter that took something it should not have is visible in the review
+ * itself rather than only in a log nobody reads.
+ */
+export function dropOutOfScopeFindings(markdown: string, changedPaths: string[]): ScopedReview {
+  const names = changedNames(changedPaths);
+  if (!names.size) return { markdown, dropped: [] };
+
+  const { preamble, findings, tail } = splitFindings(markdown);
+  const mentionsChange = (text: string) => {
+    const lower = text.toLowerCase();
+    for (const name of names) if (lower.includes(name)) return true;
+    return false;
+  };
+
+  const kept: Finding[] = [];
+  const dropped: Finding[] = [];
+  for (const finding of findings) {
+    // No file in the heading: a flow or requirement finding. Never dropped.
+    const inScope =
+      !NAMES_A_FILE.test(finding.location) ||
+      mentionsChange(finding.location) ||
+      mentionsChange(finding.body);
+    (inScope ? kept : dropped).push(finding);
+  }
+  if (!dropped.length) return { markdown, dropped: [] };
+
+  const body = kept.map((f) => `### ${f.heading}\n\n${f.body.trim()}`).join('\n\n');
+  const disclosure = dropped
+    .map((f) => `[note] kapsam dışı olduğu için çıkarıldı: ${f.heading} — değişen hiçbir dosyayı göstermiyor`)
+    .join('\n');
+
+  return {
+    markdown: [preamble, body, tail, disclosure].filter((part) => part.trim()).join('\n\n'),
+    dropped,
+  };
 }

@@ -8,7 +8,12 @@ import type { NotesStore } from '../../core/notesStore.js';
 import type { ReviewHistoryEntry, ReviewStore } from '../../core/reviewStore.js';
 import { splitFindings } from '../../core/findings.js';
 import { chunkChange, mergeReviews, needsDeepScan, type ReviewChunk } from '../../core/reviewChunks.js';
-import { splitCommitsByOwnership } from '../../core/changeScope.js';
+import { dropOutOfScopeFindings, splitCommitsByOwnership } from '../../core/changeScope.js';
+import {
+  applyConsolidation,
+  buildConsolidationPrompt,
+  parseConsolidation,
+} from '../../core/consolidate.js';
 import type { PromptStore } from '../../core/promptStore.js';
 import { progressBus } from '../../core/progressBus.js';
 import { parseProjectPathFromUrl } from '../../clients/gitlabClient.js';
@@ -18,6 +23,11 @@ import {
   toRequirement,
   type Requirement,
 } from '../../core/requirement.js';
+
+/** Below this there is no repetition worth a model call to remove: a review
+ * this short came from one or two passes, which is where the duplication
+ * comes from in the first place. */
+const CONSOLIDATE_MIN_FINDINGS = 8;
 
 const here = dirname(fileURLToPath(import.meta.url));
 const TEMPLATE = readFileSync(join(here, 'prompts/codeReview.md'), 'utf-8');
@@ -353,7 +363,7 @@ export function buildPrompt(input: CodeReviewPromptInput): string {
       '  change. That is someone else\'s ticket, not a defect.\n' +
       '- Never report a finding about code that belongs to one of them. A sibling\n' +
       '  ticket\'s work can sit in the same repository, and reading it here to understand\n' +
-      '  the whole does not put it under review — see "What is under review" below.\n\n' +
+      '  the whole does not put it under review — see the "What is under review" section.\n\n' +
       `Only the description, comments and acceptance criteria of ${input.issueKey} itself\n` +
       'bind, and only the change under review is being judged.\n\n' +
       related
@@ -559,6 +569,16 @@ export function buildPrompt(input: CodeReviewPromptInput): string {
    * written — a slice without them re-asks a question the team already
    * answered or reports what a note rules out, and the merge has no way to
    * tell that the finding should never have existed.
+   *
+   * **Every section named here must sit at the end of the template, behind
+   * everything the passes share.** Dropping a section is also a difference
+   * between the prompts, and a cached prefix ends at the first difference —
+   * so one of these near the top costs far more than it saves. It shipped
+   * that way once: `Related issues` sat on line 4, the whole pass had it and
+   * the slices did not, and the prefix the passes shared ended 884
+   * characters in — 1% of the prompt, with the other 30k of instructions
+   * they have in common billed fresh on every pass. Both halves were
+   * individually right and together worse than neither.
    */
   const wholePassOnly = (section: string) => (input.slice ? '' : section);
 
@@ -883,12 +903,33 @@ export class CodeReviewTask implements AiTask {
       ...chunks.map((chunk, index) => sliceJob(index, chunk)),
     ]);
 
-    const markdown = chunks.length ? mergeReviews(whole, extra.filter((e): e is string => e !== undefined)) : whole;
+    const merged = chunks.length ? mergeReviews(whole, extra.filter((e): e is string => e !== undefined)) : whole;
     if (chunks.length) {
       const before = splitFindings(whole).findings.length;
-      const after = splitFindings(markdown).findings.length;
+      const after = splitFindings(merged).findings.length;
       progressBus.log(event.id, `derin tarama: ${before} bulgu → ${after} (${chunks.length} parça)`);
     }
+
+    /*
+     * Last gate: a finding has to be about this change.
+     *
+     * Applied to the merged review rather than to each pass, because the
+     * limits that were supposed to hold volume down are per-pass and a deep
+     * scan has as many passes as the diff has slices. This is the only place
+     * that sees the whole set.
+     */
+    const scoped = dropOutOfScopeFindings(
+      merged,
+      repoChanges.flatMap((c) => c.files.map((f) => f.path)),
+    );
+    if (scoped.dropped.length) {
+      progressBus.log(
+        event.id,
+        `kapsam dışı ${scoped.dropped.length} bulgu çıkarıldı (değişen dosyalarla bağı kurulmamış) — ` +
+          'verdict altında `[note]` olarak listelendi',
+      );
+    }
+    const markdown = await this.consolidate(event, scoped.markdown, { key: issueKey, summary }, signal);
 
     return {
       title: `Code review: ${issueKey} — ${summary}`,
@@ -904,5 +945,64 @@ export class CodeReviewTask implements AiTask {
         ) satisfies Requirement,
       },
     };
+  }
+
+  /**
+   * One reader over the finished list — see core/consolidate.ts for why the
+   * passes cannot do this themselves.
+   *
+   * Skipped below `CONSOLIDATE_MIN_FINDINGS`, because a review with a
+   * handful of findings has no repetition to remove and would be paying a
+   * model call to be told so.
+   *
+   * No workdir, so the call gets no tools: everything it needs is the
+   * findings themselves, and a consolidation that went back to the code
+   * would be a third opinion nobody asked for. Failure is swallowed — the
+   * un-consolidated review is exactly what shipped before this existed, so
+   * there is nothing here worth failing a finished review over.
+   */
+  private async consolidate(
+    event: TriggerEvent,
+    markdown: string,
+    issue: { key: string; summary: string },
+    signal?: AbortSignal,
+  ): Promise<string> {
+    const { preamble, findings, tail } = splitFindings(markdown);
+    if (findings.length < CONSOLIDATE_MIN_FINDINGS) return markdown;
+
+    try {
+      progressBus.log(event.id, `konsolidasyon: ${findings.length} bulgu okunuyor...`);
+      const answer = await this.llm.generate({
+        system:
+          'You are consolidating the findings of a code review that was produced in several ' +
+          'independent passes. You decide only what to remove, and you never rewrite a finding.',
+        prompt: buildConsolidationPrompt(findings, issue),
+        signal,
+      });
+
+      const drops = parseConsolidation(answer, findings.length);
+      const { kept, dropped } = applyConsolidation(findings, drops);
+      if (!dropped.length) {
+        progressBus.log(
+          event.id,
+          drops.length
+            ? `konsolidasyon: ${drops.length}/${findings.length} bulgu çıkarılmak istendi — fazla, yok sayıldı`
+            : 'konsolidasyon: çıkarılacak tekrar bulunamadı',
+        );
+        return markdown;
+      }
+
+      progressBus.log(event.id, `konsolidasyon: ${findings.length} bulgu → ${kept.length}`);
+      const body = kept.map((f) => `### ${f.heading}\n\n${f.body.trim()}`).join('\n\n');
+      const disclosure = dropped
+        .map(({ finding, reason }) => `[note] tekrar olduğu için çıkarıldı: ${finding.heading} — ${reason}`)
+        .join('\n');
+      return [preamble, body, tail, disclosure].filter((part) => part.trim()).join('\n\n');
+    } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') throw err;
+      const message = err instanceof Error ? err.message : String(err);
+      progressBus.log(event.id, `konsolidasyon atlandı: ${message}`);
+      return markdown;
+    }
   }
 }

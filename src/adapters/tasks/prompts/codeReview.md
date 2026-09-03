@@ -1,7 +1,7 @@
 ## Jira Issue: {{issueKey}} — {{summary}}
 
 {{description}}
-{{relatedSection}}{{commentsSection}}
+{{commentsSection}}
 ## What is under review
 
 **The diff at the end of this prompt, and nothing else.**
@@ -100,7 +100,7 @@ empty dimension needs no mention:
 Explicitly out of scope: formatting, naming preferences, import order, and
 other style opinions. Do not report them.
 
-{{attachmentsSection}}{{contextReposSection}}{{previousSection}}{{clarificationsSection}}{{challengesSection}}{{revisionSection}}{{notesSection}}
+{{attachmentsSection}}{{contextReposSection}}{{clarificationsSection}}{{revisionSection}}{{notesSection}}
 {{notesReminder}}
 ## Links and fetched pages
 
@@ -334,4 +334,4 @@ scheduled job — each one implies something on this list.
 
 If the change is genuinely a plain deploy with nothing around it, write one
 line saying so. That is a useful answer; an invented checklist is not.
-{{codeChangeSection}}{{repoInstruction}}{{notesDisclosure}}{{languageInstruction}}
+{{relatedSection}}{{previousSection}}{{challengesSection}}{{codeChangeSection}}{{repoInstruction}}{{notesDisclosure}}{{languageInstruction}}

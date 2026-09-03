@@ -48,22 +48,46 @@ describe('buildPrompt', () => {
    * middle, as it was, everything after it was billed fresh on every pass.
    */
   it('puts the diff last, so everything a slice shares with the whole pass is a stable prefix', () => {
-    const whole = buildPrompt(baseInput);
-    const slice = buildPrompt({
+    /*
+     * Measured on a review that carries everything, because the first
+     * version of this test used the bare fixture and passed while
+     * production ran at a 1% prefix.
+     *
+     * What a bare fixture cannot show: the sections a slice does *not*
+     * get. With `Related issues` on line 4 of the template, the whole pass
+     * had it and the slices did not, so the prefix they shared ended 884
+     * characters in and the 30k of instructions behind it was billed fresh
+     * on every pass. A fixture with no related issues and no previous
+     * review drops nothing, so nothing diverges, so the test sees a
+     * perfect prefix that production never had.
+     */
+    const loaded = {
       ...baseInput,
+      hasRepoAccess: true,
+      notes: ['Bu repoda `var` kullanımı bilinçlidir.'],
+      clarifications: [{ question: 'Hangi uç nokta?', answer: '`/v2/login`.' }],
+      relatedIssues: [{ key: 'PROJ-100', summary: 'Epic', description: 'Programme', relation: 'parent' }],
+      previous: { findings: [{ severity: 'major', heading: 'major — a.ts:1', body: 'eski bulgu' }] },
+      challenges: [{ finding: 'major — a.ts:1', objection: 'bu doğru değil' }],
+    } as unknown as Parameters<typeof buildPrompt>[0];
+
+    const whole = buildPrompt(loaded);
+    const slice = buildPrompt({
+      ...loaded,
       repoChanges: [{ ...baseInput.repoChanges[0], diff: '--- src/other.ts ---\n+ sliced' }],
       slice: { label: 'team/app · 1', of: 2 },
     });
 
-    // The diff really is at the end: nothing but the trailing instructions
-    // follows it.
+    // Nothing but the trailing instructions follows the diff.
     expect(whole.indexOf('## Code change')).toBeGreaterThan(whole.indexOf('## How to report each finding'));
     expect(whole.indexOf('## Code change')).toBeGreaterThan(whole.indexOf('## Before it goes to production'));
 
-    // And the shared head really is identical, which is the whole point.
-    const shared = whole.slice(0, whole.indexOf('## Code change'));
-    expect(slice.startsWith(shared)).toBe(true);
-    expect(shared.length).toBeGreaterThan(1000);
+    // The assertion that matters: how much the two passes actually share.
+    // Every whole-pass-only section has to sit behind this point.
+    let shared = 0;
+    while (shared < whole.length && whole[shared] === slice[shared]) shared++;
+    expect(shared).toBeGreaterThan(whole.indexOf('## How to report each finding'));
+    expect(shared).toBeGreaterThan(0.6 * whole.length);
   });
 
   it('leaves whole-change sections out of a slice, but never the ones that stop a finding', () => {

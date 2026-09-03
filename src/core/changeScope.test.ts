@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  dropOutOfScopeFindings,
   dropForeignOnlyFiles,
   isForeignCommit,
   issueKeysIn,
@@ -123,5 +124,78 @@ describe('joinFileDiffs', () => {
     expect(joinFileDiffs([{ path: 'a.ts', diff: '+1' }, { path: 'b.ts', diff: '+2' }])).toBe(
       '--- a.ts ---\n+1\n\n--- b.ts ---\n+2',
     );
+  });
+});
+
+describe('dropOutOfScopeFindings', () => {
+  const changed = ['src/Services/HttpClientService.php', 'src/Controller/SerialBarcodeController.php'];
+  const review = (...findings: string[]) =>
+    ['Değişiklik seri barkod akışını güncelliyor.', ...findings, 'Verdict: Request changes — bir şey'].join('\n\n');
+
+  it('keeps a finding on a file the change touched', () => {
+    const { markdown, dropped } = dropOutOfScopeFindings(
+      review('### blocking — src/Services/HttpClientService.php:42\n\nYanlış karşılaştırma.'),
+      changed,
+    );
+    expect(dropped).toHaveLength(0);
+    expect(markdown).toContain('HttpClientService.php:42');
+  });
+
+  /*
+   * The case the whole filter exists to allow: the defect is somewhere the
+   * branch never edited, and the branch is what broke it. The prompt asks
+   * such a finding to open by naming the line in the diff that puts it in
+   * scope, so that citation is what proves the connection.
+   */
+  it('keeps a finding elsewhere when it names what in the change causes it', () => {
+    const { dropped } = dropOutOfScopeFindings(
+      review(
+        '### blocking — src/Legacy/OrderJob.php:88\n\n' +
+          'Bu dal `SerialBarcodeController.php` içindeki uç noktayı siliyor, bu iş onu hâlâ çağırıyor.',
+      ),
+      changed,
+    );
+    expect(dropped).toHaveLength(0);
+  });
+
+  it('drops a finding elsewhere that never connects itself to the change', () => {
+    const { markdown, dropped } = dropOutOfScopeFindings(
+      review('### major — src/Legacy/OrderJob.php:88\n\nBu döngü N+1 sorgu yapıyor.'),
+      changed,
+    );
+    expect(dropped).toHaveLength(1);
+    expect(markdown).not.toContain('N+1 sorgu');
+    // Never silently: what was removed is disclosed in the review itself.
+    expect(markdown).toContain('[note] kapsam dışı olduğu için çıkarıldı');
+    expect(markdown).toContain('OrderJob.php:88');
+  });
+
+  /*
+   * The most valuable finding a review produces — "the issue is not
+   * implemented" — cites a flow, not a file, because the prompt tells it to.
+   * A filter that read "no file cited" as "out of scope" would delete
+   * exactly those.
+   */
+  it('never drops a requirement or flow finding, which cites no file at all', () => {
+    const { dropped } = dropOutOfScopeFindings(
+      review('### blocking — PDF indirme akışı\n\nIssue PDF indirmeyi istiyor, hiçbir yerde uygulanmamış.'),
+      changed,
+    );
+    expect(dropped).toHaveLength(0);
+  });
+
+  it('leaves the verdict alone even when it drops the finding behind it', () => {
+    const { markdown } = dropOutOfScopeFindings(
+      review('### blocking — src/Legacy/OrderJob.php:88\n\nİlgisiz bir hata.'),
+      changed,
+    );
+    // Rewriting this to Approve would be the tool approving a change on a
+    // heuristic. The note says what happened; a human decides.
+    expect(markdown).toContain('Verdict: Request changes');
+  });
+
+  it('does nothing when the change has no file list to check against', () => {
+    const text = review('### major — whatever.php:1\n\nBir şey.');
+    expect(dropOutOfScopeFindings(text, [])).toEqual({ markdown: text, dropped: [] });
   });
 });
