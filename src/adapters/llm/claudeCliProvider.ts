@@ -294,6 +294,34 @@ export function describeCliEvent(event: any, workdir?: string): string | null {
 }
 
 /**
+ * What one call actually cost, from the CLI's own accounting.
+ *
+ * Nothing used to record this, so "the reviews are burning the limit" could
+ * only be argued from wall-clock time and a tool-call count — neither of
+ * which is a token. The result event carries the real figures; this turns
+ * them into one line per call, which is what makes an optimisation
+ * measurable instead of plausible.
+ *
+ * Cache reads are broken out on purpose: they are the number that says
+ * whether the shared prefix across a deep scan's passes is being reused or
+ * paid for again, and they are billed at a fraction of a fresh token.
+ */
+export function describeUsage(event: any): string | null {
+  const usage = event?.usage;
+  if (!usage) return null;
+
+  const k = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
+  const parts = [
+    `girdi ${k(usage.input_tokens ?? 0)}`,
+    `çıktı ${k(usage.output_tokens ?? 0)}`,
+  ];
+  if (usage.cache_read_input_tokens) parts.push(`önbellek okuma ${k(usage.cache_read_input_tokens)}`);
+  if (usage.cache_creation_input_tokens) parts.push(`önbellek yazma ${k(usage.cache_creation_input_tokens)}`);
+  const cost = typeof event.total_cost_usd === 'number' ? ` · $${event.total_cost_usd.toFixed(3)}` : '';
+  return `kullanım: ${parts.join(' · ')}${cost}`;
+}
+
+/**
  * Shells out to the `claude` CLI in print mode (`-p`) instead of calling
  * the Anthropic API directly. Uses whatever the `claude` CLI itself is
  * logged in with — a Claude Code subscription's included usage — rather
@@ -421,6 +449,10 @@ export class ClaudeCliProvider implements LlmProvider {
           // The answer arrives in the final result event, not on stdout as
           // plain text — stream-json's output is events all the way down.
           if (event?.type === 'result') {
+            // Reported even when the call failed: a run that burned the
+            // limit and then errored is exactly the one worth costing.
+            const usage = describeUsage(event);
+            if (usage) onProgress?.(usage);
             if (event.is_error) {
               lastErrorMessage =
                 typeof event.result === 'string' && event.result

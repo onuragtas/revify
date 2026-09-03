@@ -37,6 +37,63 @@ describe('buildPrompt', () => {
     ],
   };
 
+  /*
+   * Everything that does not change between a deep scan's passes is emitted
+   * before the one thing that does.
+   *
+   * The passes are separate CLI invocations, so the only way the ~30k
+   * characters of instructions, issue text, comments and notes they share
+   * are not paid for five times over is if they form a byte-identical
+   * prefix — and a prefix ends at the first difference. With the diff in the
+   * middle, as it was, everything after it was billed fresh on every pass.
+   */
+  it('puts the diff last, so everything a slice shares with the whole pass is a stable prefix', () => {
+    const whole = buildPrompt(baseInput);
+    const slice = buildPrompt({
+      ...baseInput,
+      repoChanges: [{ ...baseInput.repoChanges[0], diff: '--- src/other.ts ---\n+ sliced' }],
+      slice: { label: 'team/app · 1', of: 2 },
+    });
+
+    // The diff really is at the end: nothing but the trailing instructions
+    // follows it.
+    expect(whole.indexOf('## Code change')).toBeGreaterThan(whole.indexOf('## How to report each finding'));
+    expect(whole.indexOf('## Code change')).toBeGreaterThan(whole.indexOf('## Before it goes to production'));
+
+    // And the shared head really is identical, which is the whole point.
+    const shared = whole.slice(0, whole.indexOf('## Code change'));
+    expect(slice.startsWith(shared)).toBe(true);
+    expect(shared.length).toBeGreaterThan(1000);
+  });
+
+  it('leaves whole-change sections out of a slice, but never the ones that stop a finding', () => {
+    const input = {
+      ...baseInput,
+      notes: ['Bu repoda `var` kullanımı bilinçlidir.'],
+      clarifications: [{ question: 'Hangi uç nokta?', answer: '`/v2/login`.' }],
+      relatedIssues: [{ key: 'PROJ-100', summary: 'Epic', description: 'Programme of work', relation: 'parent' }],
+      previous: { findings: [{ severity: 'major', heading: 'major — a.ts:1', body: 'eski bulgu' }] },
+      challenges: [{ finding: 'major — a.ts:1', objection: 'bu doğru değil' }],
+    } as unknown as Parameters<typeof buildPrompt>[0];
+
+    const slice = buildPrompt({ ...input, slice: { label: 'team/app · 1', of: 2 } });
+    const whole = buildPrompt(input);
+
+    // Dropped: a slice cannot settle any of these, and the merge discards
+    // whatever it says about them.
+    expect(whole).toContain('## Related issues');
+    expect(slice).not.toContain('## Related issues');
+    expect(whole).toContain('## Your previous review');
+    expect(slice).not.toContain('## Your previous review');
+    expect(whole).toContain('## Disputed findings');
+    expect(slice).not.toContain('## Disputed findings');
+
+    // Kept: both exist to stop a finding being written, and a finding a
+    // slice should never have written cannot be un-written by the merge.
+    expect(slice).toContain('## Project notes');
+    expect(slice).toContain('## Answers from the team');
+  });
+
   it('interpolates issue and branch-diff fields into the template', () => {
     const prompt = buildPrompt(baseInput);
 
@@ -221,7 +278,10 @@ describe('buildPrompt', () => {
     const prompt = buildPrompt(baseInput);
 
     expect(prompt).toContain('What is under review');
-    expect(prompt).toContain('The diff above, and nothing else');
+    // "at the end of this prompt", not "above": the diff is emitted last so
+    // everything before it is a byte-identical prefix across a deep scan's
+    // passes, and can be served from cache instead of paid for each time.
+    expect(prompt).toContain('The diff at the end of this prompt, and nothing else');
     expect(prompt).toContain('It was wrong before this branch and will be wrong');
     // The mounted services are for checking claims, never subjects.
     expect(prompt).toContain('never as subjects of this review');

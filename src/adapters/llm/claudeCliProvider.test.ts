@@ -1,5 +1,29 @@
 import { describe, expect, it } from 'vitest';
-import { describeCliEvent, assertCannotExecute, WRITE_TOOLS, READ_ONLY_TOOLS, runCli } from './claudeCliProvider.js';
+import { describeCliEvent, describeUsage, assertCannotExecute, WRITE_TOOLS, READ_ONLY_TOOLS, runCli } from './claudeCliProvider.js';
+
+describe('describeUsage', () => {
+  /* Nothing recorded what a review cost, so "the reviews are burning the
+   * limit" could only be argued from wall-clock time. */
+  it('reports what the call cost, cache reads broken out', () => {
+    const line = describeUsage({
+      type: 'result',
+      usage: {
+        input_tokens: 23_400,
+        output_tokens: 4_100,
+        cache_read_input_tokens: 118_000,
+        cache_creation_input_tokens: 9_000,
+      },
+      total_cost_usd: 1.2345,
+    });
+    expect(line).toBe('kullanım: girdi 23.4k · çıktı 4.1k · önbellek okuma 118.0k · önbellek yazma 9.0k · $1.234');
+  });
+
+  it('leaves out cache figures a call did not have, and says nothing without usage', () => {
+    expect(describeUsage({ type: 'result', usage: { input_tokens: 900, output_tokens: 12 } }))
+      .toBe('kullanım: girdi 900 · çıktı 12');
+    expect(describeUsage({ type: 'result' })).toBeNull();
+  });
+});
 
 describe('describeCliEvent', () => {
   const workdir = '/cache/backend-team__EPA_API';

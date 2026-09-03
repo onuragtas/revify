@@ -2,10 +2,9 @@
 
 {{description}}
 {{relatedSection}}{{commentsSection}}
-{{codeChangeSection}}{{repoInstruction}}
 ## What is under review
 
-**The diff above, and nothing else.**
+**The diff at the end of this prompt, and nothing else.**
 
 You are given far more than the diff — the repository is checked out, other
 services are mounted, and you are told to read all of it. That is so you can
@@ -202,7 +201,7 @@ Do not pad the finding with caveats beyond that.
 **Search before you ask.** A `[?]` is a last resort, not a first reaction.
 Before writing one, make a deliberate pass over every repository mounted
 in your working directory — the changed ones *and* the other services
-listed below — looking for the answer:
+listed above — looking for the answer:
 
 - Grep for the identifier at the centre of the doubt across all of them:
   the endpoint path, the field name, the function, the constant, the
@@ -335,4 +334,4 @@ scheduled job — each one implies something on this list.
 
 If the change is genuinely a plain deploy with nothing around it, write one
 line saying so. That is a useful answer; an invented checklist is not.
-{{notesDisclosure}}{{languageInstruction}}
+{{codeChangeSection}}{{repoInstruction}}{{notesDisclosure}}{{languageInstruction}}

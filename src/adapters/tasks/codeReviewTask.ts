@@ -335,7 +335,7 @@ export function buildPrompt(input: CodeReviewPromptInput): string {
       '  change. That is someone else\'s ticket, not a defect.\n' +
       '- Never report a finding about code that belongs to one of them. A sibling\n' +
       '  ticket\'s work can sit in the same repository, and reading it here to understand\n' +
-      '  the whole does not put it under review — see "What is under review" above.\n\n' +
+      '  the whole does not put it under review — see "What is under review" below.\n\n' +
       `Only the description, comments and acceptance criteria of ${input.issueKey} itself\n` +
       'bind, and only the change under review is being judged.\n\n' +
       related
@@ -525,6 +525,25 @@ export function buildPrompt(input: CodeReviewPromptInput): string {
       'Bulgu biçimi yukarıdaki ile aynı: `### <severity> — <file:line>`.\n'
     : '';
 
+  /*
+   * What a slice is not given.
+   *
+   * A slice writes findings about the lines in front of it and nothing
+   * else — the instruction above says so at length. These sections answer
+   * whole-change questions, so sending them to every slice pays for them
+   * once per pass to produce output the merge then discards: the previous
+   * review's findings and the objections to them are settled once, by the
+   * pass that can see the whole change, and related issues are background
+   * for judging scope, which a slice does not judge.
+   *
+   * Deliberately still sent: the team's answers, the project notes, the
+   * attachments. Every one of those exists to stop a finding being
+   * written — a slice without them re-asks a question the team already
+   * answered or reports what a note rules out, and the merge has no way to
+   * tell that the finding should never have existed.
+   */
+  const wholePassOnly = (section: string) => (input.slice ? '' : section);
+
   return TEMPLATE.replace('{{issueKey}}', input.issueKey)
     .replace('{{summary}}', input.summary)
     .replace('{{description}}', extractPlainText(input.description) || '(no description)')
@@ -533,10 +552,10 @@ export function buildPrompt(input: CodeReviewPromptInput): string {
     .replace('{{contextReposSection}}', contextReposSection)
     .replace('{{attachmentsSection}}', attachmentsSection)
     .replace('{{clarificationsSection}}', clarificationsSection)
-    .replace('{{challengesSection}}', challengesSection)
-    .replace('{{relatedSection}}', relatedSection)
+    .replace('{{challengesSection}}', wholePassOnly(challengesSection))
+    .replace('{{relatedSection}}', wholePassOnly(relatedSection))
     .replace('{{commentsSection}}', commentsSection)
-    .replace('{{previousSection}}', previousSection)
+    .replace('{{previousSection}}', wholePassOnly(previousSection))
     .replace('{{revisionSection}}', revisionSection)
     .replace('{{notesSection}}', notesSection)
     .replace('{{notesReminder}}', notesReminder)
